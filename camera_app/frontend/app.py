@@ -100,8 +100,6 @@ st.markdown(
         position: absolute;
         top: 12px;
         right: 12px;
-        display: flex;
-        gap: 8px;
         z-index: 10;
       }
       .live-actions button {
@@ -359,6 +357,7 @@ with st.sidebar:
         st.success('Recording is running')
         st.caption(f"Started: {display_time(recording_status.get('started_at'))}")
         st.caption(f"Frames: {recording_status.get('frames', 0)}")
+        st.caption(f"Audio: {recording_status.get('audio', '-')}")
     else:
         st.caption('Recording is stopped')
 
@@ -517,7 +516,6 @@ if page == 'Live Camera':
             <div id="live-frame" class="live-frame">
               <div class="live-actions">
                 <button type="button" onclick="document.getElementById('live-frame').requestFullscreen()">Full screen</button>
-                <button type="button" onclick="document.fullscreenElement && document.exitFullscreen()">Minimize</button>
               </div>
               <img src="{stream_url}" style="display:block; width:100%; height:auto;" />
             </div>
@@ -528,6 +526,8 @@ if page == 'Live Camera':
             st.success(f"Live running and recording. Frames saved: {recording_status.get('frames', 0)}")
         else:
             st.success('Continuous live running')
+        if recording_status.get('audio') and 'disabled' in str(recording_status.get('audio')):
+            st.warning('Audio recording ke liye FFmpeg install karna padega. Abhi saved video video-only hoga.')
         if recording_status.get('error'):
             st.error(f"Recording error: {recording_status['error']}")
     elif st.session_state.live_frame is not None:

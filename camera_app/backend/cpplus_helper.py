@@ -2,6 +2,8 @@ import base64
 import hashlib
 import json
 import secrets
+import shutil
+import subprocess
 import threading
 import time
 from datetime import datetime
@@ -60,6 +62,7 @@ recording_state = {
 }
 recording_stop_event = threading.Event()
 recording_thread: threading.Thread | None = None
+recording_process: subprocess.Popen | None = None
 
 
 def camera_base_url(ip: str, port: int) -> str:
@@ -298,8 +301,113 @@ def mjpeg_frames(ip: str, rtsp_port: int, username: str, password: str, channel:
             capture.release()
 
 
+def record_camera_ffmpeg_worker(request: RecordingRequest) -> bool:
+    global recording_process, recording_state
+    ffmpeg_path = shutil.which('ffmpeg')
+    if not ffmpeg_path:
+        return False
+
+    started_at = datetime.now()
+    _, output_path, final_path = build_recording_paths(request.storage_root, request.ip, request.channel, started_at)
+    candidate_urls = rtsp_urls(request.ip, request.rtsp_port, request.username, request.password, request.channel)
+    working_url = candidate_urls[0]
+    recording_state.update(
+        {
+            'running': True,
+            'path': str(output_path),
+            'started_at': started_at.isoformat(timespec='seconds'),
+            'ended_at': None,
+            'duration_seconds': None,
+            'error': None,
+            'frames': 0,
+            'url': hide_secret(working_url, request.password),
+            'metadata_path': None,
+            'audio': 'enabled',
+            'recording_engine': 'ffmpeg',
+        }
+    )
+
+    command = [
+        ffmpeg_path,
+        '-y',
+        '-rtsp_transport',
+        'tcp',
+        '-i',
+        working_url,
+        '-map',
+        '0:v:0',
+        '-map',
+        '0:a?',
+        '-c:v',
+        'copy',
+        '-c:a',
+        'aac',
+        '-movflags',
+        '+faststart',
+        str(output_path),
+    ]
+
+    try:
+        recording_process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        while not recording_stop_event.is_set() and recording_process.poll() is None:
+            time.sleep(0.25)
+        if recording_stop_event.is_set() and recording_process.poll() is None:
+            try:
+                recording_process.communicate(input=b'q', timeout=5)
+            except subprocess.TimeoutExpired:
+                recording_process.terminate()
+                try:
+                    recording_process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    recording_process.kill()
+        stderr = b''
+        if recording_process and recording_process.stderr:
+            try:
+                stderr = recording_process.stderr.read()[-1000:]
+            except Exception:
+                stderr = b''
+        if recording_process and recording_process.returncode not in (0, None) and (not output_path.exists() or output_path.stat().st_size == 0):
+            recording_state['error'] = stderr.decode(errors='ignore') or f'FFmpeg exited with {recording_process.returncode}'
+    except Exception as exc:
+        recording_state['error'] = str(exc)
+    finally:
+        ended_at = datetime.now()
+        duration_seconds = max((ended_at - started_at).total_seconds(), 0)
+        metadata = {
+            'camera_ip': request.ip,
+            'channel': request.channel,
+            'started_at': started_at.isoformat(timespec='seconds'),
+            'ended_at': ended_at.isoformat(timespec='seconds'),
+            'duration_seconds': round(duration_seconds, 2),
+            'status': 'failed' if recording_state.get('error') else 'completed',
+            'error': recording_state.get('error'),
+            'source_url': recording_state.get('url'),
+            'recording_engine': 'ffmpeg',
+            'audio': 'enabled',
+        }
+        if output_path.exists():
+            end_suffix = ended_at.strftime('%H%M%S')
+            target_path = final_path.with_name(f'{final_path.stem}_to_{end_suffix}{final_path.suffix}')
+            if target_path.exists():
+                target_path = final_path.with_name(f'{final_path.stem}_to_{end_suffix}_{int(time.time())}{final_path.suffix}')
+            output_path.replace(target_path)
+            metadata['file_name'] = target_path.name
+            metadata['relative_path_hint'] = str(target_path)
+            sidecar_path = metadata_path_for(target_path)
+            atomic_write_json(sidecar_path, metadata)
+            recording_state['path'] = str(target_path)
+            recording_state['metadata_path'] = str(sidecar_path)
+        recording_state['ended_at'] = ended_at.isoformat(timespec='seconds')
+        recording_state['duration_seconds'] = round(duration_seconds, 2)
+        recording_state['running'] = False
+        recording_process = None
+    return True
+
+
 def record_camera_worker(request: RecordingRequest):
     global recording_state
+    if record_camera_ffmpeg_worker(request):
+        return
     capture = None
     writer = None
     output_path = None
@@ -357,6 +465,8 @@ def record_camera_worker(request: RecordingRequest):
                 'frames': 0,
                 'url': hide_secret(working_url, request.password),
                 'metadata_path': None,
+                'audio': 'disabled; install ffmpeg for audio',
+                'recording_engine': 'opencv',
             }
         )
 
@@ -394,6 +504,8 @@ def record_camera_worker(request: RecordingRequest):
             'status': 'failed' if recording_state.get('error') else 'completed',
             'error': recording_state.get('error'),
             'source_url': recording_state.get('url'),
+            'recording_engine': 'opencv',
+            'audio': 'disabled; install ffmpeg for audio',
         }
         if output_path and output_path.exists():
             target_path = final_path or output_path
