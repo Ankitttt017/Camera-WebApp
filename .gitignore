@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local configuration and secrets
+.env
+*.env
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Camera output / generated media
+camera_app/recordings/
+camera_app/snapshots/
+recordings/
+snapshots/
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+*.dav
+*.jpg
+*.jpeg
+*.png
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Accidental empty local file
+,
