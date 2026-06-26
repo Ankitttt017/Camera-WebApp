@@ -1,5 +1,6 @@
 # Python
-__pycache__/
+
+**pycache**/
 *.py[cod]
 *.pyo
 *.pyd
@@ -8,39 +9,73 @@ __pycache__/
 .ruff_cache/
 
 # Virtual environments
+
 .venv/
 venv/
 env/
 
-# Local configuration and secrets
+# Environment / secrets
+
 .env
+.env.*
 *.env
 
-# Local databases
+# Database
+
 *.db
 *.sqlite
 *.sqlite3
 
-# Camera output / generated media
+# Frontend build
+
+node_modules/
+dist/
+build/
+
+# Camera generated files
+
 camera_app/recordings/
 camera_app/snapshots/
 recordings/
 snapshots/
+
+# Video files
+
 *.mp4
 *.avi
 *.mov
 *.mkv
 *.webm
 *.dav
+
+# Images
+
 *.jpg
 *.jpeg
 *.png
 
-# OS/editor files
+# Logs
+
+*.log
+*.err.log
+logs/
+
+# IDE / Editor
+
+.vscode/
+.idea/
+
+# OS files
+
 .DS_Store
 Thumbs.db
-.idea/
-.vscode/
 
-# Accidental empty local file
-,
+# Coverage / cache
+
+coverage/
+.cache/
+
+# Temporary
+
+tmp/
+temp/

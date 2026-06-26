@@ -1,76 +1,90 @@
-# CP Plus Camera Integration
+# Machine Event Recorder
 
-A reusable camera integration system for CP Plus IP cameras with automatic protocol detection, RTSP streaming, ONVIF discovery, HTTP device info, recording, motion analytics, and Streamlit dashboard.
+Production-floor camera recording system for CP Plus IP cameras. The app uses a FastAPI helper for camera/PLC operations and a React frontend for live monitoring, manual capture, PLC gate-triggered recording, and saved video review.
 
 ## Features
 
-- Automatic protocol detection: RTSP, ONVIF, HTTP
-- Port scanning and connection status
-- Live video feed with FPS, resolution, and snapshot support
-- Local recordings and snapshot archive
-- Motion detection and event logging
-- FastAPI backend and Streamlit frontend
-- Secure credentials with `.env`
+- Live MJPEG camera view from RTSP
+- Manual start/stop PC recording
+- Automatic PLC gate-triggered recording
+- Local recording archive with metadata and SQLite index
+- React operator console
+- FastAPI helper API
 
 ## Prerequisites
 
 - Python 3.11+ recommended
+- Node.js 20+ recommended
 - Access to the camera network
+- Access to the PLC network
 
 ## Setup
 
-1. Create and activate a virtual environment:
+From `camera_app/`, create and activate a Python virtual environment:
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
 
-2. Install dependencies:
+Install backend dependencies:
 
 ```powershell
 pip install -r requirements.txt
 ```
 
-3. Copy `.env.example` to `.env` and update values if needed.
+Install frontend dependencies:
+
+```powershell
+cd frontend
+npm.cmd install
+cd ..
+```
+
+Copy `.env.example` to `.env` and update values if needed.
 
 ## Run
 
-Backend:
+Start the FastAPI helper:
 
 ```powershell
-uvicorn backend.main:app --reload
+python backend\cpplus_helper.py
 ```
 
-Frontend:
+In another terminal, start the React frontend:
 
 ```powershell
-streamlit run frontend/app.py
+cd frontend
+npm.cmd run dev
 ```
+
+Open `http://127.0.0.1:5173`.
 
 ## Local Testing
 
-1. Start the backend.
-2. Start the frontend.
-3. Open Streamlit UI to verify camera status, live video, and snapshots.
-4. Use the backend endpoints for diagnostics:
-   - `GET /scan`
-   - `GET /status`
-   - `GET /device_info`
-   - `GET /profiles`
+1. Start the helper API.
+2. Start the React frontend.
+3. Open the UI and verify live video, recording status, PLC status, and saved recordings.
+4. Useful helper endpoints:
+   - `GET /recording/status`
+   - `GET /plc-monitor/status`
+   - `POST /recording/start`
+   - `POST /recording/stop`
+   - `POST /recording-index/list`
 
 ## Project Structure
 
 `camera_app/`
 
-- `backend/` - FastAPI backend and camera services
-- `frontend/` - Streamlit dashboard
-- `snapshots/` - Stored snapshot images
-- `recordings/` - Saved daily recordings
+- `backend/` - FastAPI helper and camera/PLC services
+- `frontend/` - React operator console
+- `recordings/` - Local generated recordings
+- `snapshots/` - Local generated snapshots
 - `.env.example` - Example environment variables
 - `requirements.txt` - Python dependencies
 
 ## Notes
 
-- This system is designed for future multi-camera support.
-- Credentials are managed through `.env` and not hardcoded.
+- The helper defaults to `127.0.0.1:8010`.
+- The React dev server defaults to `127.0.0.1:5173`.
+- If `ffmpeg` is not installed, recording falls back to OpenCV video-only recording.

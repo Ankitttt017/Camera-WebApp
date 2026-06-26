@@ -1,8 +1,11 @@
-import base64
+﻿import base64
 import hashlib
 import json
+import mimetypes
 import secrets
 import shutil
+import socket
+import sqlite3
 import subprocess
 import threading
 import time
@@ -12,11 +15,12 @@ from tempfile import NamedTemporaryFile
 from urllib.parse import quote
 
 import cv2
+import numpy as np
 import requests
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 
@@ -28,6 +32,13 @@ app.add_middleware(
     allow_methods=['*'],
     allow_headers=['*'],
 )
+
+VIDEO_FILE_EXTENSIONS = {'.mp4', '.webm', '.mov', '.m4v', '.avi', '.mkv', '.dav'}
+DEFAULT_CAMERA_IP = '192.168.119.205'
+DEFAULT_CAMERA_USER = 'admin'
+DEFAULT_CAMERA_PASSWORD = 'Admin@123'
+DEFAULT_STORAGE_ROOT = r'C:\CPPLUS_RECORDINGS'
+MAX_GATE_RECORD_SECONDS = 300
 
 
 class CameraRequest(BaseModel):
@@ -46,7 +57,32 @@ class DownloadRequest(CameraRequest):
 
 
 class RecordingRequest(CameraRequest):
-    storage_root: str = r'C:\CPPLUS_RECORDINGS'
+    storage_root: str = DEFAULT_STORAGE_ROOT
+    max_record_seconds: int = MAX_GATE_RECORD_SECONDS
+    event_type: str = 'manual'
+
+
+class PlcMonitorRequest(RecordingRequest):
+    plc_host: str = '192.168.117.201'
+    plc_port: int = 1026
+    plc_device: str = 'X'
+    gate_open_addresses: list[int | str] = ['4A']
+    gate_close_addresses: list[int | str] = ['4A']
+    gate_open_when: bool = False
+    gate_close_when: bool = True
+    poll_seconds: float = 0.5
+    max_record_seconds: int = MAX_GATE_RECORD_SECONDS
+
+
+class RecordingIndexRequest(BaseModel):
+    storage_root: str = DEFAULT_STORAGE_ROOT
+    start_at: str | None = None
+    end_at: str | None = None
+    event_type: str | None = None
+    duration_filter: str | None = None
+    machine: str | None = None
+    page: int = 1
+    page_size: int = 50
 
 
 recording_state = {
@@ -59,10 +95,31 @@ recording_state = {
     'frames': 0,
     'url': None,
     'metadata_path': None,
+    'event_type': None,
+    'event_started_at': None,
+    'event_ended_at': None,
+    'event_duration_seconds': None,
+    'auto_stopped': False,
 }
 recording_stop_event = threading.Event()
 recording_thread: threading.Thread | None = None
 recording_process: subprocess.Popen | None = None
+plc_monitor_state = {
+    'running': False,
+    'plc_host': None,
+    'plc_port': None,
+    'gate_open': False,
+    'gate_close': False,
+    'current_event_type': None,
+    'current_event_started_at': None,
+    'last_action': None,
+    'last_read_at': None,
+    'last_error': None,
+    'open_values': {},
+    'close_values': {},
+}
+plc_monitor_stop_event = threading.Event()
+plc_monitor_thread: threading.Thread | None = None
 
 
 def camera_base_url(ip: str, port: int) -> str:
@@ -204,16 +261,36 @@ def rtsp_urls(ip: str, port: int, username: str, password: str, channel_no: int)
     safe_user = quote(username, safe='')
     safe_password = quote(password, safe='')
     host = f'{ip}:{port}'
-    return [
-        f'rtsp://{safe_user}:{safe_password}@{host}/video/live?channel={channel_no}&subtype=0&proto=Private3',
-        f'rtsp://{safe_user}:{safe_password}@{host}/video/live?channel={channel_no}&subtype=1&proto=Private3',
-        f'rtsp://{safe_user}:{safe_password}@{host}/cam/realmonitor?channel={channel_no}&subtype=0',
-        f'rtsp://{safe_user}:{safe_password}@{host}/cam/realmonitor?channel={channel_no}&subtype=1',
-        f'rtsp://{safe_user}:{safe_password}@{host}/Streaming/Channels/{channel_no}01',
-        f'rtsp://{safe_user}:{safe_password}@{host}/streaming/channels/{channel_no}01',
-        f'rtsp://{safe_user}:{safe_password}@{host}/h264',
-        f'rtsp://{safe_user}:{safe_password}@{host}/ch0_0.h264',
+    credential_pairs = [(safe_user, safe_password)]
+    if (safe_user, safe_password) != (username, password):
+        credential_pairs.append((username, password))
+    paths = [
+        f'/video/live?channel={channel_no}&subtype=0&proto=Private3',
+        f'/video/live?channel={channel_no}&subtype=1&proto=Private3',
+        f'/cam/realmonitor?channel={channel_no}&subtype=0',
+        f'/cam/realmonitor?channel={channel_no}&subtype=1',
+        f'/Streaming/Channels/{channel_no}01',
+        f'/streaming/channels/{channel_no}01',
+        '/h264',
+        '/ch0_0.h264',
     ]
+    return [f'rtsp://{user}:{secret}@{host}{path}' for user, secret in credential_pairs for path in paths]
+
+
+def open_rtsp_capture(url: str, timeout_ms: int = 5000):
+    capture = cv2.VideoCapture()
+    capture.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, timeout_ms)
+    capture.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, timeout_ms)
+    capture.open(url, cv2.CAP_FFMPEG)
+    return capture
+
+
+def placeholder_jpeg(text: str = 'Camera reconnecting'):
+    frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+    frame[:] = (10, 7, 4)
+    cv2.putText(frame, text, (420, 350), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (210, 220, 235), 2, cv2.LINE_AA)
+    ok, encoded = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
+    return encoded.tobytes() if ok else b''
 
 
 def snapshot_urls(ip: str, port: int, channel_no: int) -> list[str]:
@@ -226,11 +303,118 @@ def snapshot_urls(ip: str, port: int, channel_no: int) -> list[str]:
     ]
 
 
+def slmp_read_m_bit(host: str, port: int, device: str, address: int | str, timeout: float = 2.0) -> bool:
+    device_codes = {
+        'M': 0x90,
+        'X': 0x9C,
+        'Y': 0x9D,
+        'L': 0x92,
+        'F': 0x93,
+        'B': 0xA0,
+    }
+    device_text = device.upper()
+    device_code = device_codes.get(device_text)
+    if device_code is None:
+        raise ValueError(f'Unsupported SLMP device: {device}')
+    address_text = str(address).strip().upper()
+    if address_text.startswith(device_text):
+        address_text = address_text[len(device_text):]
+    address_number = int(address_text, 16) if device_text in {'X', 'Y'} else int(address_text, 10)
+
+    payload = (
+        (0x0010).to_bytes(2, 'little')
+        + (0x0401).to_bytes(2, 'little')
+        + (0x0001).to_bytes(2, 'little')
+        + address_number.to_bytes(3, 'little')
+        + bytes([device_code])
+        + (1).to_bytes(2, 'little')
+    )
+    frame = (
+        b'\x50\x00'
+        + b'\x00'
+        + b'\xff'
+        + b'\xff\x03'
+        + b'\x00'
+        + len(payload).to_bytes(2, 'little')
+        + payload
+    )
+    with socket.create_connection((host, int(port)), timeout=timeout) as sock:
+        sock.settimeout(timeout)
+        sock.sendall(frame)
+        response = sock.recv(1024)
+
+    if len(response) < 11:
+        raise RuntimeError(f'SLMP short response for {device}{address}: {response.hex(" ")}')
+    end_code = int.from_bytes(response[9:11], 'little')
+    if end_code != 0:
+        raise RuntimeError(f'SLMP error for {device}{address}: 0x{end_code:04X}')
+    data = response[11:]
+    if not data:
+        raise RuntimeError(f'SLMP no data for {device}{address}')
+    return data[0] != 0x00
+
+
+def read_plc_addresses(request: PlcMonitorRequest, addresses: list[int | str]) -> tuple[dict[str, bool], list[str]]:
+    values = {}
+    errors = []
+    for address in addresses:
+        address_text = str(address).strip().upper()
+        key = address_text if address_text.startswith(request.plc_device.upper()) else f'{request.plc_device.upper()}{address_text}'
+        try:
+            values[key] = slmp_read_m_bit(request.plc_host, request.plc_port, request.plc_device, address)
+        except Exception as exc:
+            errors.append(str(exc))
+    return values, errors
+
+
+def tcp_reachable(host: str, port: int, timeout: float = 1.5) -> bool:
+    try:
+        with socket.create_connection((host, int(port)), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def reset_stale_recording_start(max_age_seconds: float = 20.0) -> bool:
+    if not recording_state.get('running') or recording_state.get('path'):
+        return False
+    started_at = recording_state.get('started_at')
+    if not started_at:
+        return False
+    try:
+        age_seconds = (datetime.now() - datetime.fromisoformat(str(started_at))).total_seconds()
+    except ValueError:
+        return False
+    if age_seconds < max_age_seconds:
+        return False
+    recording_stop_event.set()
+    recording_state.update(
+        {
+            'running': False,
+            'ended_at': datetime.now().isoformat(timespec='seconds'),
+            'duration_seconds': round(age_seconds, 2),
+            'error': 'Recording start timed out before stream opened.',
+        }
+    )
+    return True
+
+
+def current_recording_age_seconds() -> float | None:
+    started_at = recording_state.get('started_at')
+    if not started_at:
+        return None
+    try:
+        return (datetime.now() - datetime.fromisoformat(str(started_at))).total_seconds()
+    except ValueError:
+        return None
+
+
 def hide_secret(text: str, password: str) -> str:
     if not password:
         return text
     quoted_password = quote(password, safe='')
     return text.replace(password, '***').replace(quoted_password, '***')
+
 
 
 def recording_folder(root_text: str) -> Path:
@@ -267,25 +451,342 @@ def atomic_write_json(path: Path, payload: dict):
     Path(temp_name).replace(path)
 
 
+def index_db_path(storage_root: str | Path) -> Path:
+    root = recording_folder(str(storage_root))
+    return root / 'recording_index.db'
+
+
+def init_recording_index(storage_root: str | Path) -> Path:
+    db_path = index_db_path(storage_root)
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS recordings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_path TEXT NOT NULL UNIQUE,
+                file_name TEXT NOT NULL,
+                metadata_path TEXT,
+                storage_root TEXT NOT NULL,
+                camera_ip TEXT,
+                channel INTEGER,
+                started_at TEXT,
+                ended_at TEXT,
+                duration_seconds REAL,
+                frames INTEGER,
+                file_size INTEGER,
+                status TEXT,
+                error TEXT,
+                source_url TEXT,
+                recording_engine TEXT,
+                audio TEXT,
+                event_type TEXT,
+                event_started_at TEXT,
+                event_ended_at TEXT,
+                event_duration_seconds REAL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        existing_columns = {row[1] for row in connection.execute("PRAGMA table_info(recordings)").fetchall()}
+        for column_name, column_type in {
+            'event_type': 'TEXT',
+            'event_started_at': 'TEXT',
+            'event_ended_at': 'TEXT',
+            'event_duration_seconds': 'REAL',
+        }.items():
+            if column_name not in existing_columns:
+                connection.execute(f"ALTER TABLE recordings ADD COLUMN {column_name} {column_type}")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_recordings_started_at ON recordings(started_at)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_recordings_camera ON recordings(camera_ip, channel)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_recordings_event_type ON recordings(event_type)")
+    return db_path
+
+
+def load_sidecar_metadata(video_path: Path) -> dict:
+    metadata_path = metadata_path_for(video_path)
+    if not metadata_path.exists():
+        return {}
+    try:
+        return json.loads(metadata_path.read_text(encoding='utf-8'))
+    except Exception:
+        return {}
+
+
+def index_recording_file(storage_root: str | Path, video_path: Path, metadata: dict | None = None) -> dict:
+    video_path = Path(video_path)
+    metadata = metadata or load_sidecar_metadata(video_path)
+    file_stat = video_path.stat()
+    now_text = datetime.now().isoformat(timespec='seconds')
+    started_at = metadata.get('started_at') or datetime.fromtimestamp(file_stat.st_mtime).isoformat(timespec='seconds')
+    record = {
+        'file_path': str(video_path),
+        'file_name': video_path.name,
+        'metadata_path': str(metadata_path_for(video_path)) if metadata_path_for(video_path).exists() else None,
+        'storage_root': str(storage_root),
+        'camera_ip': metadata.get('camera_ip'),
+        'channel': metadata.get('channel'),
+        'started_at': started_at,
+        'ended_at': metadata.get('ended_at'),
+        'duration_seconds': metadata.get('duration_seconds'),
+        'frames': metadata.get('frames'),
+        'file_size': file_stat.st_size,
+        'status': metadata.get('status') or 'completed',
+        'error': metadata.get('error'),
+        'source_url': metadata.get('source_url'),
+        'recording_engine': metadata.get('recording_engine'),
+        'audio': metadata.get('audio'),
+        'event_type': metadata.get('event_type') or 'minor_stoppage',
+        'event_started_at': metadata.get('event_started_at') or started_at,
+        'event_ended_at': metadata.get('event_ended_at') or metadata.get('ended_at'),
+        'event_duration_seconds': metadata.get('event_duration_seconds') or metadata.get('duration_seconds'),
+        'created_at': now_text,
+        'updated_at': now_text,
+    }
+    db_path = init_recording_index(storage_root)
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO recordings (
+                file_path, file_name, metadata_path, storage_root, camera_ip, channel,
+                started_at, ended_at, duration_seconds, frames, file_size, status,
+                error, source_url, recording_engine, audio, event_type, event_started_at,
+                event_ended_at, event_duration_seconds, created_at, updated_at
+            )
+            VALUES (
+                :file_path, :file_name, :metadata_path, :storage_root, :camera_ip, :channel,
+                :started_at, :ended_at, :duration_seconds, :frames, :file_size, :status,
+                :error, :source_url, :recording_engine, :audio, :event_type, :event_started_at,
+                :event_ended_at, :event_duration_seconds, :created_at, :updated_at
+            )
+            ON CONFLICT(file_path) DO UPDATE SET
+                file_name = excluded.file_name,
+                metadata_path = excluded.metadata_path,
+                storage_root = excluded.storage_root,
+                camera_ip = excluded.camera_ip,
+                channel = excluded.channel,
+                started_at = excluded.started_at,
+                ended_at = excluded.ended_at,
+                duration_seconds = excluded.duration_seconds,
+                frames = excluded.frames,
+                file_size = excluded.file_size,
+                status = excluded.status,
+                error = excluded.error,
+                source_url = excluded.source_url,
+                recording_engine = excluded.recording_engine,
+                audio = excluded.audio,
+                event_type = excluded.event_type,
+                event_started_at = excluded.event_started_at,
+                event_ended_at = excluded.event_ended_at,
+                event_duration_seconds = excluded.event_duration_seconds,
+                updated_at = excluded.updated_at
+            """,
+            record,
+        )
+    return record
+
+
+def scan_recording_index(request: RecordingIndexRequest) -> dict:
+    root = recording_folder(request.storage_root)
+    db_path = init_recording_index(root)
+    indexed = 0
+    for video_path in root.rglob('*'):
+        if video_path.is_file() and video_path.suffix.lower() in {'.mp4', '.webm', '.mov', '.m4v', '.avi', '.mkv', '.dav'}:
+            index_recording_file(root, video_path)
+            indexed += 1
+    pruned = prune_missing_recordings(root)
+    result = list_recording_index(request)
+    return {'db_path': str(db_path), 'indexed': indexed, 'pruned': pruned, **result}
+
+
+def prune_missing_recordings(storage_root: str | Path) -> int:
+    db_path = init_recording_index(storage_root)
+    missing_paths = []
+    with sqlite3.connect(db_path) as connection:
+        rows = connection.execute("SELECT file_path FROM recordings").fetchall()
+        for row in rows:
+            file_path = row[0]
+            if file_path and not Path(file_path).exists():
+                missing_paths.append(file_path)
+        if missing_paths:
+            connection.executemany("DELETE FROM recordings WHERE file_path = ?", [(path,) for path in missing_paths])
+    return len(missing_paths)
+
+
+def update_recording_event_metadata(
+    storage_root: str,
+    video_path_text: str | None,
+    event_type: str,
+    event_started_at: datetime | None,
+    event_ended_at: datetime | None,
+) -> None:
+    if not video_path_text:
+        return
+    video_path = Path(video_path_text)
+    if not video_path.exists():
+        return
+    metadata = load_sidecar_metadata(video_path)
+    started_text = event_started_at.isoformat(timespec='seconds') if event_started_at else metadata.get('event_started_at') or metadata.get('started_at')
+    ended_text = event_ended_at.isoformat(timespec='seconds') if event_ended_at else metadata.get('event_ended_at') or metadata.get('ended_at')
+    duration = None
+    if event_started_at and event_ended_at:
+        duration = round((event_ended_at - event_started_at).total_seconds(), 2)
+    metadata.update(
+        {
+            'event_type': event_type,
+            'event_started_at': started_text,
+            'event_ended_at': ended_text,
+            'event_duration_seconds': duration or metadata.get('event_duration_seconds') or metadata.get('duration_seconds'),
+        }
+    )
+    atomic_write_json(metadata_path_for(video_path), metadata)
+    index_recording_file(storage_root, video_path, metadata)
+
+
+def list_recording_index(request: RecordingIndexRequest) -> dict:
+    db_path = init_recording_index(request.storage_root)
+    prune_missing_recordings(request.storage_root)
+    where = " WHERE 1=1"
+    params: dict[str, str | int] = {}
+    if request.start_at:
+        where += " AND started_at >= :start_at"
+        params['start_at'] = request.start_at
+    if request.end_at:
+        where += " AND started_at <= :end_at"
+        params['end_at'] = request.end_at
+    if request.event_type and request.event_type != 'all':
+        if request.event_type == 'minor_stoppage':
+            where += " AND (event_type = :event_type OR event_type IS NULL)"
+        else:
+            where += " AND event_type = :event_type"
+        params['event_type'] = request.event_type
+    if request.duration_filter == 'under_5':
+        where += " AND COALESCE(event_duration_seconds, duration_seconds, 0) <= 300"
+    elif request.duration_filter == 'over_5':
+        where += " AND COALESCE(event_duration_seconds, duration_seconds, 0) > 300"
+    if request.machine and request.machine != 'all':
+        where += " AND camera_ip = :machine"
+        params['machine'] = request.machine
+
+    page_size = min(max(int(request.page_size or 50), 1), 100)
+    page = max(int(request.page or 1), 1)
+    offset = (page - 1) * page_size
+    page_params = {**params, 'limit': page_size, 'offset': offset}
+
+    query = f"SELECT * FROM recordings{where} ORDER BY started_at DESC, updated_at DESC LIMIT :limit OFFSET :offset"
+    with sqlite3.connect(db_path) as connection:
+        connection.row_factory = sqlite3.Row
+        total = int(connection.execute(f"SELECT COUNT(*) FROM recordings{where}", params).fetchone()[0])
+        records = [dict(row) for row in connection.execute(query, page_params).fetchall()]
+    return {'total': total, 'page': page, 'page_size': page_size, 'records': records}
+
+
+def recording_stats(request: RecordingIndexRequest) -> dict:
+    db_path = init_recording_index(request.storage_root)
+    prune_missing_recordings(request.storage_root)
+    today_text = datetime.now().date().isoformat()
+
+    def scalar(connection: sqlite3.Connection, query: str, params: tuple = ()):
+        value = connection.execute(query, params).fetchone()[0]
+        return value or 0
+
+    with sqlite3.connect(db_path) as connection:
+        connection.row_factory = sqlite3.Row
+        today_total = scalar(connection, "SELECT COUNT(*) FROM recordings WHERE started_at >= ?", (today_text,))
+        today_minor = scalar(connection, "SELECT COUNT(*) FROM recordings WHERE started_at >= ? AND (event_type = 'minor_stoppage' OR event_type IS NULL)", (today_text,))
+        today_breakdown = scalar(connection, "SELECT COUNT(*) FROM recordings WHERE started_at >= ? AND event_type = 'breakdown'", (today_text,))
+        today_recorded = scalar(connection, "SELECT SUM(COALESCE(duration_seconds, 0)) FROM recordings WHERE started_at >= ?", (today_text,))
+        today_breakdown_duration = scalar(connection, "SELECT SUM(COALESCE(event_duration_seconds, duration_seconds, 0)) FROM recordings WHERE started_at >= ? AND event_type = 'breakdown'", (today_text,))
+        today_storage = scalar(connection, "SELECT SUM(COALESCE(file_size, 0)) FROM recordings WHERE started_at >= ?", (today_text,))
+        total_storage = scalar(connection, "SELECT SUM(COALESCE(file_size, 0)) FROM recordings")
+        video_count = scalar(connection, "SELECT COUNT(*) FROM recordings")
+        avg_file_size = scalar(connection, "SELECT AVG(COALESCE(file_size, 0)) FROM recordings")
+        avg_breakdown = scalar(connection, "SELECT AVG(COALESCE(event_duration_seconds, duration_seconds, 0)) FROM recordings WHERE event_type = 'breakdown'")
+        longest_breakdown = scalar(connection, "SELECT MAX(COALESCE(event_duration_seconds, duration_seconds, 0)) FROM recordings WHERE event_type = 'breakdown'")
+        latest_row = connection.execute(
+            "SELECT * FROM recordings ORDER BY started_at DESC, updated_at DESC LIMIT 1"
+        ).fetchone()
+        machines = [row[0] for row in connection.execute("SELECT DISTINCT camera_ip FROM recordings WHERE camera_ip IS NOT NULL ORDER BY camera_ip").fetchall()]
+        trend_rows = connection.execute(
+            """
+            SELECT substr(started_at, 1, 10) AS day, COUNT(*) AS video_count, SUM(COALESCE(file_size, 0)) AS storage_used
+            FROM recordings
+            GROUP BY day
+            ORDER BY day DESC
+            LIMIT 14
+            """
+        ).fetchall()
+        top_rows = connection.execute(
+            """
+            SELECT file_name, file_path, file_size, started_at, event_type
+            FROM recordings
+            ORDER BY COALESCE(file_size, 0) DESC
+            LIMIT 5
+            """
+        ).fetchall()
+
+    week_storage = total_storage
+    month_storage = total_storage
+    return {
+        'today': {
+            'total_events': int(today_total),
+            'minor_stoppage_count': int(today_minor),
+            'breakdown_count': int(today_breakdown),
+            'recorded_duration_seconds': float(today_recorded),
+            'breakdown_duration_seconds': float(today_breakdown_duration),
+            'storage_used': int(today_storage),
+        },
+        'storage': {
+            'today': int(today_storage),
+            'week': int(week_storage),
+            'month': int(month_storage),
+            'total': int(total_storage),
+            'video_count': int(video_count),
+            'average_file_size': float(avg_file_size),
+        },
+        'breakdown': {
+            'average_duration_seconds': float(avg_breakdown),
+            'longest_duration_seconds': float(longest_breakdown),
+        },
+        'latest_event': dict(latest_row) if latest_row else None,
+        'trend': [dict(row) for row in trend_rows],
+        'top_heavy_videos': [dict(row) for row in top_rows],
+        'machines': machines,
+    }
+
+
 def mjpeg_frames(ip: str, rtsp_port: int, username: str, password: str, channel: int):
     capture = None
-    last_error = None
+    last_placeholder_at = 0.0
     try:
-        for url in rtsp_urls(ip, rtsp_port, username, password, channel):
-            capture = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
-            if capture.isOpened():
-                break
-            last_error = f'open failed: {hide_secret(url, password)}'
-            capture.release()
-            capture = None
-
-        if capture is None or not capture.isOpened():
-            raise RuntimeError(last_error or 'RTSP stream open nahi hua.')
-
         while True:
+            if capture is None or not capture.isOpened():
+                now = time.monotonic()
+                if now - last_placeholder_at >= 2.0:
+                    last_placeholder_at = now
+                    placeholder = placeholder_jpeg()
+                    if placeholder:
+                        yield (
+                            b'--frame\r\n'
+                            b'Content-Type: image/jpeg\r\n\r\n'
+                            + placeholder
+                            + b'\r\n'
+                        )
+                for url in rtsp_urls(ip, rtsp_port, username, password, channel):
+                    candidate = open_rtsp_capture(url, timeout_ms=1500)
+                    if candidate.isOpened():
+                        capture = candidate
+                        break
+                    candidate.release()
+                if capture is None or not capture.isOpened():
+                    time.sleep(1.0)
+                    continue
+
             ok, frame = capture.read()
             if not ok or frame is None:
-                time.sleep(0.05)
+                capture.release()
+                capture = None
+                time.sleep(0.2)
                 continue
             ok, encoded = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
             if not ok:
@@ -324,6 +825,11 @@ def record_camera_ffmpeg_worker(request: RecordingRequest) -> bool:
             'metadata_path': None,
             'audio': 'enabled',
             'recording_engine': 'ffmpeg',
+            'event_type': request.event_type,
+            'event_started_at': recording_state.get('event_started_at') or started_at.isoformat(timespec='seconds'),
+            'event_ended_at': None,
+            'event_duration_seconds': None,
+            'auto_stopped': False,
         }
     )
 
@@ -350,6 +856,10 @@ def record_camera_ffmpeg_worker(request: RecordingRequest) -> bool:
     try:
         recording_process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         while not recording_stop_event.is_set() and recording_process.poll() is None:
+            if (datetime.now() - started_at).total_seconds() >= max(int(request.max_record_seconds or MAX_GATE_RECORD_SECONDS), 1):
+                recording_state['auto_stopped'] = True
+                recording_stop_event.set()
+                break
             time.sleep(0.25)
         if recording_stop_event.is_set() and recording_process.poll() is None:
             try:
@@ -384,6 +894,11 @@ def record_camera_ffmpeg_worker(request: RecordingRequest) -> bool:
             'source_url': recording_state.get('url'),
             'recording_engine': 'ffmpeg',
             'audio': 'enabled',
+            'auto_stopped': bool(recording_state.get('auto_stopped')),
+            'event_type': recording_state.get('event_type') or request.event_type,
+            'event_started_at': recording_state.get('event_started_at') or started_at.isoformat(timespec='seconds'),
+            'event_ended_at': recording_state.get('event_ended_at') or ended_at.isoformat(timespec='seconds'),
+            'event_duration_seconds': recording_state.get('event_duration_seconds') or round(duration_seconds, 2),
         }
         if output_path.exists():
             end_suffix = ended_at.strftime('%H%M%S')
@@ -395,6 +910,7 @@ def record_camera_ffmpeg_worker(request: RecordingRequest) -> bool:
             metadata['relative_path_hint'] = str(target_path)
             sidecar_path = metadata_path_for(target_path)
             atomic_write_json(sidecar_path, metadata)
+            index_recording_file(request.storage_root, target_path, metadata)
             recording_state['path'] = str(target_path)
             recording_state['metadata_path'] = str(sidecar_path)
         recording_state['ended_at'] = ended_at.isoformat(timespec='seconds')
@@ -421,7 +937,10 @@ def record_camera_worker(request: RecordingRequest):
         working_url = None
         first_frame = None
         for url in rtsp_urls(request.ip, request.rtsp_port, request.username, request.password, request.channel):
-            capture = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
+            capture = cv2.VideoCapture()
+            capture.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000)
+            capture.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000)
+            capture.open(url, cv2.CAP_FFMPEG)
             if not capture.isOpened():
                 capture.release()
                 capture = None
@@ -467,6 +986,11 @@ def record_camera_worker(request: RecordingRequest):
                 'metadata_path': None,
                 'audio': 'disabled; install ffmpeg for audio',
                 'recording_engine': 'opencv',
+                'event_type': request.event_type,
+                'event_started_at': recording_state.get('event_started_at') or started_at.isoformat(timespec='seconds'),
+                'event_ended_at': None,
+                'event_duration_seconds': None,
+                'auto_stopped': False,
             }
         )
 
@@ -474,6 +998,10 @@ def record_camera_worker(request: RecordingRequest):
         recording_state['frames'] = 1
 
         while not recording_stop_event.is_set():
+            if (datetime.now() - started_at).total_seconds() >= max(int(request.max_record_seconds or MAX_GATE_RECORD_SECONDS), 1):
+                recording_state['auto_stopped'] = True
+                recording_stop_event.set()
+                break
             ok, frame = capture.read()
             if not ok or frame is None:
                 time.sleep(0.1)
@@ -506,6 +1034,11 @@ def record_camera_worker(request: RecordingRequest):
             'source_url': recording_state.get('url'),
             'recording_engine': 'opencv',
             'audio': 'disabled; install ffmpeg for audio',
+            'auto_stopped': bool(recording_state.get('auto_stopped')),
+            'event_type': recording_state.get('event_type') or request.event_type,
+            'event_started_at': recording_state.get('event_started_at') or started_at.isoformat(timespec='seconds'),
+            'event_ended_at': recording_state.get('event_ended_at') or ended_at.isoformat(timespec='seconds'),
+            'event_duration_seconds': recording_state.get('event_duration_seconds') or round(duration_seconds, 2),
         }
         if output_path and output_path.exists():
             target_path = final_path or output_path
@@ -519,6 +1052,7 @@ def record_camera_worker(request: RecordingRequest):
             metadata['relative_path_hint'] = str(target_path)
             sidecar_path = metadata_path_for(target_path)
             atomic_write_json(sidecar_path, metadata)
+            index_recording_file(request.storage_root, target_path, metadata)
             recording_state['path'] = str(target_path)
             recording_state['metadata_path'] = str(sidecar_path)
         recording_state['ended_at'] = ended_at.isoformat(timespec='seconds')
@@ -530,8 +1064,10 @@ def record_camera_worker(request: RecordingRequest):
 def verify(request: CameraRequest):
     try:
         login(camera_base_url(request.ip, request.http_port), request.username, request.password)
-        return {'ok': True}
+        return {'ok': True, 'method': 'http'}
     except Exception as exc:
+        if tcp_reachable(request.ip, request.rtsp_port):
+            return {'ok': True, 'method': 'rtsp', 'warning': str(exc)}
         raise HTTPException(status_code=400, detail=str(exc))
 
 
@@ -635,8 +1171,6 @@ def live_frame(request: CameraRequest):
         finally:
             capture.release()
     raise HTTPException(status_code=400, detail='; '.join(errors[-3:]))
-
-
 @app.get('/mjpeg')
 def mjpeg_stream(
     ip: str,
@@ -674,6 +1208,11 @@ def start_recording(request: RecordingRequest):
             'frames': 0,
             'url': None,
             'metadata_path': None,
+            'event_type': request.event_type,
+            'event_started_at': datetime.now().isoformat(timespec='seconds'),
+            'event_ended_at': None,
+            'event_duration_seconds': None,
+            'auto_stopped': False,
         }
     )
     recording_thread = threading.Thread(target=record_camera_worker, args=(request,), daemon=True)
@@ -689,6 +1228,271 @@ def stop_recording():
     return recording_state
 
 
+def plc_monitor_worker(request: PlcMonitorRequest):
+    plc_monitor_state.update(
+        {
+            'running': True,
+            'plc_host': request.plc_host,
+            'plc_port': request.plc_port,
+            'gate_open': False,
+            'gate_close': False,
+            'current_event_type': None,
+            'current_event_started_at': None,
+            'last_action': None,
+            'last_read_at': None,
+            'last_error': None,
+            'open_values': {},
+            'close_values': {},
+        }
+    )
+    previous_open = None
+    previous_close = False
+    gate_cycle_maxed_out = True
+    gate_event_started_at: datetime | None = None
+    breakdown_marked = False
+    last_start_attempt_at = 0.0
+    poll_seconds = max(float(request.poll_seconds), 0.2)
+
+    while not plc_monitor_stop_event.is_set():
+        errors = []
+        try:
+            open_values, open_errors = read_plc_addresses(request, request.gate_open_addresses)
+            close_values, close_errors = read_plc_addresses(request, request.gate_close_addresses)
+            errors.extend(open_errors)
+            errors.extend(close_errors)
+
+            gate_open = any(value == bool(request.gate_open_when) for value in open_values.values())
+            gate_close = any(value == bool(request.gate_close_when) for value in close_values.values())
+            if gate_close:
+                gate_cycle_maxed_out = False
+                recording_state['auto_stopped'] = False
+            current_event_type = None
+            current_event_started_at = None
+            if gate_open:
+                current_event_type = 'breakdown' if recording_state.get('event_type') == 'breakdown' or breakdown_marked or gate_cycle_maxed_out else 'minor_stoppage'
+                current_event_started_at = (
+                    gate_event_started_at.isoformat(timespec='seconds')
+                    if gate_event_started_at
+                    else recording_state.get('event_started_at')
+                )
+            plc_monitor_state.update(
+                {
+                    'gate_open': gate_open,
+                    'gate_close': gate_close,
+                    'current_event_type': current_event_type,
+                    'current_event_started_at': current_event_started_at,
+                    'last_read_at': datetime.now().isoformat(timespec='seconds'),
+                    'last_error': '; '.join(errors[-3:]) if errors else None,
+                    'open_values': open_values,
+                    'close_values': close_values,
+                }
+            )
+
+            if previous_open is None and gate_cycle_maxed_out and not gate_close:
+                plc_monitor_state['last_action'] = (
+                    f'PLC monitor waiting for first gate close after startup at '
+                    f'{datetime.now().isoformat(timespec="seconds")}.'
+                )
+
+            should_try_start = (
+                gate_open
+                and not gate_cycle_maxed_out
+                and not recording_state.get('running')
+                and not recording_state.get('auto_stopped')
+            )
+            start_retry_due = time.monotonic() - last_start_attempt_at >= 10.0
+            if should_try_start and (not previous_open or start_retry_due):
+                last_start_attempt_at = time.monotonic()
+                if tcp_reachable(request.ip, request.rtsp_port):
+                    if gate_event_started_at is None:
+                        gate_event_started_at = datetime.now()
+                        breakdown_marked = False
+                    request.event_type = 'minor_stoppage'
+                    start_recording(request)
+                    recording_state['event_type'] = 'minor_stoppage'
+                    recording_state['event_started_at'] = gate_event_started_at.isoformat(timespec='seconds')
+                    plc_monitor_state['current_event_type'] = 'minor_stoppage'
+                    plc_monitor_state['current_event_started_at'] = gate_event_started_at.isoformat(timespec='seconds')
+                    plc_monitor_state['last_action'] = f'Auto recording started on {request.plc_device.upper()} signal OFF at {datetime.now().isoformat(timespec="seconds")}'
+                else:
+                    plc_monitor_state['last_error'] = f'Camera RTSP not reachable: {request.ip}:{request.rtsp_port}'
+
+            if gate_open and not recording_state.get('running') and recording_state.get('auto_stopped'):
+                gate_cycle_maxed_out = True
+
+            if gate_close and not previous_close:
+                closed_at = datetime.now()
+                if recording_state.get('running'):
+                    recording_state['event_type'] = 'minor_stoppage'
+                    recording_state['event_ended_at'] = closed_at.isoformat(timespec='seconds')
+                    if gate_event_started_at:
+                        recording_state['event_duration_seconds'] = round((closed_at - gate_event_started_at).total_seconds(), 2)
+                    stop_recording()
+                    plc_monitor_state['last_action'] = f'Minor stoppage saved on {request.plc_device.upper()} signal ON at {closed_at.isoformat(timespec="seconds")}'
+                elif breakdown_marked:
+                    update_recording_event_metadata(
+                        request.storage_root,
+                        recording_state.get('path'),
+                        'breakdown',
+                        gate_event_started_at,
+                        closed_at,
+                    )
+                    recording_state['event_type'] = 'breakdown'
+                    recording_state['event_started_at'] = gate_event_started_at.isoformat(timespec='seconds') if gate_event_started_at else None
+                    recording_state['event_ended_at'] = closed_at.isoformat(timespec='seconds')
+                    recording_state['event_duration_seconds'] = (
+                        round((closed_at - gate_event_started_at).total_seconds(), 2) if gate_event_started_at else None
+                    )
+                    plc_monitor_state['last_action'] = f'Breakdown closed on {request.plc_device.upper()} signal ON at {closed_at.isoformat(timespec="seconds")}'
+                gate_event_started_at = None
+                breakdown_marked = False
+                plc_monitor_state['current_event_type'] = None
+                plc_monitor_state['current_event_started_at'] = None
+
+            recording_age = current_recording_age_seconds()
+            max_record_seconds = max(int(request.max_record_seconds or MAX_GATE_RECORD_SECONDS), 1)
+            if gate_open and recording_state.get('running') and recording_age is not None and recording_age >= max_record_seconds:
+                recording_state['event_type'] = 'breakdown'
+                if gate_event_started_at:
+                    recording_state['event_started_at'] = gate_event_started_at.isoformat(timespec='seconds')
+                stop_recording()
+                gate_cycle_maxed_out = True
+                breakdown_marked = True
+                plc_monitor_state['current_event_type'] = 'breakdown'
+                plc_monitor_state['current_event_started_at'] = (
+                    gate_event_started_at.isoformat(timespec='seconds')
+                    if gate_event_started_at
+                    else recording_state.get('event_started_at')
+                )
+                plc_monitor_state['last_action'] = (
+                    f'Auto recording stopped after max gate-open duration {max_record_seconds}s at '
+                    f'{datetime.now().isoformat(timespec="seconds")}. Breakdown timer continues until gate close.'
+                )
+
+            if reset_stale_recording_start():
+                plc_monitor_state['last_error'] = recording_state.get('error')
+
+            previous_open = gate_open
+            previous_close = gate_close
+        except Exception as exc:
+            plc_monitor_state.update(
+                {
+                    'last_read_at': datetime.now().isoformat(timespec='seconds'),
+                    'last_error': str(exc),
+                }
+            )
+        time.sleep(poll_seconds)
+
+    plc_monitor_state['running'] = False
+
+
+@app.get('/plc-monitor/status')
+def plc_monitor_status():
+    ensure_auto_plc_monitor_running()
+    return plc_monitor_state
+
+
+@app.post('/plc-monitor/start')
+def start_plc_monitor(request: PlcMonitorRequest):
+    global plc_monitor_thread
+    if plc_monitor_state.get('running') and plc_monitor_thread and plc_monitor_thread.is_alive():
+        return plc_monitor_state
+
+    plc_monitor_stop_event.clear()
+    plc_monitor_thread = threading.Thread(target=plc_monitor_worker, args=(request,), daemon=True)
+    plc_monitor_thread.start()
+    return plc_monitor_state
+
+
+@app.post('/plc-monitor/stop')
+def stop_plc_monitor():
+    plc_monitor_stop_event.set()
+    if plc_monitor_thread and plc_monitor_thread.is_alive():
+        plc_monitor_thread.join(timeout=3)
+    plc_monitor_state['running'] = False
+    return plc_monitor_state
+
+
+def default_plc_monitor_request() -> PlcMonitorRequest:
+    return PlcMonitorRequest(
+        ip=DEFAULT_CAMERA_IP,
+        http_port=80,
+        rtsp_port=554,
+        username=DEFAULT_CAMERA_USER,
+        password=DEFAULT_CAMERA_PASSWORD,
+        channel=1,
+        storage_root=DEFAULT_STORAGE_ROOT,
+        plc_host='192.168.117.201',
+        plc_port=1026,
+        plc_device='X',
+        gate_open_addresses=['4A'],
+        gate_close_addresses=['4A'],
+        gate_open_when=False,
+        gate_close_when=True,
+        poll_seconds=0.5,
+        max_record_seconds=MAX_GATE_RECORD_SECONDS,
+    )
+
+
+def ensure_auto_plc_monitor_running():
+    if plc_monitor_state.get('running') and plc_monitor_thread and plc_monitor_thread.is_alive():
+        return
+    try:
+        start_plc_monitor(default_plc_monitor_request())
+    except Exception as exc:
+        plc_monitor_state['last_error'] = f'PLC monitor auto-start failed: {exc}'
+
+
+@app.on_event('startup')
+def auto_start_plc_monitor():
+    ensure_auto_plc_monitor_running()
+
+
+@app.post('/recording-index/scan')
+def recording_index_scan(request: RecordingIndexRequest):
+    try:
+        return scan_recording_index(request)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post('/recording-index/list')
+def recording_index_list(request: RecordingIndexRequest):
+    try:
+        return {'db_path': str(index_db_path(request.storage_root)), **list_recording_index(request)}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post('/recording-index/stats')
+def recording_index_stats(request: RecordingIndexRequest):
+    try:
+        return {'db_path': str(index_db_path(request.storage_root)), **recording_stats(request)}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get('/recording-file')
+def recording_file(storage_root: str, file_path: str, download: bool = False):
+    root = recording_folder(storage_root).resolve()
+    requested = Path(file_path).resolve()
+    if not requested.exists() or not requested.is_file():
+        raise HTTPException(status_code=404, detail='Recording not found')
+    if root != requested and root not in requested.parents:
+        raise HTTPException(status_code=403, detail='Recording path outside storage root')
+    if requested.suffix.lower() not in VIDEO_FILE_EXTENSIONS:
+        raise HTTPException(status_code=400, detail='Unsupported recording file')
+
+    media_type = mimetypes.guess_type(requested.name)[0] or 'application/octet-stream'
+    disposition = 'attachment' if download else 'inline'
+    return FileResponse(
+        requested,
+        media_type=media_type,
+        filename=requested.name,
+        content_disposition_type=disposition,
+    )
+
+
 @app.post('/download')
 def download(request: DownloadRequest):
     try:
@@ -702,4 +1506,4 @@ def download(request: DownloadRequest):
 
 
 if __name__ == '__main__':
-    uvicorn.run('backend.cpplus_helper:app', host='127.0.0.1', port=8010, reload=False)
+    uvicorn.run(app, host='127.0.0.1', port=8010, reload=False)
