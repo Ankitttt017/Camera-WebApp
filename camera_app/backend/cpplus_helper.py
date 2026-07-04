@@ -12,7 +12,7 @@ import subprocess
 import threading
 import time
 import zipfile
-from datetime import datetime
+from datetime import datetime, time as datetime_time
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from urllib.parse import quote
@@ -95,6 +95,7 @@ class RecordingIndexRequest(BaseModel):
     start_at: str | None = None
     end_at: str | None = None
     event_type: str | None = None
+    shift: str | None = None
     duration_filter: str | None = None
     machine: str | None = None
     public_helper_url: str | None = None
@@ -988,6 +989,14 @@ def row_matches_index_request(row: dict, request: RecordingIndexRequest) -> bool
                 return False
         elif row_type != request.event_type:
             return False
+    if request.shift and request.shift != 'all' and row_start:
+        row_time = row_start.time()
+        if request.shift == 'A' and not (datetime_time(6, 0, 0) <= row_time <= datetime_time(14, 29, 59)):
+            return False
+        if request.shift == 'B' and not (datetime_time(14, 30, 0) <= row_time <= datetime_time(22, 59, 59)):
+            return False
+        if request.shift == 'C' and not (row_time >= datetime_time(23, 0, 0) or row_time <= datetime_time(5, 59, 59)):
+            return False
     if request.duration_filter in {'under_5', 'over_5'}:
         duration = float(row.get('event_duration_seconds') or row.get('duration_seconds') or 0)
         if request.duration_filter == 'under_5' and duration > 300:
@@ -1047,6 +1056,14 @@ def recording_index_where(request: RecordingIndexRequest) -> tuple[str, dict[str
             where += " AND event_type = :event_type"
         if request.event_type != 'self_capture':
             params['event_type'] = request.event_type
+    shift = (request.shift or '').upper()
+    event_time_expr = "substr(COALESCE(event_started_at, started_at), 12, 8)"
+    if shift == 'A':
+        where += f" AND {event_time_expr} >= '06:00:00' AND {event_time_expr} <= '14:29:59'"
+    elif shift == 'B':
+        where += f" AND {event_time_expr} >= '14:30:00' AND {event_time_expr} <= '22:59:59'"
+    elif shift == 'C':
+        where += f" AND ({event_time_expr} >= '23:00:00' OR {event_time_expr} <= '05:59:59')"
     if request.duration_filter == 'under_5':
         where += " AND COALESCE(event_duration_seconds, duration_seconds, 0) <= 300"
     elif request.duration_filter == 'over_5':
@@ -2632,6 +2649,7 @@ def recording_index_export(
     start_at: str | None = None,
     end_at: str | None = None,
     event_type: str | None = None,
+    shift: str | None = None,
     duration_filter: str | None = None,
     machine: str | None = None,
     public_helper_url: str | None = None,
@@ -2642,6 +2660,7 @@ def recording_index_export(
             start_at=start_at,
             end_at=end_at,
             event_type=event_type if event_type and event_type != 'all' else None,
+            shift=shift if shift and shift != 'all' else None,
             duration_filter=duration_filter,
             machine=machine,
             public_helper_url=public_helper_url,
@@ -2665,6 +2684,7 @@ def recording_index_export_excel(
     start_at: str | None = None,
     end_at: str | None = None,
     event_type: str | None = None,
+    shift: str | None = None,
     duration_filter: str | None = None,
     machine: str | None = None,
     public_helper_url: str | None = None,
@@ -2675,6 +2695,7 @@ def recording_index_export_excel(
             start_at=start_at,
             end_at=end_at,
             event_type=event_type if event_type and event_type != 'all' else None,
+            shift=shift if shift and shift != 'all' else None,
             duration_filter=duration_filter,
             machine=machine,
             public_helper_url=public_helper_url,

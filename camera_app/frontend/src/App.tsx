@@ -70,7 +70,7 @@ function formatDateTime(value?: string | null) {
   if (!value) return '-';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value.replace('T', ' ');
-  return date.toLocaleString();
+  return date.toLocaleString([], { hour12: false });
 }
 
 function formatTimeOnly(value?: string | null) {
@@ -81,7 +81,7 @@ function formatTimeOnly(value?: string | null) {
     const parts = value.replace('T', ' ').split(' ');
     return parts[1] || value;
   }
-  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 }
 
 function formatDuration(seconds?: number | null) {
@@ -255,7 +255,7 @@ function KpiCards({ stats }: { stats: RecordingStats }) {
 }
 
 function todayInputValue() {
-  return dateInputValue(new Date());
+  return dateInputValue(currentBusinessDate());
 }
 
 function dateInputValue(date: Date) {
@@ -264,15 +264,31 @@ function dateInputValue(date: Date) {
 }
 
 type ReportDatePreset = 'today' | 'yesterday' | 'last_7' | 'last_15' | 'custom' | 'all';
+type ReportShift = 'all' | 'A' | 'B' | 'C';
 type ReportFilters = {
   datePreset: ReportDatePreset;
   fromDate: string;
   toDate: string;
   category: string;
+  shift: ReportShift;
 };
 
+function currentBusinessDate() {
+  const date = new Date();
+  if (date.getHours() < 6) {
+    date.setDate(date.getDate() - 1);
+  }
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+function localDateTimeValue(date: Date) {
+  const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return localDate.toISOString().slice(0, 19);
+}
+
 function presetDateRange(preset: ReportDatePreset, fromDate: string, toDate: string) {
-  const today = new Date();
+  const today = currentBusinessDate();
   const end = new Date(today);
   const start = new Date(today);
   if (preset === 'all') return null;
@@ -288,6 +304,21 @@ function presetDateRange(preset: ReportDatePreset, fromDate: string, toDate: str
     start.setDate(today.getDate() - 14);
   }
   return { fromDate: dateInputValue(start), toDate: dateInputValue(end) };
+}
+
+function businessDateTimeRange(range: { fromDate: string; toDate: string } | null) {
+  if (!range) return null;
+  const start = new Date(`${range.fromDate}T06:00:00`);
+  const end = new Date(`${range.toDate}T06:00:00`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null;
+  end.setDate(end.getDate() + 1);
+  end.setSeconds(end.getSeconds() - 1);
+  return {
+    fromDate: range.fromDate,
+    toDate: range.toDate,
+    startAt: localDateTimeValue(start),
+    endAt: localDateTimeValue(end),
+  };
 }
 
 function reportDateLabel(value: string) {
@@ -311,10 +342,21 @@ function reportCategoryLabel(value: string) {
   return 'All Categories';
 }
 
+function reportShiftLabel(value: ReportShift) {
+  if (value === 'A') return 'Shift A: 06:00 to 14:29';
+  if (value === 'B') return 'Shift B: 14:30 to 22:59';
+  if (value === 'C') return 'Shift C: 23:00 to 05:59';
+  return 'All Shifts';
+}
+
 function reportRangeSummary(filters: ReportFilters) {
   const range = presetDateRange(filters.datePreset, filters.fromDate, filters.toDate);
   if (!range) return 'All time';
-  return `${reportPresetLabel(filters.datePreset)}: ${reportDateLabel(range.fromDate)} to ${reportDateLabel(range.toDate)}`;
+  const businessRange = businessDateTimeRange(range);
+  if (!businessRange) return `${reportPresetLabel(filters.datePreset)}: ${reportDateLabel(range.fromDate)} to ${reportDateLabel(range.toDate)}`;
+  const startLabel = businessRange.startAt.replace('T', ' ').slice(0, 16);
+  const endLabel = businessRange.endAt.replace('T', ' ').slice(0, 16);
+  return `${reportPresetLabel(filters.datePreset)}: ${startLabel} to ${endLabel}`;
 }
 
 function friendlyError(exc: unknown) {
@@ -848,11 +890,13 @@ function SavedPage({
   const [fromDate, setFromDate] = useState(todayInputValue());
   const [toDate, setToDate] = useState(todayInputValue());
   const [category, setCategory] = useState('all');
+  const [shift, setShift] = useState<ReportShift>('all');
   const [appliedFilters, setAppliedFilters] = useState<ReportFilters>({
     datePreset: 'today',
     fromDate: todayInputValue(),
     toDate: todayInputValue(),
     category: 'all',
+    shift: 'all',
   });
   const [reportStats, setReportStats] = useState<RecordingStats>(stats);
   const [list, setList] = useState<RecordingList>({ total: 0, page: 1, page_size: PAGE_SIZE, records: [] });
@@ -862,8 +906,8 @@ function SavedPage({
   const [error, setError] = useState('');
   const [nowTick, setNowTick] = useState(Date.now());
   const playerRef = useRef<HTMLVideoElement | null>(null);
-  const activeDateRange = useMemo(
-    () => presetDateRange(appliedFilters.datePreset, appliedFilters.fromDate, appliedFilters.toDate),
+  const activeBusinessRange = useMemo(
+    () => businessDateTimeRange(presetDateRange(appliedFilters.datePreset, appliedFilters.fromDate, appliedFilters.toDate)),
     [appliedFilters.datePreset, appliedFilters.fromDate, appliedFilters.toDate],
   );
   const filtersDirty = (
@@ -871,6 +915,7 @@ function SavedPage({
     || appliedFilters.fromDate !== fromDate
     || appliedFilters.toDate !== toDate
     || appliedFilters.category !== category
+    || appliedFilters.shift !== shift
   );
 
   function changeDatePreset(value: ReportDatePreset) {
@@ -895,6 +940,7 @@ function SavedPage({
       fromDate: normalizedFrom,
       toDate: normalizedTo,
       category,
+      shift,
     });
     setPage(1);
   }
@@ -908,21 +954,20 @@ function SavedPage({
         page,
         page_size: PAGE_SIZE,
       };
-      if (activeDateRange) {
-        payload.start_at = `${activeDateRange.fromDate}T00:00:00`;
-        payload.end_at = `${activeDateRange.toDate}T23:59:59`;
+      if (activeBusinessRange) {
+        payload.start_at = activeBusinessRange.startAt;
+        payload.end_at = activeBusinessRange.endAt;
       }
       if (appliedFilters.category !== 'all') {
         payload.event_type = appliedFilters.category;
       }
+      if (appliedFilters.shift !== 'all') {
+        payload.shift = appliedFilters.shift;
+      }
       const endpoint = refreshIndex ? '/recording-index/scan' : '/recording-index/list';
-      const [data, summaryData] = await Promise.all([
+      const [data, statsData] = await Promise.all([
         postJson<RecordingList>(endpoint, payload),
-        postJson<RecordingList>('/recording-index/list', {
-          ...payload,
-          page: 1,
-          page_size: 100,
-        }),
+        postJson<RecordingStats>('/recording-index/stats', payload),
       ]);
       const nextTotalPages = Math.max(1, Math.ceil((data.total || 0) / PAGE_SIZE));
       if (page > nextTotalPages) {
@@ -931,7 +976,7 @@ function SavedPage({
       }
       const records = (data.records || []).slice(0, PAGE_SIZE);
       setList({ ...data, records });
-      setReportStats(statsFromRecords(summaryData.records || []));
+      setReportStats(statsData);
       setSelected((current) => {
         if (current && records.some((record) => record.file_path === current.file_path)) return current;
         return records[0] || null;
@@ -959,6 +1004,7 @@ function SavedPage({
     appliedFilters.fromDate,
     appliedFilters.toDate,
     appliedFilters.category,
+    appliedFilters.shift,
     settings.storage_root,
     refreshToken,
     stats.latest_event?.started_at,
@@ -990,11 +1036,12 @@ function SavedPage({
   const latestOpenBreakdownPath = stats.latest_event?.event_type === 'breakdown' ? stats.latest_event.file_path : latest?.event_type === 'breakdown' ? latest.file_path : null;
   const exportUrl = useMemo(() => recordingExportUrl({
     storage_root: settings.storage_root,
-    start_at: activeDateRange ? `${activeDateRange.fromDate}T00:00:00` : undefined,
-    end_at: activeDateRange ? `${activeDateRange.toDate}T23:59:59` : undefined,
+    start_at: activeBusinessRange?.startAt,
+    end_at: activeBusinessRange?.endAt,
     event_type: appliedFilters.category !== 'all' ? appliedFilters.category : undefined,
+    shift: appliedFilters.shift !== 'all' ? appliedFilters.shift : undefined,
     public_helper_url: settings.public_helper_url,
-  }), [activeDateRange, appliedFilters.category, settings.public_helper_url, settings.storage_root]);
+  }), [activeBusinessRange, appliedFilters.category, appliedFilters.shift, settings.public_helper_url, settings.storage_root]);
 
   function isOpenBreakdown(record: RecordingRecord) {
     return Boolean(plc.gate_open && record.event_type === 'breakdown' && latestOpenBreakdownPath && record.file_path === latestOpenBreakdownPath);
@@ -1043,7 +1090,7 @@ function SavedPage({
         <div className="report-range-strip">
           <span>Date Range</span>
           <strong>{reportRangeSummary(appliedFilters)}</strong>
-          <em>{reportCategoryLabel(appliedFilters.category)}</em>
+          <em>{reportCategoryLabel(appliedFilters.category)} | {reportShiftLabel(appliedFilters.shift)}</em>
         </div>
 
         <div className="filter-card compact-filter">
@@ -1072,6 +1119,15 @@ function SavedPage({
               <option value="all">All</option>
               <option value="minor_stoppage">Minor Stoppage (&lt; 5 min)</option>
               <option value="breakdown">Breakdown (&gt; 5 min)</option>
+            </select>
+          </label>
+          <label>
+            Shift
+            <select value={shift} onChange={(event) => setShift(event.target.value as ReportShift)}>
+              <option value="all">All Shifts</option>
+              <option value="A">Shift A (06:00-14:29)</option>
+              <option value="B">Shift B (14:30-22:59)</option>
+              <option value="C">Shift C (23:00-05:59)</option>
             </select>
           </label>
           <div className="filter-apply">

@@ -219,6 +219,7 @@ export function recordingExportUrl(params: {
   start_at?: string;
   end_at?: string;
   event_type?: string;
+  shift?: string;
   public_helper_url?: string;
 }) {
   return queryUrl('/recording-index/export.xlsx', params);
