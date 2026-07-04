@@ -8,6 +8,14 @@ export type CameraSettings = {
   password: string;
   channel: number;
   storage_root: string;
+  public_helper_url: string;
+  capture_video: boolean;
+  capture_breakdown_video: boolean;
+  plc_host: string;
+  plc_port: number;
+  plc_device: string;
+  plc_address: string;
+  max_record_seconds: number;
 };
 
 export type RecordingStatus = {
@@ -27,14 +35,39 @@ export type RecordingStatus = {
 };
 
 export type PlcStatus = {
+  enabled?: boolean;
+  capture_video?: boolean;
+  capture_breakdown_video?: boolean;
   running: boolean;
+  plc_host?: string | null;
+  plc_port?: number | null;
   last_read_at?: string | null;
   last_error?: string | null;
   last_action?: string | null;
   gate_open?: boolean;
   gate_close?: boolean;
+  machine_state?: 'running' | 'minor_stoppage' | 'breakdown' | string | null;
+  machine_state_started_at?: string | null;
+  machine_state_duration_seconds?: number | null;
   current_event_type?: string | null;
   current_event_started_at?: string | null;
+  current_event_duration_seconds?: number | null;
+  last_gate_opened_at?: string | null;
+  last_gate_closed_at?: string | null;
+};
+
+export type PlcTestResult = {
+  reachable: boolean;
+  ok: boolean;
+  host: string;
+  port: number;
+  device: string;
+  open_addresses: Array<string | number>;
+  close_addresses: Array<string | number>;
+  open_values: Record<string, boolean>;
+  close_values: Record<string, boolean>;
+  errors: string[];
+  message: string;
 };
 
 export type RecordingRecord = {
@@ -111,6 +144,23 @@ export function buildCameraPayload(settings: CameraSettings) {
     password: settings.password,
     channel: Number(settings.channel),
     storage_root: settings.storage_root,
+    capture_video: settings.capture_video,
+    capture_breakdown_video: settings.capture_breakdown_video,
+  };
+}
+
+export function buildPlcPayload(settings: CameraSettings) {
+  return {
+    ...buildCameraPayload(settings),
+    plc_host: settings.plc_host.trim(),
+    plc_port: Number(settings.plc_port),
+    plc_device: settings.plc_device.trim() || 'X',
+    gate_open_addresses: [settings.plc_address.trim() || '4A'],
+    gate_close_addresses: [settings.plc_address.trim() || '4A'],
+    gate_open_when: false,
+    gate_close_when: true,
+    poll_seconds: 1,
+    max_record_seconds: Math.max(1, Number(settings.max_record_seconds || 30)),
   };
 }
 
@@ -146,10 +196,30 @@ export function mjpegUrl(settings: CameraSettings) {
   });
 }
 
+export function audioUrl(settings: CameraSettings) {
+  return queryUrl('/audio.mp3', {
+    ip: settings.ip.trim(),
+    rtsp_port: settings.rtsp_port,
+    username: settings.username,
+    password: settings.password,
+    channel: settings.channel,
+  });
+}
+
 export function recordingFileUrl(storageRoot: string, filePath: string, download = false) {
   return queryUrl('/recording-file', {
     storage_root: storageRoot,
     file_path: filePath,
     download,
   });
+}
+
+export function recordingExportUrl(params: {
+  storage_root: string;
+  start_at?: string;
+  end_at?: string;
+  event_type?: string;
+  public_helper_url?: string;
+}) {
+  return queryUrl('/recording-index/export.xlsx', params);
 }

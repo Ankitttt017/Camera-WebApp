@@ -79,3 +79,13 @@ coverage/
 
 tmp/
 temp/
+tmp_verify_report/
+
+# Generated reports / local verification output
+
+*.xlsx
+*.xls
+*.bin
+server_export_*
+plc_gate_connection_test.py
+,

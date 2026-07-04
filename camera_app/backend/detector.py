@@ -28,6 +28,8 @@ class MotionDetector:
             motion_detected = True
 
         if motion_detected:
+
+            
             event = {
                 'timestamp': datetime.utcnow().isoformat() + 'Z',
                 'type': 'motion',
