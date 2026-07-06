@@ -775,7 +775,11 @@ function LivePage({
 
   const liveEventType = normalizeGateEventType(plc.current_event_type || recording.event_type);
   const liveEventStartedAt = plc.current_event_started_at || recording.event_started_at || recording.started_at;
-  const liveEventSignalActive = Boolean(liveEventType && (plc.current_event_type || plc.gate_open || recording.running));
+  const liveEventSignalActive = Boolean(
+    liveEventType
+    && plc.enabled !== false
+    && (plc.current_event_type || plc.gate_open || recording.running)
+  );
 
   useEffect(() => {
     const timestamp = Date.now();
@@ -791,9 +795,10 @@ function LivePage({
         return { ...current, lastSeenAt: timestamp };
       }
       if (!current) return null;
+      const monitorOff = plc.enabled === false || !plc.running;
       const closed = Boolean(plc.gate_close && !plc.gate_open && !recording.running && !plc.current_event_type);
       const stale = timestamp - current.lastSeenAt > 8000;
-      if (closed || stale) return null;
+      if (monitorOff || closed || stale) return null;
       return current;
     });
   }, [
@@ -803,6 +808,8 @@ function LivePage({
     plc.gate_open,
     plc.gate_close,
     plc.current_event_type,
+    plc.enabled,
+    plc.running,
     recording.running,
   ]);
 
@@ -1279,14 +1286,15 @@ export function App() {
       previousRecordingRunningRef.current = Boolean(recordingStatus.running);
       setRecording(recordingStatus);
       setPlc(plcStatus);
-      if (typeof plcStatus.capture_video === 'boolean') {
+      const plcMonitorActive = plcStatus.enabled !== false && plcStatus.running;
+      if (plcMonitorActive && typeof plcStatus.capture_video === 'boolean') {
         setSettings((current) => (
           current.capture_video === plcStatus.capture_video
             ? current
             : { ...current, capture_video: plcStatus.capture_video }
         ));
       }
-      if (typeof plcStatus.capture_breakdown_video === 'boolean') {
+      if (plcMonitorActive && typeof plcStatus.capture_breakdown_video === 'boolean') {
         setSettings((current) => (
           current.capture_breakdown_video === plcStatus.capture_breakdown_video
             ? current
