@@ -1,4 +1,4 @@
-export const API_BASE = import.meta.env.VITE_HELPER_URL || 'http://127.0.0.1:8010';
+export const API_BASE = import.meta.env.VITE_HELPER_URL || 'http://192.168.100.137:8010';
 
 export type CameraSettings = {
   ip: string;
@@ -85,6 +85,7 @@ export type RecordingRecord = {
   event_started_at?: string | null;
   event_ended_at?: string | null;
   event_duration_seconds?: number | null;
+  updated_at?: string | null;
 };
 
 export type RecordingList = {

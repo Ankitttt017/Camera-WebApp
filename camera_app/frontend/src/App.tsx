@@ -18,9 +18,16 @@ import {
   PlcTestResult,
 } from './api';
 
-const DEFAULT_PUBLIC_HELPER_URL = 'http://172.16.4.242:8010';
+const DEFAULT_PUBLIC_HELPER_URL = 'http://192.168.100.137:8010';
 const LEGACY_PUBLIC_HELPER_URLS = new Set([
+  'http://192.168.100.136:8010',
   'http://192.168.119.205:8010',
+  'http://172.16.4.242:8010',
+  'http://127.0.0.1:8010',
+]);
+const DEFAULT_STORAGE_ROOT = 'C:\\CPPLUS_RECORDINGS';
+const LEGACY_STORAGE_ROOTS = new Set([
+  'D:\\CPPLUS_RECORDINGS',
 ]);
 
 const DEFAULT_SETTINGS: CameraSettings = {
@@ -30,7 +37,7 @@ const DEFAULT_SETTINGS: CameraSettings = {
   username: 'admin',
   password: 'Admin@123',
   channel: 1,
-  storage_root: 'D:\\CPPLUS_RECORDINGS',
+  storage_root: DEFAULT_STORAGE_ROOT,
   public_helper_url: DEFAULT_PUBLIC_HELPER_URL,
   capture_video: true,
   capture_breakdown_video: true,
@@ -56,6 +63,9 @@ function loadSavedSettings(): CameraSettings {
     const saved = { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
     if (!saved.public_helper_url || LEGACY_PUBLIC_HELPER_URLS.has(String(saved.public_helper_url).trim())) {
       saved.public_helper_url = DEFAULT_PUBLIC_HELPER_URL;
+    }
+    if (!saved.storage_root || LEGACY_STORAGE_ROOTS.has(String(saved.storage_root).trim())) {
+      saved.storage_root = DEFAULT_STORAGE_ROOT;
     }
     if (Number(saved.max_record_seconds) > 3600 || Number(saved.max_record_seconds) < 1) {
       saved.max_record_seconds = 300;
@@ -366,7 +376,7 @@ function friendlyError(exc: unknown) {
     return '';
   }
   if (message === 'Failed to fetch') {
-    return 'Helper API is not running on 127.0.0.1:8010. Start the helper and refresh.';
+    return `Helper API is not running on ${API_BASE}. Start the helper and refresh.`;
   }
   if (message.includes('RTSP') || message.includes('Unauthorized') || message.includes('stream open')) {
     return 'Camera stream connect nahi ho pa raha. Live preview chal raha ho to ek moment wait karke retry karein; camera login/RTSP access bhi check karein.';
@@ -1288,17 +1298,19 @@ export function App() {
       setPlc(plcStatus);
       const plcMonitorActive = plcStatus.enabled !== false && plcStatus.running;
       if (plcMonitorActive && typeof plcStatus.capture_video === 'boolean') {
+        const captureVideo = plcStatus.capture_video;
         setSettings((current) => (
-          current.capture_video === plcStatus.capture_video
+          current.capture_video === captureVideo
             ? current
-            : { ...current, capture_video: plcStatus.capture_video }
+            : { ...current, capture_video: captureVideo }
         ));
       }
       if (plcMonitorActive && typeof plcStatus.capture_breakdown_video === 'boolean') {
+        const captureBreakdownVideo = plcStatus.capture_breakdown_video;
         setSettings((current) => (
-          current.capture_breakdown_video === plcStatus.capture_breakdown_video
+          current.capture_breakdown_video === captureBreakdownVideo
             ? current
-            : { ...current, capture_breakdown_video: plcStatus.capture_breakdown_video }
+            : { ...current, capture_breakdown_video: captureBreakdownVideo }
         ));
       }
       setMessage('');

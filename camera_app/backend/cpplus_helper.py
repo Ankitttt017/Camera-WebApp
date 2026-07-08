@@ -41,8 +41,8 @@ VIDEO_FILE_EXTENSIONS = {'.mp4', '.webm', '.mov', '.m4v', '.avi', '.mkv', '.dav'
 DEFAULT_CAMERA_IP = '192.168.119.205'
 DEFAULT_CAMERA_USER = 'admin'
 DEFAULT_CAMERA_PASSWORD = 'Admin@123'
-LEGACY_STORAGE_ROOT = r'C:\CPPLUS_RECORDINGS'
-DEFAULT_STORAGE_ROOT = r'D:\CPPLUS_RECORDINGS'
+DEFAULT_STORAGE_ROOT = r'C:\CPPLUS_RECORDINGS'
+LEGACY_STORAGE_ROOT = r'D:\CPPLUS_RECORDINGS'
 MAX_GATE_RECORD_SECONDS = 300
 RECORDING_MAX_WIDTH = 1280
 RECORDING_TARGET_FPS = 15.0
@@ -1204,17 +1204,23 @@ REPORT_COLUMNS = [
 ]
 
 
-def recording_export_rows(request: RecordingIndexRequest) -> list[list[object]]:
+def recording_export_records(request: RecordingIndexRequest) -> list[dict]:
     export_request = request.model_copy(update={'page': 1, 'page_size': 100})
     rows = []
+    total = 0
     page = 1
     while True:
         page_result = list_recording_index(export_request.model_copy(update={'page': page, 'page_size': 100}))
+        total = int(page_result['total'])
         rows.extend(page_result['records'])
-        if len(rows) >= page_result['total']:
+        if len(rows) >= total:
             break
         page += 1
+    return sorted(rows, key=lambda row: str(row.get('started_at') or ''))
 
+
+def recording_export_rows(request: RecordingIndexRequest) -> list[list[object]]:
+    rows = recording_export_records(request)
     report_rows = []
     for index, row in enumerate(rows, start=1):
         event_duration = row.get('event_duration_seconds') or row.get('duration_seconds') or ''
@@ -1431,21 +1437,14 @@ def report_video_url(row: dict, request: RecordingIndexRequest) -> str:
 
 
 def recording_export_hyperlinks(request: RecordingIndexRequest, start_row: int = 2) -> dict[str, str]:
-    export_request = request.model_copy(update={'page': 1, 'page_size': 100})
     links: dict[str, str] = {}
-    page = 1
     row_index = start_row
     link_column = xlsx_column_name(REPORT_COLUMNS.index('Video Link') + 1)
-    while True:
-        page_result = list_recording_index(export_request.model_copy(update={'page': page, 'page_size': 100}))
-        for row in page_result['records']:
-            url = report_video_url(row, request)
-            if url:
-                links[f'{link_column}{row_index}'] = url
-            row_index += 1
-        if row_index - start_row >= page_result['total']:
-            break
-        page += 1
+    for row in recording_export_records(request):
+        url = report_video_url(row, request)
+        if url:
+            links[f'{link_column}{row_index}'] = url
+        row_index += 1
     return links
 
 

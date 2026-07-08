@@ -1,7 +1,7 @@
 import asyncio
 import base64
 import socket
-from typing import Dict, List, Optional
+import typing
 
 import requests
 from onvif import ONVIFCamera
@@ -37,7 +37,7 @@ def ping_camera_sync(ip: str, timeout: float = 2.0) -> bool:
         return False
 
 
-def scan_ports(ip: str, ports: List[int], timeout: float = 1.0) -> List[int]:
+def scan_ports(ip: str, ports: typing.List[int], timeout: float = 1.0) -> typing.List[int]:
     open_ports = []
     for port in ports:
         try:
@@ -50,7 +50,7 @@ def scan_ports(ip: str, ports: List[int], timeout: float = 1.0) -> List[int]:
     return open_ports
 
 
-def _build_rtsp_urls(ip: str, user: str, password: str, ports: List[int]) -> List[str]:
+def _build_rtsp_urls(ip: str, user: str, password: str, ports: typing.List[int]) -> typing.List[str]:
     urls = []
     for port in ports:
         for path in DEFAULT_RTSP_PATHS:
@@ -61,7 +61,7 @@ def _build_rtsp_urls(ip: str, user: str, password: str, ports: List[int]) -> Lis
     return urls
 
 
-def detect_rtsp(ip: str, user: str, password: str, ports: List[int]) -> Optional[str]:
+def detect_rtsp(ip: str, user: str, password: str, ports: typing.List[int]) -> typing.Optional[str]:
     import cv2
 
     for url in _build_rtsp_urls(ip, user, password, ports):
@@ -73,7 +73,7 @@ def detect_rtsp(ip: str, user: str, password: str, ports: List[int]) -> Optional
     return None
 
 
-def fetch_http_info(ip: str, ports: List[int], user: str, password: str) -> Dict[str, Optional[str]]:
+def fetch_http_info(ip: str, ports: typing.List[int], user: str, password: str) -> typing.Dict[str, typing.Optional[str]]:
     for port in ports:
         base_url = f'http://{ip}:{port}'
         paths = ['/', '/ISAPI/System/deviceInfo', '/ISAPI/System/Video/inputs', '/onvif/device_service']
@@ -92,7 +92,7 @@ def fetch_http_info(ip: str, ports: List[int], user: str, password: str) -> Dict
     return {}
 
 
-def discover_onvif(ip: str, ports: List[int], user: str, password: str) -> Dict[str, List[str]]:
+def discover_onvif(ip: str, ports: typing.List[int], user: str, password: str) -> typing.Dict[str, typing.List[str]]:
     profiles = []
     services = []
     for port in ports:
@@ -113,8 +113,7 @@ def log_event(db: Session, category: str, message: str, details: str = '') -> No
     db.add(event)
     db.commit()
 
-
-def build_protocol_report(ip: str, db: Session) -> Dict[str, object]:
+def build_protocol_report(ip: str, db: Session) -> typing.Dict[str, object]:
     report = {
         'ping': False,
         'open_ports': [],
