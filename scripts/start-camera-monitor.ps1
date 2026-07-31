@@ -93,10 +93,17 @@ function Get-NpmExe {
     throw 'npm.cmd not found.'
 }
 
-$lanIp = Get-LanIp
-$env:VITE_HELPER_URL = "http://$lanIp`:8010"
+$localHelperUrl = 'http://127.0.0.1:8010'
+$env:VITE_HELPER_URL = $localHelperUrl
 $env:BROWSER = 'none'
-Write-MonitorLog "Startup check. LAN IP=$lanIp, helper=$env:VITE_HELPER_URL"
+$ffmpegExe = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.1.2-full_build\bin\ffmpeg.exe'
+if (Test-Path $ffmpegExe) {
+    $env:FFMPEG_PATH = $ffmpegExe
+    Write-MonitorLog "FFmpeg configured at $ffmpegExe"
+} else {
+    Write-MonitorLog 'FFmpeg not found in WinGet package path; backend will use PATH fallback.'
+}
+Write-MonitorLog "Startup check. Local-only helper=$env:VITE_HELPER_URL"
 
 if (-not (Test-LocalPort -Port 8010)) {
     $pythonExe = Get-PythonExe
@@ -116,11 +123,11 @@ Start-Sleep -Seconds 2
 
 if (-not (Test-LocalPort -Port 5174)) {
     $npmExe = Get-NpmExe
-    Write-MonitorLog "Starting frontend on port 5174 with helper $env:VITE_HELPER_URL"
+    Write-MonitorLog "Starting frontend on localhost port 5174 with helper $env:VITE_HELPER_URL"
     Start-Process `
         -WindowStyle Hidden `
         -FilePath $npmExe `
-        -ArgumentList @('run', 'dev', '--', '--host', '0.0.0.0', '--port', '5174') `
+        -ArgumentList @('run', 'dev', '--', '--host', '127.0.0.1', '--port', '5174') `
         -WorkingDirectory $FrontendRoot `
         -RedirectStandardOutput (Join-Path $LogDir 'frontend.out.log') `
         -RedirectStandardError (Join-Path $LogDir 'frontend.err.log')

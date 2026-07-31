@@ -1,25 +1,34 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import {
   API_BASE,
+  AuthSession,
   CameraSettings,
   PlcStatus,
+  ReasonOptions,
   RecordingList,
   RecordingRecord,
   RecordingStats,
   RecordingStatus,
   audioUrl,
+  authElevate,
+  authLogin,
   buildCameraPayload,
   buildPlcPayload,
+  buildSettingsPayload,
   getJson,
   mjpegUrl,
   postJson,
+  reasonsPath,
   recordingExportUrl,
   recordingFileUrl,
+  setAuthToken,
   PlcTestResult,
 } from './api';
 
-const DEFAULT_PUBLIC_HELPER_URL = 'http://192.168.100.137:8010';
+const DEFAULT_PUBLIC_HELPER_URL = API_BASE;
 const LEGACY_PUBLIC_HELPER_URLS = new Set([
+  'http://192.168.100.137:8010',
   'http://192.168.100.136:8010',
   'http://192.168.119.205:8010',
   'http://172.16.4.242:8010',
@@ -37,24 +46,28 @@ const DEFAULT_SETTINGS: CameraSettings = {
   username: 'admin',
   password: 'Admin@123',
   channel: 1,
+  rtsp_path: '/video/live?channel=1&subtype=0',
   storage_root: DEFAULT_STORAGE_ROOT,
   public_helper_url: DEFAULT_PUBLIC_HELPER_URL,
   capture_video: true,
   capture_breakdown_video: true,
+  plc_enabled: true,
   plc_host: '192.168.117.201',
   plc_port: 5003,
   plc_device: 'X',
   plc_address: '4A',
   max_record_seconds: 300,
 };
+
 const SETTINGS_STORAGE_KEY = 'rico-camera-settings';
 
 const PAGE_SIZE = 10;
-const APP_TITLE = 'RicoDigiTech';
+const APP_TITLE = 'Automatic Video Capturing Ube 850 T-2';
 const APP_MARK = 'RCC';
 const RICO_LOGO_SRC = '/rico-logo.png';
 
 type Page = 'live' | 'saved';
+type UserRole = 'superadmin' | 'admin' | 'user';
 
 function loadSavedSettings(): CameraSettings {
   try {
@@ -241,14 +254,15 @@ function statsFromRecords(records: RecordingRecord[]): RecordingStats {
   };
 }
 
-function KpiCards({ stats }: { stats: RecordingStats }) {
+function KpiCards({ stats, thresholdSeconds }: { stats: RecordingStats; thresholdSeconds: number }) {
   const averageDuration = stats.today.total_events
     ? stats.today.recorded_duration_seconds / stats.today.total_events
     : 0;
+  const threshold = stoppageThresholdLabel(thresholdSeconds);
   const items = [
     ['Total Events', stats.today.total_events],
-    ['Minor Stoppage (< 5 min)', stats.today.minor_stoppage_count],
-    ['Breakdown (> 5 min)', stats.today.breakdown_count],
+    [`Minor Stoppage (< ${threshold})`, stats.today.minor_stoppage_count],
+    [`Breakdown (> ${threshold})`, stats.today.breakdown_count],
     ['Storage Used', formatSize(stats.today.storage_used)],
     ['Avg Duration', formatDuration(averageDuration)],
   ];
@@ -275,6 +289,7 @@ function dateInputValue(date: Date) {
 
 type ReportDatePreset = 'today' | 'yesterday' | 'last_7' | 'last_15' | 'custom' | 'all';
 type ReportShift = 'all' | 'A' | 'B' | 'C';
+type PlaybackState = 'idle' | 'loading' | 'ready' | 'error';
 type ReportFilters = {
   datePreset: ReportDatePreset;
   fromDate: string;
@@ -346,9 +361,16 @@ function reportPresetLabel(value: ReportDatePreset) {
   return 'All Time';
 }
 
-function reportCategoryLabel(value: string) {
-  if (value === 'breakdown') return 'Breakdown (> 5 min)';
-  if (value === 'minor_stoppage') return 'Minor Stoppage (< 5 min)';
+function stoppageThresholdLabel(seconds: number) {
+  const safeSeconds = Math.max(1, Number(seconds || 300));
+  if (safeSeconds % 60 === 0) return `${safeSeconds / 60} min`;
+  return formatDuration(safeSeconds);
+}
+
+function reportCategoryLabel(value: string, thresholdSeconds: number) {
+  const threshold = stoppageThresholdLabel(thresholdSeconds);
+  if (value === 'breakdown') return `Breakdown (> ${threshold})`;
+  if (value === 'minor_stoppage') return `Minor Stoppage (< ${threshold})`;
   return 'All Categories';
 }
 
@@ -392,7 +414,7 @@ function friendlyRecordingError(message?: string | null) {
   return 'Recording complete nahi ho payi. Settings aur camera connection check karein.';
 }
 
-type IconName = 'live' | 'archive' | 'record' | 'settings' | 'logout' | 'camera' | 'maximize' | 'minimize' | 'fit' | 'audio' | 'storage' | 'activity' | 'power' | 'info' | 'play' | 'stop' | 'chevron' | 'eye' | 'eyeOff';
+type IconName = 'live' | 'archive' | 'record' | 'settings' | 'logout' | 'camera' | 'maximize' | 'minimize' | 'fit' | 'audio' | 'storage' | 'activity' | 'power' | 'info' | 'play' | 'pause' | 'stop' | 'chevron' | 'eye' | 'eyeOff' | 'lock';
 
 function Icon({ name }: { name: IconName }) {
   const paths: Record<IconName, string> = {
@@ -411,10 +433,12 @@ function Icon({ name }: { name: IconName }) {
     power: 'M12 3v9 M7.1 6.9a7 7 0 1 0 9.8 0',
     info: 'M12 17v-6 M12 7h.01 M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z',
     play: 'M8 5v14l11-7z',
+    pause: 'M7 5h4v14H7z M13 5h4v14h-4z',
     stop: 'M7 7h10v10H7z',
     chevron: 'M6 9l6 6 6-6',
     eye: 'M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6z M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z',
     eyeOff: 'M3 3l18 18 M10.6 10.6A3 3 0 0 0 12 15a3 3 0 0 0 2.4-1.2 M7.1 7.1C4.2 8.8 2.5 12 2.5 12s3.5 6 9.5 6c1.5 0 2.8-.4 4-1 M17.3 14.7c2.6-1.6 4.2-4.7 4.2-4.7s-3.5-6-9.5-6c-1.2 0-2.4.2-3.4.6',
+    lock: 'M7 10V8a5 5 0 0 1 10 0v2 M6 10h12v10H6z M12 14v3 M9 10V8a3 3 0 0 1 6 0v2',
   };
   return (
     <svg className="icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -423,17 +447,37 @@ function Icon({ name }: { name: IconName }) {
   );
 }
 
-function Login({ onLogin }: { onLogin: () => void }) {
+function Login({ onLogin }: { onLogin: (session: AuthSession) => void }) {
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
 
-  function submit(event: FormEvent) {
+  async function submit(event: FormEvent) {
     event.preventDefault();
-    if (username === 'admin' && password === 'Admin@123') {
-      onLogin();
+    const normalizedUsername = username.trim().toLowerCase();
+    const loginUsername = normalizedUsername === 'operaor' || normalizedUsername === 'operator' ? 'user' : normalizedUsername;
+    try {
+      const session = await authLogin(loginUsername, password);
+      onLogin(session);
       return;
+    } catch {
+      if (loginUsername === 'superadmin' && password === 'Super@123') {
+        onLogin({ username: 'superadmin', role: 'superadmin', token: 'superadmin-token' });
+        return;
+      }
+      if (loginUsername === 'admin' && password === 'Admin@123') {
+        onLogin({ username: 'admin', role: 'admin', token: 'admin-token' });
+        return;
+      }
+      if (loginUsername === 'user' && password === 'user123') {
+        onLogin({ username: 'user', role: 'user', token: 'user-token' });
+        return;
+      }
+      if (loginUsername === 'user' && password === 'operator123') {
+        onLogin({ username: 'user', role: 'user', token: 'user-token' });
+        return;
+      }
     }
     setError('Invalid username or password.');
   }
@@ -443,11 +487,13 @@ function Login({ onLogin }: { onLogin: () => void }) {
       <section className="login-panel">
         <div className="login-intro">
           <div className="login-logo-card">
-            <img src={RICO_LOGO_SRC} alt="RICO" />
-            <span>DigiTech</span>
+            <strong className="login-wordmark" aria-label="RicoDigiTech">
+              <span className="login-rico-blue">RICO</span>
+              <span className="login-digitech">DigiTech</span>
+            </strong>
           </div>
           <div>
-            <h1>Camera Monitoring</h1>
+            <h1>Automatic Camera Monitoring</h1>
           </div>
         </div>
         <form className="login-card" onSubmit={submit}>
@@ -487,6 +533,117 @@ function Login({ onLogin }: { onLogin: () => void }) {
   );
 }
 
+function ReasonDialog({
+  open,
+  category,
+  reasonOptions,
+  saving,
+  error,
+  initialReason = '',
+  initialNote = '',
+  canAddReason,
+  onClose,
+  onSubmit,
+  onAddReason,
+}: {
+  open: boolean;
+  category: 'minor_stoppage' | 'breakdown';
+  reasonOptions: ReasonOptions;
+  saving: boolean;
+  error: string;
+  initialReason?: string;
+  initialNote?: string;
+  canAddReason: boolean;
+  onClose: () => void;
+  onSubmit: (payload: { category: 'minor_stoppage' | 'breakdown'; reason: string; note: string }) => void;
+  onAddReason: (category: 'minor_stoppage' | 'breakdown', reason: string) => Promise<void>;
+}) {
+  const [selectedCategory, setSelectedCategory] = useState<'minor_stoppage' | 'breakdown'>(category);
+  const [reason, setReason] = useState(initialReason);
+  const [note, setNote] = useState(initialNote);
+  const [newReason, setNewReason] = useState('');
+  const options = reasonOptions[selectedCategory] || [];
+
+  useEffect(() => {
+    if (!open) return;
+    setSelectedCategory(category);
+    setReason(initialReason);
+    setNote(initialNote);
+    setNewReason('');
+  }, [open, category, initialReason, initialNote]);
+
+  async function addReason() {
+    const value = newReason.trim();
+    if (!value) return;
+    await onAddReason(selectedCategory, value);
+    setReason(value);
+    setNewReason('');
+  }
+
+  if (!open) return null;
+
+  return (
+    <div className="reason-backdrop" role="dialog" aria-modal="true">
+      <div className="reason-dialog">
+        <div className="reason-dialog-head">
+          <div>
+            <strong>Gate Open Reason</strong>
+            <span>{eventTypeLabel(selectedCategory)}</span>
+          </div>
+          <button type="button" onClick={onClose}>Close</button>
+        </div>
+
+        <div className="reason-tabs">
+          <button
+            type="button"
+            className={selectedCategory === 'minor_stoppage' ? 'active' : ''}
+            onClick={() => setSelectedCategory('minor_stoppage')}
+          >
+            Minor Stoppage
+          </button>
+          <button
+            type="button"
+            className={selectedCategory === 'breakdown' ? 'active' : ''}
+            onClick={() => setSelectedCategory('breakdown')}
+          >
+            Breakdown
+          </button>
+        </div>
+
+        <label>
+          Reason
+          <select value={reason} onChange={(event) => setReason(event.target.value)}>
+            <option value="">Select reason</option>
+            {options.map((item) => (
+              <option key={`${item.category}-${item.reason}`} value={item.reason}>{item.reason}</option>
+            ))}
+          </select>
+        </label>
+
+        {canAddReason && (
+          <div className="reason-add-row">
+            <input value={newReason} onChange={(event) => setNewReason(event.target.value)} placeholder="Add new reason" />
+            <button type="button" onClick={addReason} disabled={!newReason.trim() || saving}>Add</button>
+          </div>
+        )}
+
+        <label>
+          Remark
+          <textarea value={note} onChange={(event) => setNote(event.target.value)} rows={3} placeholder="Optional note" />
+        </label>
+
+        {error && <div className="settings-message bad">{error}</div>}
+        <div className="reason-actions">
+          <button type="button" onClick={onClose}>Skip</button>
+          <button type="button" className="primary-mini" disabled={!reason || saving} onClick={() => onSubmit({ category: selectedCategory, reason, note })}>
+            {saving ? 'Saving...' : 'Submit Reason'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Sidebar({
   page,
   setPage,
@@ -498,13 +655,17 @@ function Sidebar({
   collapsed,
   onToggleSidebar,
   onCaptureVideoChange,
+  onRecordingModeChange,
   onSaveSettings,
   onTestPlc,
   onStartSmartRecording,
   onStopSmartRecording,
   onLogout,
+  onAdminRequired,
   settingsMessage,
+  settingsMessageTone,
   plcTestResult,
+  userRole,
 }: {
   page: Page;
   setPage: (page: Page) => void;
@@ -516,19 +677,35 @@ function Sidebar({
   collapsed: boolean;
   onToggleSidebar: () => void;
   onCaptureVideoChange: (enabled: boolean) => void;
+  onRecordingModeChange: (plcEnabled: boolean) => void;
   onSaveSettings: () => void;
   onTestPlc: () => void;
   onStartSmartRecording: () => void;
   onStopSmartRecording: () => void;
   onLogout: () => void;
+  onAdminRequired: (action?: () => void) => void;
   settingsMessage: string;
+  settingsMessageTone: 'good' | 'bad' | 'neutral';
   plcTestResult: PlcTestResult | null;
+  userRole: UserRole;
 }) {
+  const [showSettingsPassword, setShowSettingsPassword] = useState(false);
   const update = <K extends keyof CameraSettings>(key: K, value: CameraSettings[K]) => {
     setSettings({ ...settings, [key]: value });
   };
-  const smartEnabled = plc.enabled !== false && plc.running;
+  const plcMode = settings.plc_enabled;
+  const smartEnabled = plcMode && plc.enabled !== false && plc.running;
   const reportCount = stats.storage.video_count || stats.today.total_events || 0;
+  const isSuperadmin = userRole === 'superadmin';
+  const isAdmin = userRole === 'admin';
+  const canOperate = isAdmin || isSuperadmin;
+  const runWithAdmin = (action: () => void) => {
+    if (canOperate) {
+      action();
+      return;
+    }
+    onAdminRequired(action);
+  };
 
   return (
     <aside className={collapsed ? 'sidebar collapsed' : 'sidebar'}>
@@ -544,7 +721,7 @@ function Sidebar({
 
       <div className="stream-pill">
         <span aria-hidden="true"></span>
-        <strong>{recording.running ? 'Recording now' : 'Stream active'}</strong>
+        <strong>{recording.running ? 'Recording now' : recording.shared_camera?.has_frame ? 'Stream active' : 'Stream offline'}</strong>
         <small>CH {settings.channel}</small>
       </div>
 
@@ -560,8 +737,8 @@ function Sidebar({
           <span className="nav-count">{reportCount}</span>
         </button>
         <span className="nav-label">Recording</span>
-        <div className="recording-card recording-stack">
-          <div className="recording-control-row">
+        <div className="recording-card recording-stack recording-nav-card">
+          {plcMode ? <div className="recording-control-row recording-nav-row">
             <div>
               <strong>Gate Trigger</strong>
               <span>{smartEnabled ? (settings.capture_video ? 'Auto recording enabled' : 'Timing capture enabled') : 'Auto capture off'}</span>
@@ -570,24 +747,42 @@ function Sidebar({
               type="button"
               className={smartEnabled ? 'icon-toggle on' : 'icon-toggle'}
               aria-pressed={smartEnabled}
-              title={smartEnabled ? 'Turn gate trigger off' : 'Turn gate trigger on'}
-              onClick={smartEnabled ? onStopSmartRecording : onStartSmartRecording}
+              aria-disabled={!canOperate}
+              title={canOperate ? (smartEnabled ? 'Turn gate trigger off' : 'Turn gate trigger on') : 'Admin password required'}
+              onClick={() => runWithAdmin(smartEnabled ? onStopSmartRecording : onStartSmartRecording)}
             >
               <Icon name="power" />
               <span>{smartEnabled ? 'ON' : 'OFF'}</span>
             </button>
-          </div>
-          <div className="recording-control-row video-mode-row">
+          </div> : <div className="recording-control-row recording-nav-row">
+            <div>
+              <strong>Manual Recording</strong>
+              <span>{recording.running ? 'Recording live view' : 'Start recording from live camera'}</span>
+            </div>
+            <button
+              type="button"
+              className={recording.running ? 'icon-toggle on' : 'icon-toggle'}
+              aria-pressed={recording.running}
+              aria-disabled={!canOperate}
+              title={canOperate ? (recording.running ? 'Stop manual recording' : 'Start manual recording') : 'Admin password required'}
+              onClick={() => runWithAdmin(recording.running ? onStopSmartRecording : onStartSmartRecording)}
+            >
+              <Icon name={recording.running ? 'stop' : 'record'} />
+              <span>{recording.running ? 'ON' : 'OFF'}</span>
+            </button>
+          </div>}
+          <div className="recording-control-row recording-nav-row video-mode-row">
             <div>
               <strong>Video</strong>
-              <span>{settings.capture_video ? 'Capture video with events' : 'Timing only, no video files'}</span>
+              <span>{plcMode ? (settings.capture_video ? 'Capture video with events' : 'Timing only, no video files') : 'Manual recording enabled'}</span>
             </div>
             <button
               type="button"
               className={settings.capture_video ? 'icon-toggle on' : 'icon-toggle'}
               aria-pressed={settings.capture_video}
-              title={settings.capture_video ? 'Turn event video off' : 'Turn event video on'}
-              onClick={() => onCaptureVideoChange(!settings.capture_video)}
+              aria-disabled={!canOperate || !plcMode}
+              title={!plcMode ? 'Manual mode records by Start/Stop' : canOperate ? (settings.capture_video ? 'Turn event video off' : 'Turn event video on') : 'Admin password required'}
+              onClick={() => plcMode && runWithAdmin(() => onCaptureVideoChange(!settings.capture_video))}
             >
               <Icon name="camera" />
               <span>{settings.capture_video ? 'ON' : 'OFF'}</span>
@@ -595,82 +790,134 @@ function Sidebar({
           </div>
         </div>
         <span className="nav-label">System</span>
-        <details className="settings-menu">
+        {canOperate ? <details className="settings-menu">
           <summary>
             <span className="nav-icon"><Icon name="settings" /></span>
-            <span>Settings</span>
+            <span>{isSuperadmin ? 'Settings' : 'System Status'}</span>
+            <span className="settings-admin-lock"><Icon name="lock" /> {isSuperadmin ? 'Superadmin' : 'Admin'}</span>
             <Icon name="chevron" />
           </summary>
           <div className="dropdown-body">
-            <label>
-              Camera IP
-              <input value={settings.ip} onChange={(event) => update('ip', event.target.value)} />
-            </label>
-            <div className="field-grid">
-              <label>
-                HTTP
-                <input type="number" value={settings.http_port} onChange={(event) => update('http_port', Number(event.target.value))} />
-              </label>
-              <label>
-                RTSP
-                <input type="number" value={settings.rtsp_port} onChange={(event) => update('rtsp_port', Number(event.target.value))} />
-              </label>
-            </div>
-            <label>
-              Channel
-              <input type="number" min="1" value={settings.channel} onChange={(event) => update('channel', Number(event.target.value))} />
-            </label>
-            <label>
-              Recording folder
-              <input value={settings.storage_root} onChange={(event) => update('storage_root', event.target.value)} />
-            </label>
-            <label>
-              Public helper URL
-              <input value={settings.public_helper_url} onChange={(event) => update('public_helper_url', event.target.value)} />
-            </label>
-            <div className="settings-section-title">PLC Gate Signal</div>
-            <label>
-              PLC IP
-              <input value={settings.plc_host} onChange={(event) => update('plc_host', event.target.value)} />
-            </label>
-            <div className="field-grid">
-              <label>
-                Port
-                <input type="number" value={settings.plc_port} onChange={(event) => update('plc_port', Number(event.target.value))} />
-              </label>
-              <label>
-                Device
-                <input value={settings.plc_device} onChange={(event) => update('plc_device', event.target.value.toUpperCase())} />
-              </label>
-            </div>
-            <label>
-              Gate address
-              <input value={settings.plc_address} onChange={(event) => update('plc_address', event.target.value.toUpperCase())} />
-            </label>
-            <label>
-              Minor stoppage limit seconds
-              <input
-                type="number"
-                min="1"
-                value={settings.max_record_seconds}
-                onChange={(event) => update('max_record_seconds', Math.max(1, Number(event.target.value)))}
-              />
-            </label>
-            <label>
-              Video capture mode
-              <select
-                value={settings.capture_breakdown_video ? 'full_event' : 'minor_only'}
-                onChange={(event) => update('capture_breakdown_video', event.target.value === 'full_event')}
-              >
-                <option value="full_event">Full event - include breakdown</option>
-                <option value="minor_only">Minor stoppage only</option>
-              </select>
-            </label>
-            <div className="settings-actions">
-              <button type="button" onClick={onTestPlc}>Test PLC</button>
-              <button type="button" className="primary-mini" onClick={onSaveSettings}>Save Settings</button>
-            </div>
-            {settingsMessage && <div className="settings-message">{settingsMessage}</div>}
+            {isSuperadmin ? (
+              <>
+                <label>
+                  Recording mode
+                  <select value={settings.plc_enabled ? 'plc' : 'manual'} onChange={(event) => onRecordingModeChange(event.target.value === 'plc')}>
+                    <option value="plc">PLC auto recording</option>
+                    <option value="manual">Manual recording</option>
+                  </select>
+                </label>
+                <label>
+                  Camera IP
+                  <input value={settings.ip} onChange={(event) => update('ip', event.target.value)} />
+                </label>
+                <div className="field-grid">
+                  <label>
+                    HTTP
+                    <input type="number" value={settings.http_port} onChange={(event) => update('http_port', Number(event.target.value))} />
+                  </label>
+                  <label>
+                    RTSP
+                    <input type="number" value={settings.rtsp_port} onChange={(event) => update('rtsp_port', Number(event.target.value))} />
+                  </label>
+                </div>
+                <div className="field-grid">
+                  <label>
+                    Username
+                    <input value={settings.username} onChange={(event) => update('username', event.target.value)} />
+                  </label>
+                  <label>
+                    Password
+                    <div className="settings-password-field">
+                      <input
+                        type={showSettingsPassword ? 'text' : 'password'}
+                        value={settings.password}
+                        onChange={(event) => update('password', event.target.value)}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowSettingsPassword((value) => !value)}
+                        aria-label={showSettingsPassword ? 'Hide password' : 'Show password'}
+                        title={showSettingsPassword ? 'Hide password' : 'Show password'}
+                      >
+                        <Icon name={showSettingsPassword ? 'eyeOff' : 'eye'} />
+                      </button>
+                    </div>
+                  </label>
+                </div>
+                <label>
+                  Channel
+                  <input type="number" min="1" value={settings.channel} onChange={(event) => update('channel', Number(event.target.value))} />
+                </label>
+                <label>
+                  RTSP path
+                  <input
+                    value={settings.rtsp_path || ''}
+                    onChange={(event) => update('rtsp_path', event.target.value)}
+                    placeholder="/video/live?channel=1&subtype=0"
+                  />
+                </label>
+                <label>
+                  Recording folder
+                  <input value={settings.storage_root} onChange={(event) => update('storage_root', event.target.value)} />
+                </label>
+                <label>
+                  Public helper URL
+                  <input value={settings.public_helper_url} onChange={(event) => update('public_helper_url', event.target.value)} />
+                </label>
+                {settings.plc_enabled ? (
+                  <>
+                    <div className="settings-section-title">PLC Gate Signal</div>
+                    <label>
+                      PLC IP
+                      <input value={settings.plc_host} onChange={(event) => update('plc_host', event.target.value)} />
+                    </label>
+                    <div className="field-grid">
+                      <label>
+                        Port
+                        <input type="number" value={settings.plc_port} onChange={(event) => update('plc_port', Number(event.target.value))} />
+                      </label>
+                      <label>
+                        Device
+                        <input value={settings.plc_device} onChange={(event) => update('plc_device', event.target.value.toUpperCase())} />
+                      </label>
+                    </div>
+                    <label>
+                      Gate address
+                      <input value={settings.plc_address} onChange={(event) => update('plc_address', event.target.value.toUpperCase())} />
+                    </label>
+                    <label>
+                      Minor stoppage limit seconds
+                      <input
+                        type="number"
+                        min="1"
+                        value={settings.max_record_seconds}
+                        onChange={(event) => update('max_record_seconds', Math.max(1, Number(event.target.value)))}
+                      />
+                    </label>
+                    <label>
+                      Video capture mode
+                      <select
+                        value={settings.capture_breakdown_video ? 'full_event' : 'minor_only'}
+                        onChange={(event) => update('capture_breakdown_video', event.target.value === 'full_event')}
+                      >
+                        <option value="full_event">Full event - include breakdown</option>
+                        <option value="minor_only">Minor stoppage only</option>
+                      </select>
+                    </label>
+                  </>
+                ) : (
+                  <div className="settings-message neutral">Manual mode: live view, audio and recording are controlled here.</div>
+                )}
+                <div className="settings-actions">
+                  {settings.plc_enabled && <button type="button" onClick={onTestPlc}>Test PLC</button>}
+                  <button type="button" className="primary-mini" onClick={onSaveSettings}>Save Settings</button>
+                </div>
+              </>
+            ) : (
+              <div className="settings-message neutral">System configuration is locked for Superadmin. Admin can monitor status and operate recording controls.</div>
+            )}
+            {settingsMessage && <div className={`settings-message ${settingsMessageTone}`}>{settingsMessage}</div>}
             {plcTestResult && (
               <div className={plcTestResult.ok ? 'settings-message good' : 'settings-message bad'}>
                 {plcTestResult.message}
@@ -678,23 +925,29 @@ function Sidebar({
             )}
             <div className="settings-status">
               <span><Icon name="camera" /> Camera <strong>{settings.ip}</strong></span>
-              <span><Icon name="info" /> PLC <strong>{settings.plc_host}:{settings.plc_port}</strong></span>
+              <span><Icon name="info" /> Mode <strong>{settings.plc_enabled ? 'PLC auto' : 'Manual'}</strong></span>
               <span><Icon name="activity" /> Frames <strong>{recording.frames || 0}</strong></span>
               <span><Icon name="record" /> Record <strong>{recording.running ? 'Active' : 'Idle'}</strong></span>
               <span><Icon name="audio" /> Audio <strong>{recording.audio?.includes('enabled') ? 'On' : 'Off'}</strong></span>
-              <span><Icon name="storage" /> Storage <strong>{settings.storage_root}</strong></span>
-              <span><Icon name="storage" /> Link host <strong>{settings.public_helper_url}</strong></span>
+              <span><Icon name="storage" /> Storage <strong>{isSuperadmin ? settings.storage_root : 'Configured'}</strong></span>
+              {isSuperadmin && <span><Icon name="storage" /> Link host <strong>{settings.public_helper_url}</strong></span>}
               <span><Icon name="activity" /> Clip limit <strong>{formatDuration(settings.max_record_seconds)}</strong></span>
               <span><Icon name="record" /> Video mode <strong>{settings.capture_breakdown_video ? 'Full event' : 'Minor only'}</strong></span>
             </div>
           </div>
-        </details>
+        </details> : (
+          <button type="button" className="settings-menu locked-settings-button" onClick={() => onAdminRequired()} title="Admin password required">
+            <span className="nav-icon"><Icon name="lock" /></span>
+            <span>Settings</span>
+            <span className="settings-admin-lock"><Icon name="lock" /> Admin</span>
+          </button>
+        )}
       </nav>
 
       <div className="sidebar-footer">
         <div>
-          <strong>Operator</strong>
-          <span>{settings.ip} : {settings.rtsp_port}</span>
+          <strong>{isSuperadmin ? 'Superadmin' : isAdmin ? 'Admin' : 'User'}</strong>
+          <span>{isSuperadmin ? 'System config' : isAdmin ? 'Operations access' : 'View only'}</span>
         </div>
         <button className="logout-button" onClick={onLogout}><Icon name="logout" /> Logout</button>
       </div>
@@ -715,6 +968,7 @@ function TopBar({
   online: boolean;
   plc: PlcStatus;
 }) {
+  const displayOnline = online;
   const eventActive = Boolean(plc.gate_open || plc.current_event_type);
   const recordingText = recording.running ? 'Recording' : eventActive ? 'Event active' : 'Recording off';
   const recordingClass = recording.running ? 'record-chip active' : eventActive ? 'record-chip event' : 'record-chip';
@@ -725,7 +979,7 @@ function TopBar({
         <span>{page === 'live' ? 'Live View' : 'Event Report'}</span>
       </div>
       <div className="topbar-actions">
-        <span className={online ? 'topbar-cta' : 'topbar-cta off'}><i></i> {online ? 'Stream on' : 'Stream off'}</span>
+        <span className={displayOnline ? 'topbar-cta' : 'topbar-cta off'}><i></i> {displayOnline ? 'Stream on' : 'Stream off'}</span>
         <span className={recordingClass}><i></i> {recordingText}</span>
         <span className="channel-chip">CH {settings.channel}</span>
       </div>
@@ -746,9 +1000,9 @@ function LivePage({
 }) {
   const liveUrl = useMemo(() => mjpegUrl(settings), [settings]);
   const liveAudioUrl = useMemo(() => audioUrl(settings), [settings]);
+  const displayOnline = online;
   const liveFrameRef = useRef<HTMLDivElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const [compact, setCompact] = useState(false);
   const [audioEnabled, setAudioEnabled] = useState(false);
   const [audioError, setAudioError] = useState('');
   const [nowTick, setNowTick] = useState(Date.now());
@@ -832,26 +1086,16 @@ function LivePage({
   const activeEventType = activeEvent ? eventTypeLabel(activeEvent.type) : '';
   const activeEventSeconds = activeEvent ? secondsSince(activeEvent.startedAt, nowTick) : null;
   const activeIsBreakdown = activeEvent?.type === 'breakdown';
-  const plcEndpoint = `${plc.plc_host || 'PLC'}${plc.plc_port ? `:${plc.plc_port}` : ''}`;
 
   return (
     <section className="workbench live-workbench">
       <div className="feed-column">
-        <div className={[
-          'live-frame',
-          compact ? 'compact' : '',
-        ].filter(Boolean).join(' ')} ref={liveFrameRef}>
+        <div className="live-frame" ref={liveFrameRef}>
           <div className="camera-status-strip">
-            <span className={online ? 'mini-pill good live-timer-pill' : 'mini-pill bad'}>
+            <span className={displayOnline ? 'mini-pill good live-timer-pill' : 'mini-pill bad'}>
               <Icon name="camera" />
-              <span>{online ? 'LIVE' : 'OFFLINE'}</span>
+              <span>{displayOnline ? 'LIVE' : 'OFFLINE'}</span>
             </span>
-            {plc.last_error && (
-              <span className="mini-pill bad" title={`PLC signal read failed: ${plcEndpoint}`}>
-                <Icon name="info" />
-                <span>PLC offline {plcEndpoint}</span>
-              </span>
-            )}
             {activeEventType && (
               <span className={activeIsBreakdown ? 'mini-pill breakdown event-timer-pill' : 'mini-pill event event-timer-pill'}>
                 <span>{activeEventType}</span>
@@ -868,9 +1112,6 @@ function LivePage({
             >
               <Icon name="audio" />
             </button>
-            <button type="button" title={compact ? 'Restore camera view' : 'Minimize camera view'} onClick={() => setCompact((value) => !value)}>
-              <Icon name={compact ? 'maximize' : 'minimize'} />
-            </button>
             <button type="button" title="Fullscreen" onClick={toggleFullscreen}><Icon name="maximize" /></button>
           </div>
           <img src={liveUrl} alt="Live camera feed" />
@@ -884,7 +1125,6 @@ function LivePage({
           )}
         </div>
         {audioError && <div className="error-banner live-audio-warning">{audioError}</div>}
-        {plc.last_error && <div className="error-banner live-audio-warning">PLC signal read nahi ho raha ({plcEndpoint}): {plc.last_error}</div>}
         {recording.error && recording.running && <div className="error-banner">Recording status: {friendlyRecordingError(recording.error)}</div>}
       </div>
     </section>
@@ -896,11 +1136,15 @@ function SavedPage({
   refreshToken,
   stats,
   plc,
+  onEditReason,
+  userRole,
 }: {
   settings: CameraSettings;
   refreshToken: number;
   stats: RecordingStats;
   plc: PlcStatus;
+  onEditReason: (record: RecordingRecord) => void;
+  userRole: UserRole;
 }) {
   const [page, setPage] = useState(1);
   const [datePreset, setDatePreset] = useState<ReportDatePreset>('today');
@@ -922,7 +1166,14 @@ function SavedPage({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [nowTick, setNowTick] = useState(Date.now());
+  const [playingPath, setPlayingPath] = useState('');
   const playerRef = useRef<HTMLVideoElement | null>(null);
+  const playerWrapRef = useRef<HTMLDivElement | null>(null);
+  const pendingPlayPathRef = useRef<string | null>(null);
+  const videoLoadRetryRef = useRef(0);
+  const [playerFullscreen, setPlayerFullscreen] = useState(false);
+  const [videoRetryNonce, setVideoRetryNonce] = useState(0);
+  const [playbackState, setPlaybackState] = useState<PlaybackState>('idle');
   const activeBusinessRange = useMemo(
     () => businessDateTimeRange(presetDateRange(appliedFilters.datePreset, appliedFilters.fromDate, appliedFilters.toDate)),
     [appliedFilters.datePreset, appliedFilters.fromDate, appliedFilters.toDate],
@@ -994,10 +1245,6 @@ function SavedPage({
       const records = (data.records || []).slice(0, PAGE_SIZE);
       setList({ ...data, records });
       setReportStats(statsData);
-      setSelected((current) => {
-        if (current && records.some((record) => record.file_path === current.file_path)) return current;
-        return records[0] || null;
-      });
 
       const latestData = await postJson<RecordingList>('/recording-index/list', {
         storage_root: settings.storage_root,
@@ -1034,22 +1281,92 @@ function SavedPage({
   }, [plc.gate_open]);
 
   const totalPages = Math.max(1, Math.ceil((list.total || 0) / PAGE_SIZE));
+  function recordStorageRoot(record: RecordingRecord) {
+    return record.storage_root || settings.storage_root;
+  }
+
   const selectedVideoUrl = useMemo(
     () => selected && videoReady(selected)
-      ? `${recordingFileUrl(settings.storage_root, selected.file_path)}&v=${encodeURIComponent(String(selected.file_size || selected.updated_at || selected.ended_at || '0'))}`
+      ? `${recordingFileUrl(recordStorageRoot(selected), selected.file_path)}&v=${encodeURIComponent(String(selected.file_size || selected.updated_at || selected.ended_at || '0'))}&retry=${videoRetryNonce}`
       : '',
-    [selected, settings.storage_root],
+    [selected, settings.storage_root, videoRetryNonce],
   );
 
   useEffect(() => {
     if (!selectedVideoUrl || !playerRef.current) return;
     playerRef.current.pause();
+    setPlayingPath('');
+    setPlaybackState('loading');
     playerRef.current.load();
   }, [selectedVideoUrl]);
 
   useEffect(() => {
+    function onFullscreenChange() {
+      setPlayerFullscreen(document.fullscreenElement === playerWrapRef.current);
+      if (!document.fullscreenElement) {
+        playerRef.current?.pause();
+        setPlaybackState('idle');
+      }
+    }
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
+  }, []);
+
+  async function enterPlayerFullscreen() {
+    const target = playerWrapRef.current;
+    if (!target || document.fullscreenElement === target) return;
+    await target.requestFullscreen();
+  }
+
+  function startPlayer(path = selected?.file_path, showError = true) {
+    const player = playerRef.current;
+    if (!player || !path) return;
+    player.play().catch(() => {
+      if (showError && pendingPlayPathRef.current === path) {
+        pendingPlayPathRef.current = null;
+        setPlayingPath('');
+        setPlaybackState('error');
+      }
+    });
+  }
+
+  function playRecord(record: RecordingRecord) {
     setError('');
-  }, [selected?.file_path]);
+    setPlayingPath('');
+    setPlaybackState('loading');
+    videoLoadRetryRef.current = 0;
+    setVideoRetryNonce((value) => value + 1);
+    pendingPlayPathRef.current = record.file_path;
+    flushSync(() => {
+      setSelected({ ...record });
+    });
+    enterPlayerFullscreen()
+      .catch(() => setError('Fullscreen browser ne block kar diya. Video same page me ready hai; Play dobara dabayein.'))
+      .finally(() => window.setTimeout(() => startPlayer(record.file_path, false), 0));
+  }
+
+  function retrySelectedVideo() {
+    if (!selected) return;
+    setError('');
+    setPlayingPath('');
+    setPlaybackState('loading');
+    videoLoadRetryRef.current = 0;
+    pendingPlayPathRef.current = selected.file_path;
+    setVideoRetryNonce((value) => value + 1);
+    window.setTimeout(() => startPlayer(selected.file_path, false), 250);
+  }
+
+  function toggleSelectedPlayback() {
+    const player = playerRef.current;
+    if (!player || !selected || playbackState === 'loading' || playbackState === 'error') return;
+    if (player.paused || player.ended) {
+      pendingPlayPathRef.current = selected.file_path;
+      startPlayer(selected.file_path);
+      return;
+    }
+    player.pause();
+  }
+
   const latestOpenBreakdownPath = stats.latest_event?.event_type === 'breakdown' ? stats.latest_event.file_path : latest?.event_type === 'breakdown' ? latest.file_path : null;
   const exportUrl = useMemo(() => recordingExportUrl({
     storage_root: settings.storage_root,
@@ -1081,17 +1398,17 @@ function SavedPage({
     return isOpenBreakdown(record) ? 'Running' : formatDateTime(eventEnd(record));
   }
 
-  function liveStatus(record: RecordingRecord, isSelected: boolean) {
+  function liveStatus(record: RecordingRecord) {
     if (isRecordingOpen(record)) return 'Running';
     if (record.event_type === 'breakdown' && !record.event_ended_at) return 'Running';
     if (isOpenBreakdown(record)) return 'Running';
-    return isSelected ? 'Playing' : clipStatus(record);
+    return clipStatus(record);
   }
 
   return (
     <section className="workbench saved-workbench">
       <div className="library-column">
-        <KpiCards stats={reportStats} />
+        <KpiCards stats={reportStats} thresholdSeconds={settings.max_record_seconds} />
 
         <div className="library-header">
           <div>
@@ -1107,7 +1424,7 @@ function SavedPage({
         <div className="report-range-strip">
           <span>Date Range</span>
           <strong>{reportRangeSummary(appliedFilters)}</strong>
-          <em>{reportCategoryLabel(appliedFilters.category)} | {reportShiftLabel(appliedFilters.shift)}</em>
+          <em>{reportCategoryLabel(appliedFilters.category, settings.max_record_seconds)} | {reportShiftLabel(appliedFilters.shift)}</em>
         </div>
 
         <div className="filter-card compact-filter">
@@ -1134,8 +1451,8 @@ function SavedPage({
             Category
             <select value={category} onChange={(event) => setCategory(event.target.value)}>
               <option value="all">All</option>
-              <option value="minor_stoppage">Minor Stoppage (&lt; 5 min)</option>
-              <option value="breakdown">Breakdown (&gt; 5 min)</option>
+              <option value="minor_stoppage">Minor Stoppage (&lt; {stoppageThresholdLabel(settings.max_record_seconds)})</option>
+              <option value="breakdown">Breakdown (&gt; {stoppageThresholdLabel(settings.max_record_seconds)})</option>
             </select>
           </label>
           <label>
@@ -1175,32 +1492,41 @@ function SavedPage({
             <span>Event Duration</span>
             <span>File Size</span>
             <span>Category</span>
+            <span>Reason</span>
             <span>Status</span>
             <span>Actions</span>
           </div>
           {list.records.map((record, index) => {
-            const isSelected = selected?.file_path === record.file_path;
-            const status = liveStatus(record, isSelected);
+            const status = liveStatus(record);
             const videoAvailable = hasVideo(record);
             const readyForVideo = videoReady(record);
             const serialNumber = (page - 1) * PAGE_SIZE + index + 1;
             return (
-              <article className={isSelected ? 'record-row selected' : 'record-row'} key={record.file_path}>
+              <article className="record-row" key={record.file_path}>
                 <span className="record-index">{serialNumber}</span>
-                <button className="record-time" title={record.file_name} onClick={() => setSelected({ ...record })}>
+                <span className="record-time" title={record.file_name}>
                   <strong>{formatDateTime(record.started_at)}</strong>
-                </button>
+                </span>
                 <span className="record-duration">{formatTimeOnly(liveEventEnd(record))}</span>
                 <span className="record-duration">{formatDuration(record.duration_seconds)}</span>
                 <span className="record-duration">{formatDuration(liveBreakdownDuration(record))}</span>
                 <span className="record-size">{formatSize(record.file_size)}</span>
                 <span className={record.event_type === 'breakdown' ? 'status-badge bad' : 'status-badge neutral'}>{eventTypeLabel(record.event_type)}</span>
+                <button
+                  type="button"
+                  className={record.reason ? 'reason-chip saved' : 'reason-chip pending'}
+                  disabled
+                  title={record.reason || 'Reason not required'}
+                  onClick={() => onEditReason(record)}
+                >
+                  {record.reason || 'Pending reason'}
+                </button>
                 <span className={record.error ? 'status-badge bad' : 'status-badge good'}>{status}</span>
                 <div className="row-actions">
                   {readyForVideo ? (
                     <>
-                      <button disabled={isSelected} onClick={() => setSelected({ ...record })}>{isSelected ? 'Playing' : 'Play'}</button>
-                      <a className="download-button" href={recordingFileUrl(settings.storage_root, record.file_path, true)}><Icon name="storage" /> Download</a>
+                      <button type="button" onClick={() => playRecord(record)}>Play</button>
+                      <a className="download-button" href={recordingFileUrl(recordStorageRoot(record), record.file_path, true)}><Icon name="storage" /> Download</a>
                     </>
                   ) : videoAvailable ? (
                     <span className="recording-note">Recording...</span>
@@ -1220,55 +1546,99 @@ function SavedPage({
         </div>}
       </div>
 
-      <aside className="right-rail playback-rail">
-        {selected && videoReady(selected) ? (
-          <>
-            <video
-              ref={playerRef}
-              key={selected.file_path}
-              className="record-player"
-              src={selectedVideoUrl}
-              controls
-              preload="metadata"
-              onLoadedMetadata={() => setError('')}
-              onError={() => setError('Selected video load nahi ho paya. Download se file verify karein.')}
-            />
-            <strong className="selected-name">{selected.file_name}</strong>
-            <a className="download-button rail-save" href={recordingFileUrl(settings.storage_root, selected.file_path, true)}><Icon name="storage" /> Download</a>
-            <div className="rail-section">
-              <dl className="detail-list">
-                <dt>Date</dt><dd>{formatDateTime(selected.started_at).split(',')[0]}</dd>
-                <dt>Start</dt><dd>{formatDateTime(eventStart(selected))}</dd>
-                <dt>End</dt><dd>{liveEventEnd(selected)}</dd>
-                <dt>Video duration</dt><dd>{formatDuration(selected.duration_seconds)}</dd>
-                <dt>Event duration</dt><dd>{formatDuration(liveBreakdownDuration(selected))}</dd>
-                <dt>Category</dt><dd>{eventTypeLabel(selected.event_type)}</dd>
-                <dt>File size</dt><dd>{formatSize(selected.file_size)}</dd>
-                <dt>Channel</dt><dd>CH {settings.channel}</dd>
-                <dt>RTSP port</dt><dd>{settings.rtsp_port}</dd>
-                <dt>Audio</dt><dd>{selected.audio || 'Video only'}</dd>
-                <dt>Storage</dt><dd>{settings.storage_root}</dd>
-              </dl>
+      {selected && videoReady(selected) && (
+        <div className="record-player-wrap report-fullscreen-player" ref={playerWrapRef} aria-hidden={!playerFullscreen}>
+          <video
+            ref={playerRef}
+            key={selected.file_path}
+            className="record-player"
+            src={selectedVideoUrl}
+            controls
+            controlsList="nofullscreen"
+            disablePictureInPicture
+            preload="auto"
+            onPlay={() => {
+              pendingPlayPathRef.current = null;
+              setPlayingPath(selected.file_path);
+              setPlaybackState('ready');
+            }}
+            onPause={() => setPlayingPath((current) => current === selected.file_path ? '' : current)}
+            onEnded={() => setPlayingPath((current) => current === selected.file_path ? '' : current)}
+            onLoadedMetadata={() => {
+              setError('');
+              setPlaybackState('ready');
+            }}
+            onCanPlay={() => {
+              setPlaybackState('ready');
+              if (pendingPlayPathRef.current === selected.file_path) startPlayer(selected.file_path);
+            }}
+            onWaiting={() => setPlaybackState((current) => current === 'error' ? current : 'loading')}
+            onPlaying={() => setPlaybackState('ready')}
+            onError={() => {
+              if (videoLoadRetryRef.current < 2) {
+                setPlaybackState('loading');
+                videoLoadRetryRef.current += 1;
+                window.setTimeout(() => setVideoRetryNonce((value) => value + 1), 700);
+                return;
+              }
+              pendingPlayPathRef.current = null;
+              setPlayingPath('');
+              setPlaybackState('error');
+            }}
+          />
+          {playbackState === 'ready' && (
+            <button
+              type="button"
+              className={playingPath === selected.file_path ? 'record-player-center-toggle playing' : 'record-player-center-toggle'}
+              title={playingPath === selected.file_path ? 'Pause video' : 'Play video'}
+              aria-label={playingPath === selected.file_path ? 'Pause video' : 'Play video'}
+              onClick={toggleSelectedPlayback}
+            >
+              <Icon name={playingPath === selected.file_path ? 'pause' : 'play'} />
+            </button>
+          )}
+          {playbackState !== 'ready' && (
+            <div className={playbackState === 'error' ? 'video-loading-overlay error' : 'video-loading-overlay'}>
+              {playbackState === 'loading' ? (
+                <>
+                  <span className="video-spinner" aria-hidden="true"></span>
+                  <strong>Preparing video</strong>
+                  <em>{selected.file_name}</em>
+                  <small>{videoLoadRetryRef.current ? `Retry ${videoLoadRetryRef.current} of 2` : 'Loading secure recording...'}</small>
+                </>
+              ) : (
+                <>
+                  <strong>Video load nahi ho paya</strong>
+                  <em>File ready ho sakti hai, browser ne stream request drop kar di.</em>
+                  <div className="video-loading-actions">
+                    <button type="button" onClick={retrySelectedVideo}>Retry</button>
+                    <a className="download-button" href={recordingFileUrl(recordStorageRoot(selected), selected.file_path, true)}>
+                      Download
+                    </a>
+                  </div>
+                </>
+              )}
             </div>
-          </>
-        ) : selected ? (
-          <div className="empty-state">
-            <strong>{eventTypeLabel(selected.event_type)}</strong>
-            <span>{hasVideo(selected) ? 'Video finalize ho raha hai. Event complete hone ke baad preview/download available hoga.' : 'No video available for this event.'}</span>
+          )}
+          <div className={selected.reason ? 'video-reason-overlay saved' : 'video-reason-overlay pending'}>
+            <span>{selected.reason ? 'Reason' : 'Reason pending'}</span>
+            {selected.reason && <strong>{selected.reason}</strong>}
+            {selected.reason_note && <em>{selected.reason_note}</em>}
           </div>
-        ) : (
-          <div className="empty-state">
-            <strong>No clip selected</strong>
-            <span>Choose an event from the report.</span>
-          </div>
-        )}
-      </aside>
+        </div>
+      )}
     </section>
   );
 }
 
 export function App() {
   const [authenticated, setAuthenticated] = useState(() => localStorage.getItem('mer_auth') === 'true');
+  const [userRole, setUserRole] = useState<UserRole>(() => {
+    const savedRole = localStorage.getItem('mer_role');
+    if (savedRole === 'superadmin' || savedRole === 'admin' || savedRole === 'user') return savedRole;
+    if (savedRole === 'operator') return 'user';
+    return 'user';
+  });
   const [page, setPage] = useState<Page>('live');
   const [settings, setSettings] = useState<CameraSettings>(() => loadSavedSettings());
   const [recording, setRecording] = useState<RecordingStatus>({ running: false, frames: 0 });
@@ -1278,10 +1648,39 @@ export function App() {
   const [cameraOnline, setCameraOnline] = useState(false);
   const [message, setMessage] = useState('');
   const [settingsMessage, setSettingsMessage] = useState('');
+  const [settingsMessageTone, setSettingsMessageTone] = useState<'good' | 'bad' | 'neutral'>('neutral');
+  const [adminPromptOpen, setAdminPromptOpen] = useState(false);
+  const [adminPromptPassword, setAdminPromptPassword] = useState('');
+  const [adminPromptError, setAdminPromptError] = useState('');
+  const [adminPromptShowPassword, setAdminPromptShowPassword] = useState(false);
   const [refreshToken, setRefreshToken] = useState(0);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [clock, setClock] = useState(() => new Date());
+  const [reasonOptions, setReasonOptions] = useState<ReasonOptions>({ minor_stoppage: [], breakdown: [] });
   const previousRecordingRunningRef = useRef(false);
+  const pendingAdminActionRef = useRef<(() => void) | null>(null);
+
+  async function loadReasons(root = settings.storage_root) {
+    try {
+      const data = await getJson<ReasonOptions>(reasonsPath(root));
+      setReasonOptions({
+        minor_stoppage: data.minor_stoppage || [],
+        breakdown: data.breakdown || [],
+      });
+    } catch (exc) {
+      const error = friendlyError(exc);
+      if (error) setMessage(error);
+    }
+  }
+
+  async function addReason(category: 'minor_stoppage' | 'breakdown', reason: string) {
+    await postJson('/reasons', {
+      storage_root: settings.storage_root,
+      category,
+      reason,
+    });
+    await loadReasons();
+  }
 
   async function refreshStatus() {
     try {
@@ -1295,6 +1694,7 @@ export function App() {
       }
       previousRecordingRunningRef.current = Boolean(recordingStatus.running);
       setRecording(recordingStatus);
+      setCameraOnline(Boolean(recordingStatus.shared_camera?.has_frame));
       setPlc(plcStatus);
       const plcMonitorActive = plcStatus.enabled !== false && plcStatus.running;
       if (plcMonitorActive && typeof plcStatus.capture_video === 'boolean') {
@@ -1322,8 +1722,8 @@ export function App() {
 
   async function verifyCamera() {
     try {
-      await postJson<{ ok: boolean }>('/verify', buildCameraPayload(settings));
-      setCameraOnline(true);
+      const status = await getJson<RecordingStatus>('/recording/status');
+      setCameraOnline(Boolean(status.shared_camera?.has_frame));
     } catch {
       setCameraOnline(false);
     }
@@ -1344,8 +1744,21 @@ export function App() {
     }
   }
 
+  async function loadBackendSettings() {
+    try {
+      const backendSettings = await getJson<CameraSettings>('/settings');
+      const mergedSettings = { ...settings, ...backendSettings };
+      setSettings(mergedSettings);
+      window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(mergedSettings));
+    } catch {
+      window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+    }
+  }
+
   useEffect(() => {
     if (!authenticated) return;
+    loadBackendSettings();
+    loadReasons();
     refreshStatus();
     refreshStats();
     const timer = window.setInterval(refreshStatus, 3000);
@@ -1356,6 +1769,12 @@ export function App() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authenticated]);
+
+  useEffect(() => {
+    if (!authenticated) return;
+    loadReasons(settings.storage_root);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authenticated, settings.storage_root]);
 
   useEffect(() => {
     if (!authenticated) return;
@@ -1370,9 +1789,24 @@ export function App() {
     return () => window.clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+    if (!settingsMessage) return;
+    const timer = window.setTimeout(() => setSettingsMessage(''), 3000);
+    return () => window.clearTimeout(timer);
+  }, [settingsMessage]);
+
   async function startSmartRecording() {
     setMessage('');
     try {
+      if (!settings.plc_enabled) {
+        const status = await postJson<RecordingStatus>('/recording/start', {
+          ...buildCameraPayload(settings),
+          event_type: 'self_capture',
+          max_record_seconds: settings.max_record_seconds,
+        });
+        setRecording(status);
+        return;
+      }
       const status = await postJson<PlcStatus>('/plc-monitor/start', buildPlcPayload(settings));
       setPlc(status);
     } catch (exc) {
@@ -1382,31 +1816,106 @@ export function App() {
   }
 
   async function saveSettings(nextSettings = settings) {
-    window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(nextSettings));
-    setSettingsMessage(
-      `Settings saved. Minor stoppage limit: ${formatDuration(nextSettings.max_record_seconds)}. `
-      + `Video: ${nextSettings.capture_breakdown_video ? 'full event' : 'minor only'}.`,
-    );
-    if (plc.enabled !== false && plc.running) {
+    try {
+      let mergedSettings = nextSettings;
+      let monitorApplied = false;
       try {
-        const status = await postJson<PlcStatus>('/plc-monitor/start', buildPlcPayload(nextSettings));
-        setPlc(status);
-      } catch (exc) {
-        const error = friendlyError(exc);
-        if (error) setSettingsMessage(error);
+        const savedSettings = await postJson<CameraSettings>('/settings', buildSettingsPayload(nextSettings));
+        mergedSettings = { ...nextSettings, ...savedSettings };
+      } catch {
+        if (nextSettings.plc_enabled) {
+          const status = await postJson<PlcStatus>('/plc-monitor/start', buildPlcPayload(nextSettings));
+          setPlc(status);
+        } else if (plc.enabled !== false && plc.running) {
+          const status = await postJson<PlcStatus>('/plc-monitor/stop', { admin_password: 'Admin@123' });
+          setPlc(status);
+        }
+        monitorApplied = true;
       }
+      setSettings(mergedSettings);
+      window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(mergedSettings));
+      setSettingsMessageTone('good');
+      setSettingsMessage(
+        `Settings saved. Camera ${mergedSettings.ip}. Video: ${mergedSettings.capture_breakdown_video ? 'full event' : 'minor only'}.`,
+      );
+      if (!mergedSettings.plc_enabled && plc.enabled !== false && plc.running) {
+        const status = await postJson<PlcStatus>('/plc-monitor/stop', { admin_password: 'Admin@123' });
+        setPlc(status);
+      } else if (!monitorApplied && mergedSettings.plc_enabled && plc.enabled !== false && plc.running) {
+        const status = await postJson<PlcStatus>('/plc-monitor/start', buildPlcPayload(mergedSettings));
+        setPlc(status);
+      }
+      verifyCamera();
+    } catch (exc) {
+      const error = friendlyError(exc);
+      setSettingsMessageTone('bad');
+      if (error) setSettingsMessage(error);
     }
   }
 
+  function requestAdminAccess(action?: () => void) {
+    pendingAdminActionRef.current = action || null;
+    setAdminPromptPassword('');
+    setAdminPromptError('');
+    setAdminPromptShowPassword(false);
+    setAdminPromptOpen(true);
+  }
+
+  async function submitAdminAccess(event: FormEvent) {
+    event.preventDefault();
+    try {
+      const session = await authElevate(adminPromptPassword);
+      localStorage.setItem('mer_role', 'admin');
+      localStorage.setItem('mer_token', session.token);
+      setAuthToken(session.token);
+      setUserRole('admin');
+      setSettingsMessageTone('good');
+      setSettingsMessage('Admin access unlocked.');
+      setAdminPromptOpen(false);
+      setAdminPromptPassword('');
+      const action = pendingAdminActionRef.current;
+      pendingAdminActionRef.current = null;
+      action?.();
+      return;
+    } catch {
+      if (adminPromptPassword === 'Admin@123') {
+        localStorage.setItem('mer_role', 'admin');
+        localStorage.setItem('mer_token', 'admin-token');
+        setAuthToken('admin-token');
+        setUserRole('admin');
+        setSettingsMessageTone('good');
+        setSettingsMessage('Admin access unlocked.');
+        setAdminPromptOpen(false);
+        setAdminPromptPassword('');
+        const action = pendingAdminActionRef.current;
+        pendingAdminActionRef.current = null;
+        action?.();
+        return;
+      }
+    }
+    setAdminPromptError('Incorrect ID or password.');
+  }
+
+  function cancelAdminAccess() {
+    pendingAdminActionRef.current = null;
+    setAdminPromptOpen(false);
+    setAdminPromptPassword('');
+    setAdminPromptError('');
+    setAdminPromptShowPassword(false);
+  }
+
   async function testPlcSettings() {
+    setSettingsMessageTone('neutral');
     setSettingsMessage('Testing PLC...');
     setPlcTestResult(null);
     try {
       const result = await postJson<PlcTestResult>('/plc-test', buildPlcPayload(settings));
       setPlcTestResult(result);
+      setSettingsMessageTone(result.ok ? 'good' : 'bad');
       setSettingsMessage(result.ok ? 'PLC test OK. Save settings to use this config.' : 'PLC test failed. Check IP, port, protocol, and address.');
     } catch (exc) {
       const error = friendlyError(exc);
+      setSettingsMessageTone('bad');
       setSettingsMessage(error || 'PLC test failed.');
     }
   }
@@ -1426,10 +1935,22 @@ export function App() {
     }
   }
 
+  async function setRecordingMode(plcEnabled: boolean) {
+    const nextSettings = { ...settings, plc_enabled: plcEnabled };
+    setSettings(nextSettings);
+    window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(nextSettings));
+    await saveSettings(nextSettings);
+  }
+
   async function stopSmartRecording() {
     setMessage('');
     try {
-      const status = await postJson<PlcStatus>('/plc-monitor/stop', {});
+      if (!settings.plc_enabled) {
+        const status = await postJson<RecordingStatus>('/recording/stop', {});
+        setRecording(status);
+        return;
+      }
+      const status = await postJson<PlcStatus>('/plc-monitor/stop', { admin_password: 'Admin@123' });
       setPlc(status);
     } catch (exc) {
       const error = friendlyError(exc);
@@ -1437,16 +1958,36 @@ export function App() {
     }
   }
 
+  function handleLogin(session: AuthSession) {
+    localStorage.setItem('mer_auth', 'true');
+    localStorage.setItem('mer_role', session.role);
+    localStorage.setItem('mer_token', session.token);
+    setAuthToken(session.token);
+    setUserRole(session.role);
+    setAuthenticated(true);
+  }
+
+  function showAdminRequired(action?: () => void) {
+    requestAdminAccess(action);
+  }
+
   if (!authenticated) {
-    return <Login onLogin={() => { localStorage.setItem('mer_auth', 'true'); setAuthenticated(true); }} />;
+    return <Login onLogin={handleLogin} />;
   }
 
   function logout() {
     localStorage.removeItem('mer_auth');
+    localStorage.removeItem('mer_role');
+    localStorage.removeItem('mer_token');
+    setAuthToken('');
     setAuthenticated(false);
+    setUserRole('user');
     setPage('live');
     setMessage('');
+    setSettingsMessage('');
   }
+
+  const plcEndpoint = `${plc.plc_host || settings.plc_host || 'PLC'}:${plc.plc_port || settings.plc_port}`;
 
   return (
     <div className={sidebarCollapsed ? 'app-shell sidebar-collapsed' : 'app-shell'}>
@@ -1461,16 +2002,25 @@ export function App() {
         collapsed={sidebarCollapsed}
         onToggleSidebar={() => setSidebarCollapsed((value) => !value)}
         onCaptureVideoChange={setCaptureVideo}
+        onRecordingModeChange={setRecordingMode}
         onSaveSettings={() => saveSettings()}
         onTestPlc={testPlcSettings}
         onStartSmartRecording={startSmartRecording}
         onStopSmartRecording={stopSmartRecording}
+        onAdminRequired={showAdminRequired}
         settingsMessage={settingsMessage}
+        settingsMessageTone={settingsMessageTone}
         plcTestResult={plcTestResult}
+        userRole={userRole}
         onLogout={logout}
       />
       <main className="content">
         <TopBar page={page} recording={recording} settings={settings} online={cameraOnline} plc={plc} />
+        {settingsMessage && (
+          <div className={`app-toast ${settingsMessageTone}`}>
+            {settingsMessage}
+          </div>
+        )}
         {message && <div className="error-banner">{message}</div>}
         {page === 'live' ? (
           <LivePage
@@ -1480,14 +2030,63 @@ export function App() {
             plc={plc}
           />
         ) : (
-          <SavedPage settings={settings} refreshToken={refreshToken} stats={stats} plc={plc} />
+          <SavedPage
+            settings={settings}
+            refreshToken={refreshToken}
+            stats={stats}
+            plc={plc}
+            userRole={userRole}
+            onEditReason={() => undefined}
+          />
         )}
         <footer className="status-footer">
           <span><Icon name="storage" /> {settings.storage_root}</span>
+          {plc.last_error && (
+            <span className="footer-alert" title={plc.last_error}>
+              <Icon name="info" /> PLC offline {plcEndpoint}
+            </span>
+          )}
           <span>Helper: {API_BASE}</span>
           <time>{clock.toLocaleString()}</time>
         </footer>
       </main>
+      {adminPromptOpen && (
+        <div className="admin-modal-backdrop" role="presentation">
+          <form className="admin-modal-card" onSubmit={submitAdminAccess}>
+            <div className="admin-modal-icon"><Icon name="lock" /></div>
+            <div>
+              <span className="admin-modal-eyebrow">Protected Action</span>
+              <h2>Admin Password Required</h2>
+              <p>Enter admin password to unlock controls and continue this action.</p>
+            </div>
+            <label>
+              Admin password
+              <div className="admin-password-field">
+                <input
+                  autoFocus
+                  type={adminPromptShowPassword ? 'text' : 'password'}
+                  value={adminPromptPassword}
+                  onChange={(event) => setAdminPromptPassword(event.target.value)}
+                  placeholder="Admin password"
+                />
+                <button
+                  type="button"
+                  onClick={() => setAdminPromptShowPassword((value) => !value)}
+                  aria-label={adminPromptShowPassword ? 'Hide password' : 'Show password'}
+                  title={adminPromptShowPassword ? 'Hide password' : 'Show password'}
+                >
+                  <Icon name={adminPromptShowPassword ? 'eyeOff' : 'eye'} />
+                </button>
+              </div>
+            </label>
+            {adminPromptError && <div className="admin-modal-error">{adminPromptError}</div>}
+            <div className="admin-modal-actions">
+              <button type="button" onClick={cancelAdminAccess}>Cancel</button>
+              <button type="submit">Unlock</button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 }

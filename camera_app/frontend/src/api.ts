@@ -1,4 +1,11 @@
-export const API_BASE = import.meta.env.VITE_HELPER_URL || 'http://192.168.100.137:8010';
+const DEFAULT_API_BASE = `${window.location.protocol}//${window.location.hostname}:8010`;
+
+export const API_BASE = import.meta.env.VITE_HELPER_URL || DEFAULT_API_BASE;
+let AUTH_TOKEN = window.localStorage.getItem('mer_token') || '';
+
+export function setAuthToken(token: string) {
+  AUTH_TOKEN = token;
+}
 
 export type CameraSettings = {
   ip: string;
@@ -7,10 +14,12 @@ export type CameraSettings = {
   username: string;
   password: string;
   channel: number;
+  rtsp_path?: string | null;
   storage_root: string;
   public_helper_url: string;
   capture_video: boolean;
   capture_breakdown_video: boolean;
+  plc_enabled: boolean;
   plc_host: string;
   plc_port: number;
   plc_device: string;
@@ -31,7 +40,27 @@ export type RecordingStatus = {
   event_started_at?: string | null;
   event_ended_at?: string | null;
   event_duration_seconds?: number | null;
+  reason_category?: string | null;
+  reason?: string | null;
+  reason_note?: string | null;
+  reason_submitted_by?: string | null;
+  reason_submitted_at?: string | null;
   updated_at?: string | null;
+  shared_camera?: {
+    running?: boolean;
+    has_frame?: boolean;
+    frame_age_seconds?: number | null;
+    width?: number | null;
+    height?: number | null;
+    fps?: number | null;
+    last_error?: string | null;
+  };
+};
+
+export type AuthSession = {
+  username: string;
+  role: 'superadmin' | 'admin' | 'user';
+  token: string;
 };
 
 export type PlcStatus = {
@@ -73,6 +102,7 @@ export type PlcTestResult = {
 export type RecordingRecord = {
   file_path: string;
   file_name: string;
+  storage_root?: string | null;
   started_at?: string | null;
   ended_at?: string | null;
   duration_seconds?: number | null;
@@ -85,8 +115,22 @@ export type RecordingRecord = {
   event_started_at?: string | null;
   event_ended_at?: string | null;
   event_duration_seconds?: number | null;
+  reason_category?: string | null;
+  reason?: string | null;
+  reason_note?: string | null;
+  reason_submitted_by?: string | null;
+  reason_submitted_at?: string | null;
   updated_at?: string | null;
 };
+
+export type ReasonOption = {
+  id: number;
+  category: string;
+  reason: string;
+  active?: number;
+};
+
+export type ReasonOptions = Record<string, ReasonOption[]>;
 
 export type RecordingList = {
   total: number;
@@ -144,9 +188,11 @@ export function buildCameraPayload(settings: CameraSettings) {
     username: settings.username,
     password: settings.password,
     channel: Number(settings.channel),
+    rtsp_path: settings.rtsp_path || undefined,
     storage_root: settings.storage_root,
     capture_video: settings.capture_video,
     capture_breakdown_video: settings.capture_breakdown_video,
+    plc_enabled: settings.plc_enabled,
   };
 }
 
@@ -162,21 +208,50 @@ export function buildPlcPayload(settings: CameraSettings) {
     gate_close_when: true,
     poll_seconds: 1,
     max_record_seconds: Math.max(1, Number(settings.max_record_seconds || 30)),
+    admin_password: 'Admin@123',
+  };
+}
+
+export function buildSettingsPayload(settings: CameraSettings) {
+  return {
+    ...buildCameraPayload(settings),
+    public_helper_url: settings.public_helper_url,
+    plc_host: settings.plc_host.trim(),
+    plc_port: Number(settings.plc_port),
+    plc_device: settings.plc_device.trim() || 'X',
+    plc_address: settings.plc_address.trim() || '4A',
+    max_record_seconds: Math.max(1, Number(settings.max_record_seconds || 300)),
+    admin_password: 'Admin@123',
   };
 }
 
 export async function getJson<T>(path: string): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`);
+  const response = await fetch(`${API_BASE}${path}`, {
+    headers: {
+      ...(AUTH_TOKEN ? { 'X-Auth-Token': AUTH_TOKEN } : {}),
+    },
+  });
   return parseResponse<T>(response);
 }
 
 export async function postJson<T>(path: string, payload: unknown): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(AUTH_TOKEN ? { 'X-Auth-Token': AUTH_TOKEN } : {}),
+    },
     body: JSON.stringify(payload),
   });
   return parseResponse<T>(response);
+}
+
+export async function authLogin(username: string, password: string): Promise<AuthSession> {
+  return postJson<AuthSession>('/auth/login', { username, password });
+}
+
+export async function authElevate(password: string): Promise<AuthSession> {
+  return postJson<AuthSession>('/auth/elevate', { username: 'admin', password });
 }
 
 export function queryUrl(path: string, params: Record<string, string | number | boolean | undefined>) {
@@ -188,12 +263,16 @@ export function queryUrl(path: string, params: Record<string, string | number | 
 }
 
 export function mjpegUrl(settings: CameraSettings) {
+  const livePreviewPath = settings.rtsp_path
+    ? settings.rtsp_path.replace(/subtype=0/g, 'subtype=1')
+    : undefined;
   return queryUrl('/mjpeg', {
     ip: settings.ip.trim(),
     rtsp_port: settings.rtsp_port,
     username: settings.username,
     password: settings.password,
     channel: settings.channel,
+    rtsp_path: livePreviewPath,
   });
 }
 
@@ -204,6 +283,7 @@ export function audioUrl(settings: CameraSettings) {
     username: settings.username,
     password: settings.password,
     channel: settings.channel,
+    rtsp_path: settings.rtsp_path || undefined,
   });
 }
 
@@ -213,6 +293,10 @@ export function recordingFileUrl(storageRoot: string, filePath: string, download
     file_path: filePath,
     download,
   });
+}
+
+export function reasonsPath(storageRoot: string) {
+  return `/reasons?${new URLSearchParams({ storage_root: storageRoot }).toString()}`;
 }
 
 export function recordingExportUrl(params: {

@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import mimetypes
+import os
 import secrets
 import shutil
 import socket
@@ -12,6 +13,8 @@ import subprocess
 import threading
 import time
 import zipfile
+import asyncio
+import ssl
 from datetime import datetime, time as datetime_time
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -22,11 +25,15 @@ import cv2
 import numpy as np
 import requests
 import uvicorn
-from fastapi import FastAPI, HTTPException
+import urllib3
+import websockets
+from fastapi import FastAPI, Header, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = FastAPI(title='CP Plus Camera Helper')
 app.add_middleware(
@@ -43,16 +50,39 @@ DEFAULT_CAMERA_USER = 'admin'
 DEFAULT_CAMERA_PASSWORD = 'Admin@123'
 DEFAULT_STORAGE_ROOT = r'C:\CPPLUS_RECORDINGS'
 LEGACY_STORAGE_ROOT = r'D:\CPPLUS_RECORDINGS'
+APP_BASE_DIR = Path(__file__).resolve().parents[1]
+FALLBACK_STORAGE_ROOT = APP_BASE_DIR / 'recordings'
+HELPER_SETTINGS_PATH = Path(os.getenv('HELPER_SETTINGS_PATH', APP_BASE_DIR / 'helper_settings.json'))
 MAX_GATE_RECORD_SECONDS = 300
 RECORDING_MAX_WIDTH = 1280
 RECORDING_TARGET_FPS = 15.0
 RECORDING_CRF = 28
-USE_FFMPEG_RECORDING = False
+RECORDING_AUDIO_FILTER = 'highpass=f=120,lowpass=f=3500,afftdn=nf=-25,dynaudnorm=f=150:g=15,volume=2.5,alimiter=limit=0.95'
+LIVE_PREVIEW_MAX_WIDTH = 1280
+LIVE_PREVIEW_TARGET_FPS = 8.0
+LIVE_PREVIEW_STALE_SECONDS = 8.0
+USE_FFMPEG_RECORDING = True
 RECORDING_START_RETRY_SECONDS = 1.0
 RECORDING_START_STALE_SECONDS = 4.0
 RTSP_RECORD_OPEN_TIMEOUT_MS = 5000
 GATE_CLOSE_START_COOLDOWN_SECONDS = 2.0
 PLC_FAILOVER_PORTS = [5003]
+KNOWN_FFMPEG_PATHS = [
+    Path.home() / 'AppData' / 'Local' / 'Microsoft' / 'WinGet' / 'Packages' / 'Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe' / 'ffmpeg-8.1.2-full_build' / 'bin' / 'ffmpeg.exe',
+]
+
+
+def ffmpeg_executable() -> str | None:
+    configured_path = os.getenv('FFMPEG_PATH')
+    if configured_path and Path(configured_path).exists():
+        return configured_path
+    ffmpeg_path = shutil.which('ffmpeg')
+    if ffmpeg_path:
+        return ffmpeg_path
+    for path in KNOWN_FFMPEG_PATHS:
+        if path.exists():
+            return str(path)
+    return None
 
 
 class CameraRequest(BaseModel):
@@ -62,8 +92,14 @@ class CameraRequest(BaseModel):
     username: str
     password: str
     channel: int = 1
+    rtsp_path: str | None = None
     start_at: str | None = None
     end_at: str | None = None
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
 
 
 class DownloadRequest(CameraRequest):
@@ -90,6 +126,26 @@ class PlcMonitorRequest(RecordingRequest):
     max_record_seconds: int = MAX_GATE_RECORD_SECONDS
 
 
+class HelperSettings(BaseModel):
+    ip: str = DEFAULT_CAMERA_IP
+    http_port: int = 80
+    rtsp_port: int = 554
+    username: str = DEFAULT_CAMERA_USER
+    password: str = DEFAULT_CAMERA_PASSWORD
+    channel: int = 1
+    rtsp_path: str | None = None
+    storage_root: str = DEFAULT_STORAGE_ROOT
+    public_helper_url: str | None = None
+    capture_video: bool = True
+    capture_breakdown_video: bool = True
+    plc_enabled: bool = True
+    plc_host: str = '192.168.117.201'
+    plc_port: int = 5003
+    plc_device: str = 'X'
+    plc_address: str = '4A'
+    max_record_seconds: int = MAX_GATE_RECORD_SECONDS
+
+
 class RecordingIndexRequest(BaseModel):
     storage_root: str = DEFAULT_STORAGE_ROOT
     start_at: str | None = None
@@ -101,6 +157,42 @@ class RecordingIndexRequest(BaseModel):
     public_helper_url: str | None = None
     page: int = 1
     page_size: int = 50
+
+
+class ReasonRequest(BaseModel):
+    storage_root: str = DEFAULT_STORAGE_ROOT
+    category: str
+    reason: str
+
+
+class RecordingReasonRequest(BaseModel):
+    storage_root: str = DEFAULT_STORAGE_ROOT
+    file_path: str | None = None
+    event_started_at: str | None = None
+    event_type: str
+    reason: str
+    note: str | None = None
+    submitted_by: str | None = 'Admin'
+
+
+DEFAULT_REASON_OPTIONS = {
+    'minor_stoppage': [
+        'Material loading delay',
+        'Operator checking machine',
+        'Quality inspection',
+        'Mould cleaning',
+        'Minor adjustment',
+        'Safety door opened',
+    ],
+    'breakdown': [
+        'Mechanical breakdown',
+        'Electrical fault',
+        'Hydraulic issue',
+        'Machine alarm',
+        'Utility issue',
+        'Maintenance intervention',
+    ],
+}
 
 
 recording_state = {
@@ -158,6 +250,7 @@ shared_camera_stop_event = threading.Event()
 shared_camera_thread: threading.Thread | None = None
 shared_camera_state = {
     'key': None,
+    'worker_id': 0,
     'running': False,
     'url': None,
     'raw_url': None,
@@ -171,8 +264,20 @@ shared_camera_state = {
 
 
 def camera_base_url(ip: str, port: int) -> str:
+    if int(port) == 443:
+        return f'https://{ip}:443'
     port_text = '' if port == 80 else f':{port}'
     return f'http://{ip}{port_text}'
+
+
+def camera_base_url_candidates(ip: str, port: int) -> list[str]:
+    primary = camera_base_url(ip, port)
+    candidates = [primary]
+    if int(port) == 80:
+        candidates.append(f'https://{ip}:443')
+    elif int(port) == 443:
+        candidates.append(f'http://{ip}')
+    return candidates
 
 
 def compact_json(data: dict) -> str:
@@ -189,6 +294,7 @@ def cpapi_post(http: requests.Session, base_url: str, body: dict, endpoint: str 
             'ETag': hashlib.sha256(payload.encode()).hexdigest(),
         },
         timeout=20,
+        verify=False,
     )
     response.raise_for_status()
     return response.json()
@@ -294,6 +400,17 @@ def login(base_url: str, username: str, password: str) -> tuple[requests.Session
     return http, login_result.get('session', session_id)
 
 
+def login_camera(ip: str, port: int, username: str, password: str) -> tuple[requests.Session, int | str, str]:
+    errors: list[str] = []
+    for base_url in camera_base_url_candidates(ip, port):
+        try:
+            http, session_id = login(base_url, username, password)
+            return http, session_id, base_url
+        except Exception as exc:
+            errors.append(f'{base_url}: {exc}')
+    raise RuntimeError('; '.join(errors))
+
+
 def rpc(http: requests.Session, base_url: str, session_id: int | str, method: str, params=None, object_id=None, request_id: int = 10):
     body = {'method': method, 'params': params, 'id': request_id, 'session': session_id}
     if object_id is not None:
@@ -305,16 +422,35 @@ def rpc(http: requests.Session, base_url: str, session_id: int | str, method: st
     return result.get('params', result)
 
 
-def rtsp_urls(ip: str, port: int, username: str, password: str, channel_no: int) -> list[str]:
+def normalize_rtsp_path(path: str | None, channel_no: int) -> str | None:
+    if not path:
+        return None
+    normalized = path.strip()
+    if not normalized:
+        return None
+    normalized = normalized.replace('<IP Address>', '{ip}')
+    normalized = normalized.replace('<Username>', '{username}')
+    normalized = normalized.replace('<Password>', '{password}')
+    normalized = normalized.replace('{channel}', str(channel_no))
+    normalized = normalized.replace('<channel>', str(channel_no))
+    return normalized
+
+
+def rtsp_urls(ip: str, port: int, username: str, password: str, channel_no: int, rtsp_path: str | None = None) -> list[str]:
     safe_user = quote(username, safe='')
     safe_password = quote(password, safe='')
     host = f'{ip}:{port}'
     credential_pairs = [(safe_user, safe_password)]
     if (safe_user, safe_password) != (username, password):
         credential_pairs.append((username, password))
+    custom_path = normalize_rtsp_path(rtsp_path, channel_no)
     paths = [
+        f'/video/live?channel={channel_no}&subtype=0',
+        f'/video/live?channel={channel_no}&subtype=1',
         f'/video/live?channel={channel_no}&subtype=0&proto=Private3',
         f'/video/live?channel={channel_no}&subtype=1&proto=Private3',
+        f'/live/realmonitor.xav?channel={channel_no}&subtype=0',
+        f'/live/realmonitor.xav?channel={channel_no}&subtype=1',
         f'/cam/realmonitor?channel={channel_no}&subtype=0',
         f'/cam/realmonitor?channel={channel_no}&subtype=1',
         f'/Streaming/Channels/{channel_no}01',
@@ -322,15 +458,41 @@ def rtsp_urls(ip: str, port: int, username: str, password: str, channel_no: int)
         '/h264',
         '/ch0_0.h264',
     ]
-    return [f'rtsp://{user}:{secret}@{host}{path}' for user, secret in credential_pairs for path in paths]
+    if custom_path:
+        if custom_path.startswith('rtsp://') or custom_path.startswith('rtsps://'):
+            return [
+                custom_path.format(
+                    username=safe_user,
+                    password=safe_password,
+                    ip=ip,
+                    port=port,
+                    channel=channel_no,
+                )
+            ]
+        if not custom_path.startswith('/'):
+            custom_path = f'/{custom_path}'
+        paths = [custom_path, *[path for path in paths if path != custom_path]]
+    schemes = ['rtsps', 'rtsp'] if int(port) == 443 else ['rtsp']
+    return [f'{scheme}://{user}:{secret}@{host}{path}' for scheme in schemes for user, secret in credential_pairs for path in paths]
 
 
 def open_rtsp_capture(url: str, timeout_ms: int = 5000):
     capture = cv2.VideoCapture()
+    capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     capture.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, timeout_ms)
-    capture.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, timeout_ms)
+    capture.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, min(timeout_ms, 2000))
     capture.open(url, cv2.CAP_FFMPEG)
     return capture
+
+
+def prepare_live_preview_frame(frame):
+    if frame is None:
+        return None
+    height, width = frame.shape[:2]
+    if width <= LIVE_PREVIEW_MAX_WIDTH:
+        return frame
+    output_height = max(int(height * (LIVE_PREVIEW_MAX_WIDTH / width)), 1)
+    return cv2.resize(frame, (LIVE_PREVIEW_MAX_WIDTH, output_height), interpolation=cv2.INTER_AREA)
 
 
 def placeholder_jpeg(text: str = 'Camera reconnecting'):
@@ -341,19 +503,49 @@ def placeholder_jpeg(text: str = 'Camera reconnecting'):
     return encoded.tobytes() if ok else b''
 
 
-def shared_camera_key(ip: str, rtsp_port: int, username: str, password: str, channel: int) -> tuple:
-    return (ip, int(rtsp_port), username, password, int(channel))
+def shared_camera_key(ip: str, rtsp_port: int, username: str, password: str, channel: int, rtsp_path: str | None = None) -> tuple:
+    return (ip, int(rtsp_port), username, password, int(channel), normalize_rtsp_path(rtsp_path, channel))
 
 
-def shared_camera_worker(ip: str, rtsp_port: int, username: str, password: str, channel: int):
-    key = shared_camera_key(ip, rtsp_port, username, password, channel)
+def shared_camera_worker(
+    worker_id: int,
+    ip: str,
+    rtsp_port: int,
+    username: str,
+    password: str,
+    channel: int,
+    rtsp_path: str | None = None,
+):
+    key = shared_camera_key(ip, rtsp_port, username, password, channel, rtsp_path)
     capture = None
+
+    def is_current_worker() -> bool:
+        with shared_camera_lock:
+            return shared_camera_state.get('worker_id') == worker_id
+
     try:
         with shared_camera_lock:
+            if shared_camera_state.get('worker_id') != worker_id:
+                return
             shared_camera_state.update({'key': key, 'running': True, 'last_error': None})
         while not shared_camera_stop_event.is_set():
+            if not is_current_worker():
+                break
             if capture is None or not capture.isOpened():
-                for url in rtsp_urls(ip, rtsp_port, username, password, channel):
+                if not tcp_reachable(ip, rtsp_port, timeout=1.5):
+                    with shared_camera_lock:
+                        if shared_camera_state.get('worker_id') == worker_id:
+                            shared_camera_state['last_error'] = (
+                                f'Camera RTSP port {ip}:{rtsp_port} is not reachable from the helper PC. '
+                                'Check camera IP, VLAN/subnet route, firewall, and RTSP service.'
+                            )
+                    time.sleep(2.0)
+                    continue
+                tried_urls = []
+                for url in rtsp_urls(ip, rtsp_port, username, password, channel, rtsp_path):
+                    if not is_current_worker():
+                        break
+                    tried_urls.append(hide_secret(url, password))
                     candidate = open_rtsp_capture(url, timeout_ms=5000)
                     if candidate.isOpened():
                         capture = candidate
@@ -361,19 +553,25 @@ def shared_camera_worker(ip: str, rtsp_port: int, username: str, password: str, 
                         if fps <= 0 or fps > 60:
                             fps = RECORDING_TARGET_FPS
                         with shared_camera_lock:
-                            shared_camera_state.update(
-                                {
-                                    'url': hide_secret(url, password),
-                                    'raw_url': url,
-                                    'fps': min(float(fps), RECORDING_TARGET_FPS),
-                                    'last_error': None,
-                                }
-                            )
+                            if shared_camera_state.get('worker_id') == worker_id:
+                                shared_camera_state.update(
+                                    {
+                                        'url': hide_secret(url, password),
+                                        'raw_url': url,
+                                        'fps': min(float(fps), RECORDING_TARGET_FPS),
+                                        'last_error': None,
+                                    }
+                                )
                         break
                     candidate.release()
                 if capture is None or not capture.isOpened():
                     with shared_camera_lock:
-                        shared_camera_state['last_error'] = 'Camera stream reconnecting.'
+                        if shared_camera_state.get('worker_id') == worker_id:
+                            shared_camera_state['last_error'] = (
+                                'RTSP port is reachable but no video frame opened. '
+                                'Check username/password, channel, RTSP path, and camera RTSP settings. '
+                                f'Tried: {", ".join(tried_urls[:4])}'
+                            )
                     time.sleep(0.25)
                     continue
 
@@ -382,40 +580,63 @@ def shared_camera_worker(ip: str, rtsp_port: int, username: str, password: str, 
                 capture.release()
                 capture = None
                 with shared_camera_lock:
-                    shared_camera_state['last_error'] = 'Camera frame read failed.'
+                    if shared_camera_state.get('worker_id') == worker_id:
+                        shared_camera_state['last_error'] = 'Camera frame read failed.'
                 time.sleep(0.1)
                 continue
 
             height, width = frame.shape[:2]
             with shared_camera_lock:
-                shared_camera_state.update(
-                    {
-                        'frame': frame.copy(),
-                        'frame_at': time.monotonic(),
-                        'width': width,
-                        'height': height,
-                        'last_error': None,
-                    }
-                )
+                if shared_camera_state.get('worker_id') == worker_id:
+                    shared_camera_state.update(
+                        {
+                            'frame': frame.copy(),
+                            'frame_at': time.monotonic(),
+                            'width': width,
+                            'height': height,
+                            'last_error': None,
+                        }
+                    )
     finally:
         if capture is not None:
             capture.release()
         with shared_camera_lock:
-            shared_camera_state['running'] = False
+            if shared_camera_state.get('worker_id') == worker_id:
+                shared_camera_state['running'] = False
 
 
-def ensure_shared_camera_worker(ip: str, rtsp_port: int, username: str, password: str, channel: int):
+def ensure_shared_camera_worker(ip: str, rtsp_port: int, username: str, password: str, channel: int, rtsp_path: str | None = None):
     global shared_camera_thread
-    key = shared_camera_key(ip, rtsp_port, username, password, channel)
+    key = shared_camera_key(ip, rtsp_port, username, password, channel, rtsp_path)
     with shared_camera_lock:
         current_key = shared_camera_state.get('key')
         running = bool(shared_camera_state.get('running'))
     if running and current_key == key and shared_camera_thread and shared_camera_thread.is_alive():
         return
+    if running and shared_camera_thread and shared_camera_thread.is_alive():
+        shared_camera_stop_event.set()
+        shared_camera_thread.join(timeout=3)
     shared_camera_stop_event.clear()
+    with shared_camera_lock:
+        worker_id = int(shared_camera_state.get('worker_id') or 0) + 1
+        shared_camera_state.update(
+            {
+                'key': key,
+                'worker_id': worker_id,
+                'running': False,
+                'url': None,
+                'raw_url': None,
+                'frame': None,
+                'frame_at': None,
+                'width': None,
+                'height': None,
+                'fps': RECORDING_TARGET_FPS,
+                'last_error': 'Camera stream starting.',
+            }
+        )
     shared_camera_thread = threading.Thread(
         target=shared_camera_worker,
-        args=(ip, rtsp_port, username, password, channel),
+        args=(worker_id, ip, rtsp_port, username, password, channel, rtsp_path),
         daemon=True,
     )
     shared_camera_thread.start()
@@ -446,13 +667,15 @@ def latest_shared_rtsp_url(max_age_seconds: float = 10.0) -> str | None:
 
 
 def snapshot_urls(ip: str, port: int, channel_no: int) -> list[str]:
-    base = camera_base_url(ip, port)
-    return [
-        f'{base}/cgi-bin/snapshot.cgi?channel={channel_no}',
-        f'{base}/cgi-bin/snapshot.cgi?channel={channel_no - 1}',
-        f'{base}/snapshot.jpg',
-        f'{base}/ISAPI/Streaming/channels/{channel_no}01/picture',
-    ]
+    urls: list[str] = []
+    for base in camera_base_url_candidates(ip, port):
+        urls.extend([
+            f'{base}/cgi-bin/snapshot.cgi?channel={channel_no}',
+            f'{base}/cgi-bin/snapshot.cgi?channel={channel_no - 1}',
+            f'{base}/snapshot.jpg',
+            f'{base}/ISAPI/Streaming/channels/{channel_no}01/picture',
+        ])
+    return urls
 
 
 def slmp_read_m_bit(host: str, port: int, device: str, address: int | str, timeout: float = 2.0) -> bool:
@@ -534,9 +757,15 @@ def read_plc_addresses(request: PlcMonitorRequest, addresses: list[int | str], p
 
 def read_plc_failover(request: PlcMonitorRequest) -> tuple[dict[str, bool], dict[str, bool], list[str], int | None]:
     all_errors = []
+    open_addresses = [str(address).strip().upper() for address in request.gate_open_addresses]
+    close_addresses = [str(address).strip().upper() for address in request.gate_close_addresses]
+    same_addresses = open_addresses == close_addresses
     for port in plc_candidate_ports(request.plc_port):
         open_values, open_errors = read_plc_addresses(request, request.gate_open_addresses, port)
-        close_values, close_errors = read_plc_addresses(request, request.gate_close_addresses, port)
+        if same_addresses:
+            close_values, close_errors = dict(open_values), list(open_errors)
+        else:
+            close_values, close_errors = read_plc_addresses(request, request.gate_close_addresses, port)
         errors = [*open_errors, *close_errors]
         if (open_values or close_values) and not errors:
             return open_values, close_values, [], port
@@ -615,8 +844,101 @@ def normalize_storage_root(root_text: str | Path | None) -> str:
 
 def recording_folder(root_text: str | Path) -> Path:
     root = Path(normalize_storage_root(root_text)).expanduser()
-    root.mkdir(parents=True, exist_ok=True)
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        test_path = root / '.write_test'
+        test_path.write_text('ok', encoding='utf-8')
+        test_path.unlink(missing_ok=True)
+    except OSError:
+        root = FALLBACK_STORAGE_ROOT
+        root.mkdir(parents=True, exist_ok=True)
     return root
+
+
+def normalized_helper_settings(settings: HelperSettings) -> HelperSettings:
+    data = settings.model_dump()
+    data['ip'] = str(data.get('ip') or DEFAULT_CAMERA_IP).strip() or DEFAULT_CAMERA_IP
+    data['username'] = str(data.get('username') or DEFAULT_CAMERA_USER)
+    data['password'] = str(data.get('password') or DEFAULT_CAMERA_PASSWORD)
+    data['rtsp_path'] = normalize_rtsp_path(data.get('rtsp_path'), max(int(data.get('channel') or 1), 1))
+    data['plc_device'] = str(data.get('plc_device') or 'X').strip().upper() or 'X'
+    data['plc_address'] = str(data.get('plc_address') or '4A').strip().upper() or '4A'
+    data['storage_root'] = normalize_storage_root(data.get('storage_root') or DEFAULT_STORAGE_ROOT)
+    data['plc_enabled'] = bool(data.get('plc_enabled', True))
+    data['http_port'] = max(int(data.get('http_port') or 80), 1)
+    data['rtsp_port'] = max(int(data.get('rtsp_port') or 554), 1)
+    data['channel'] = max(int(data.get('channel') or 1), 1)
+    data['plc_port'] = max(int(data.get('plc_port') or 5003), 1)
+    data['max_record_seconds'] = max(int(data.get('max_record_seconds') or MAX_GATE_RECORD_SECONDS), 1)
+    return HelperSettings(**data)
+
+
+def load_helper_settings() -> HelperSettings:
+    try:
+        if HELPER_SETTINGS_PATH.exists():
+            return normalized_helper_settings(HelperSettings(**json.loads(HELPER_SETTINGS_PATH.read_text(encoding='utf-8'))))
+    except Exception as exc:
+        plc_monitor_state['last_error'] = f'Settings load failed: {exc}'
+    return normalized_helper_settings(HelperSettings())
+
+
+def save_helper_settings(settings: HelperSettings) -> HelperSettings:
+    normalized = normalized_helper_settings(settings)
+    HELPER_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(HELPER_SETTINGS_PATH, normalized.model_dump())
+    return normalized
+
+
+def settings_to_plc_request(settings: HelperSettings) -> PlcMonitorRequest:
+    return PlcMonitorRequest(
+        ip=settings.ip,
+        http_port=settings.http_port,
+        rtsp_port=settings.rtsp_port,
+        username=settings.username,
+        password=settings.password,
+        channel=settings.channel,
+        rtsp_path=settings.rtsp_path,
+        storage_root=settings.storage_root,
+        capture_video=settings.capture_video,
+        capture_breakdown_video=settings.capture_breakdown_video,
+        plc_host=settings.plc_host,
+        plc_port=settings.plc_port,
+        plc_device=settings.plc_device,
+        gate_open_addresses=[settings.plc_address],
+        gate_close_addresses=[settings.plc_address],
+        gate_open_when=False,
+        gate_close_when=True,
+        poll_seconds=1.0,
+        max_record_seconds=settings.max_record_seconds,
+    )
+
+
+def auth_session(username: str, password: str) -> dict:
+    normalized_username = username.strip().lower()
+    if normalized_username == 'superadmin' and password == 'Super@123':
+        return {'username': 'superadmin', 'role': 'superadmin', 'token': 'superadmin-token'}
+    if normalized_username == 'admin' and password == 'Admin@123':
+        return {'username': 'admin', 'role': 'admin', 'token': 'admin-token'}
+    if normalized_username in {'user', 'operator'} and password in {'user123', 'operator123'}:
+        return {'username': 'user', 'role': 'user', 'token': 'user-token'}
+    raise HTTPException(status_code=401, detail='Incorrect ID or password.')
+
+
+def role_from_token(token: str | None) -> str | None:
+    if token == 'superadmin-token':
+        return 'superadmin'
+    if token == 'admin-token':
+        return 'admin'
+    if token in {'user-token', 'operator-token'}:
+        return 'user'
+    return None
+
+
+def require_role(token: str | None, allowed_roles: set[str]) -> str:
+    role = role_from_token(token)
+    if role not in allowed_roles:
+        raise HTTPException(status_code=403, detail='Permission denied.')
+    return role
 
 
 def safe_camera_folder(ip: str, channel: int) -> str:
@@ -701,6 +1023,11 @@ def init_recording_index(storage_root: str | Path) -> Path:
                 event_started_at TEXT,
                 event_ended_at TEXT,
                 event_duration_seconds REAL,
+                reason_category TEXT,
+                reason TEXT,
+                reason_note TEXT,
+                reason_submitted_by TEXT,
+                reason_submitted_at TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
@@ -712,12 +1039,41 @@ def init_recording_index(storage_root: str | Path) -> Path:
             'event_started_at': 'TEXT',
             'event_ended_at': 'TEXT',
             'event_duration_seconds': 'REAL',
+            'reason_category': 'TEXT',
+            'reason': 'TEXT',
+            'reason_note': 'TEXT',
+            'reason_submitted_by': 'TEXT',
+            'reason_submitted_at': 'TEXT',
         }.items():
             if column_name not in existing_columns:
                 connection.execute(f"ALTER TABLE recordings ADD COLUMN {column_name} {column_type}")
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS reason_options (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(category, reason)
+            )
+            """
+        )
+        now_text = datetime.now().isoformat(timespec='seconds')
+        for category, reasons in DEFAULT_REASON_OPTIONS.items():
+            for reason in reasons:
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO reason_options (category, reason, active, created_at, updated_at)
+                    VALUES (?, ?, 1, ?, ?)
+                    """,
+                    (category, reason, now_text, now_text),
+                )
         connection.execute("CREATE INDEX IF NOT EXISTS idx_recordings_started_at ON recordings(started_at)")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_recordings_camera ON recordings(camera_ip, channel)")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_recordings_event_type ON recordings(event_type)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_recordings_reason ON recordings(reason_category, reason)")
         connection.execute(
             """
             UPDATE recordings
@@ -763,6 +1119,11 @@ def index_event_only_record(
         'event_started_at': event_started_at.isoformat(timespec='seconds'),
         'event_ended_at': event_ended_at.isoformat(timespec='seconds'),
         'event_duration_seconds': duration_seconds,
+        'reason_category': None,
+        'reason': None,
+        'reason_note': None,
+        'reason_submitted_by': None,
+        'reason_submitted_at': None,
         'created_at': now_text,
         'updated_at': now_text,
     }
@@ -774,13 +1135,15 @@ def index_event_only_record(
                 file_path, file_name, metadata_path, storage_root, camera_ip, channel,
                 started_at, ended_at, duration_seconds, frames, file_size, status,
                 error, source_url, recording_engine, audio, event_type, event_started_at,
-                event_ended_at, event_duration_seconds, created_at, updated_at
+                event_ended_at, event_duration_seconds, reason_category, reason, reason_note,
+                reason_submitted_by, reason_submitted_at, created_at, updated_at
             )
             VALUES (
                 :file_path, :file_name, :metadata_path, :storage_root, :camera_ip, :channel,
                 :started_at, :ended_at, :duration_seconds, :frames, :file_size, :status,
                 :error, :source_url, :recording_engine, :audio, :event_type, :event_started_at,
-                :event_ended_at, :event_duration_seconds, :created_at, :updated_at
+                :event_ended_at, :event_duration_seconds, :reason_category, :reason, :reason_note,
+                :reason_submitted_by, :reason_submitted_at, :created_at, :updated_at
             )
             ON CONFLICT(file_path) DO UPDATE SET
                 file_name = excluded.file_name,
@@ -789,6 +1152,11 @@ def index_event_only_record(
                 event_type = excluded.event_type,
                 event_ended_at = excluded.event_ended_at,
                 event_duration_seconds = excluded.event_duration_seconds,
+                reason_category = COALESCE(recordings.reason_category, excluded.reason_category),
+                reason = COALESCE(recordings.reason, excluded.reason),
+                reason_note = COALESCE(recordings.reason_note, excluded.reason_note),
+                reason_submitted_by = COALESCE(recordings.reason_submitted_by, excluded.reason_submitted_by),
+                reason_submitted_at = COALESCE(recordings.reason_submitted_at, excluded.reason_submitted_at),
                 updated_at = excluded.updated_at
             """,
             record,
@@ -836,6 +1204,11 @@ def index_recording_file(storage_root: str | Path, video_path: Path, metadata: d
         'event_started_at': metadata.get('event_started_at') or started_at,
         'event_ended_at': metadata.get('event_ended_at') or (None if open_auto_breakdown else metadata.get('ended_at')),
         'event_duration_seconds': metadata.get('event_duration_seconds') or (None if open_auto_breakdown else metadata.get('duration_seconds')),
+        'reason_category': metadata.get('reason_category'),
+        'reason': metadata.get('reason'),
+        'reason_note': metadata.get('reason_note'),
+        'reason_submitted_by': metadata.get('reason_submitted_by'),
+        'reason_submitted_at': metadata.get('reason_submitted_at'),
         'created_at': now_text,
         'updated_at': now_text,
     }
@@ -847,13 +1220,15 @@ def index_recording_file(storage_root: str | Path, video_path: Path, metadata: d
                 file_path, file_name, metadata_path, storage_root, camera_ip, channel,
                 started_at, ended_at, duration_seconds, frames, file_size, status,
                 error, source_url, recording_engine, audio, event_type, event_started_at,
-                event_ended_at, event_duration_seconds, created_at, updated_at
+                event_ended_at, event_duration_seconds, reason_category, reason, reason_note,
+                reason_submitted_by, reason_submitted_at, created_at, updated_at
             )
             VALUES (
                 :file_path, :file_name, :metadata_path, :storage_root, :camera_ip, :channel,
                 :started_at, :ended_at, :duration_seconds, :frames, :file_size, :status,
                 :error, :source_url, :recording_engine, :audio, :event_type, :event_started_at,
-                :event_ended_at, :event_duration_seconds, :created_at, :updated_at
+                :event_ended_at, :event_duration_seconds, :reason_category, :reason, :reason_note,
+                :reason_submitted_by, :reason_submitted_at, :created_at, :updated_at
             )
             ON CONFLICT(file_path) DO UPDATE SET
                 file_name = excluded.file_name,
@@ -875,11 +1250,139 @@ def index_recording_file(storage_root: str | Path, video_path: Path, metadata: d
                 event_started_at = excluded.event_started_at,
                 event_ended_at = excluded.event_ended_at,
                 event_duration_seconds = excluded.event_duration_seconds,
+                reason_category = COALESCE(excluded.reason_category, recordings.reason_category),
+                reason = COALESCE(excluded.reason, recordings.reason),
+                reason_note = COALESCE(excluded.reason_note, recordings.reason_note),
+                reason_submitted_by = COALESCE(excluded.reason_submitted_by, recordings.reason_submitted_by),
+                reason_submitted_at = COALESCE(excluded.reason_submitted_at, recordings.reason_submitted_at),
                 updated_at = excluded.updated_at
             """,
             record,
         )
     return record
+
+
+def normalize_reason_category(category: str | None) -> str:
+    value = str(category or '').strip().lower()
+    if value in {'breakdown', 'minor_stoppage'}:
+        return value
+    return 'minor_stoppage'
+
+
+def list_reason_options(storage_root: str | Path) -> dict:
+    db_path = init_recording_index(storage_root)
+    result = {category: [] for category in DEFAULT_REASON_OPTIONS}
+    with sqlite3.connect(db_path) as connection:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute(
+            """
+            SELECT id, category, reason, active
+            FROM reason_options
+            WHERE active = 1
+            ORDER BY category, reason
+            """
+        ).fetchall()
+    for row in rows:
+        category = normalize_reason_category(row['category'])
+        result.setdefault(category, []).append(dict(row))
+    return result
+
+
+def add_reason_option(request: ReasonRequest) -> dict:
+    category = normalize_reason_category(request.category)
+    reason = str(request.reason or '').strip()
+    if not reason:
+        raise ValueError('Reason required.')
+    now_text = datetime.now().isoformat(timespec='seconds')
+    db_path = init_recording_index(request.storage_root)
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO reason_options (category, reason, active, created_at, updated_at)
+            VALUES (?, ?, 1, ?, ?)
+            ON CONFLICT(category, reason) DO UPDATE SET active = 1, updated_at = excluded.updated_at
+            """,
+            (category, reason, now_text, now_text),
+        )
+    return {'category': category, 'reason': reason}
+
+
+def apply_reason_to_metadata(file_path_text: str | None, reason_data: dict) -> None:
+    if not file_path_text or str(file_path_text).startswith('event://'):
+        return
+    video_path = Path(str(file_path_text))
+    sidecar_path = metadata_path_for(video_path)
+    metadata = load_sidecar_metadata(video_path)
+    metadata.update(reason_data)
+    if video_path.exists() or sidecar_path.exists():
+        atomic_write_json(sidecar_path, metadata)
+
+
+def update_recording_reason(request: RecordingReasonRequest) -> dict:
+    category = normalize_reason_category(request.event_type)
+    reason = str(request.reason or '').strip()
+    if not reason:
+        raise ValueError('Reason required.')
+    now_text = datetime.now().isoformat(timespec='seconds')
+    reason_data = {
+        'reason_category': category,
+        'reason': reason,
+        'reason_note': str(request.note or '').strip() or None,
+        'reason_submitted_by': str(request.submitted_by or 'Admin').strip() or 'Admin',
+        'reason_submitted_at': now_text,
+    }
+    add_reason_option(ReasonRequest(storage_root=request.storage_root, category=category, reason=reason))
+
+    target_path = str(request.file_path or '').strip()
+    with threading.Lock():
+        if target_path and recording_state.get('path') and target_path == str(recording_state.get('path')):
+            recording_state.update(reason_data)
+        elif not target_path and recording_state.get('running'):
+            recording_state.update(reason_data)
+            target_path = str(recording_state.get('path') or '')
+
+    db_path = init_recording_index(request.storage_root)
+    updated = 0
+    with sqlite3.connect(db_path) as connection:
+        if target_path:
+            cursor = connection.execute(
+                """
+                UPDATE recordings
+                SET reason_category = :reason_category,
+                    reason = :reason,
+                    reason_note = :reason_note,
+                    reason_submitted_by = :reason_submitted_by,
+                    reason_submitted_at = :reason_submitted_at,
+                    updated_at = :updated_at
+                WHERE file_path = :file_path
+                """,
+                {**reason_data, 'updated_at': now_text, 'file_path': target_path},
+            )
+            updated = cursor.rowcount
+        if not updated and request.event_started_at:
+            cursor = connection.execute(
+                """
+                UPDATE recordings
+                SET reason_category = :reason_category,
+                    reason = :reason,
+                    reason_note = :reason_note,
+                    reason_submitted_by = :reason_submitted_by,
+                    reason_submitted_at = :reason_submitted_at,
+                    updated_at = :updated_at
+                WHERE event_started_at = :event_started_at
+                  AND event_type = :event_type
+                """,
+                {**reason_data, 'updated_at': now_text, 'event_started_at': request.event_started_at, 'event_type': category},
+            )
+            updated = cursor.rowcount
+            if updated and not target_path:
+                row = connection.execute(
+                    "SELECT file_path FROM recordings WHERE event_started_at = ? AND event_type = ? ORDER BY updated_at DESC LIMIT 1",
+                    (request.event_started_at, category),
+                ).fetchone()
+                target_path = row[0] if row else ''
+    apply_reason_to_metadata(target_path, reason_data)
+    return {'ok': True, 'updated': updated, 'file_path': target_path or None, **reason_data}
 
 
 def scan_recording_index(request: RecordingIndexRequest) -> dict:
@@ -965,6 +1468,11 @@ def active_recording_index_row(storage_root: str | Path) -> dict | None:
         'event_started_at': event_started_at,
         'event_ended_at': None,
         'event_duration_seconds': round(event_duration_seconds, 2) if event_duration_seconds is not None else None,
+        'reason_category': recording_state.get('reason_category'),
+        'reason': recording_state.get('reason'),
+        'reason_note': recording_state.get('reason_note'),
+        'reason_submitted_by': recording_state.get('reason_submitted_by'),
+        'reason_submitted_at': recording_state.get('reason_submitted_at'),
         'created_at': started_at,
         'updated_at': now_text,
     }
@@ -1095,6 +1603,7 @@ def list_recording_index(request: RecordingIndexRequest) -> dict:
             records = [active_row, *records]
         if not duplicate:
             total += 1
+    records = records[:page_size]
     return {'total': total, 'page': page, 'page_size': page_size, 'records': records}
 
 
@@ -1198,6 +1707,8 @@ REPORT_COLUMNS = [
     'Event Duration',
     'File Size',
     'Category',
+    'Reason',
+    'Remark',
     'Status',
     'Actions',
     'Video Link',
@@ -1232,6 +1743,8 @@ def recording_export_rows(request: RecordingIndexRequest) -> list[list[object]]:
             format_report_duration(event_duration),
             format_report_size(row.get('file_size')),
             event_type_label(row.get('event_type') or 'minor_stoppage'),
+            row.get('reason') or 'Pending reason',
+            row.get('reason_note') or '',
             report_status_label(row),
             report_action_label(row),
             'View Video' if report_video_url(row, request) else 'No video',
@@ -1530,14 +2043,24 @@ def xlsx_cell_text(value: object) -> str:
     return xml_escape(str(value), {'"': '&quot;'})
 
 
-def mjpeg_frames(ip: str, rtsp_port: int, username: str, password: str, channel: int):
+def mjpeg_frames(ip: str, rtsp_port: int, username: str, password: str, channel: int, rtsp_path: str | None = None):
     last_placeholder_at = 0.0
-    ensure_shared_camera_worker(ip, rtsp_port, username, password, channel)
+    last_frame_jpeg = None
+    last_frame_at = 0.0
+    frame_delay = 1.0 / max(LIVE_PREVIEW_TARGET_FPS, 1.0)
+    ensure_shared_camera_worker(ip, rtsp_port, username, password, channel, rtsp_path)
     while True:
-        frame, _, _ = latest_shared_frame(max_age_seconds=2.0)
+        frame, _, _ = latest_shared_frame(max_age_seconds=LIVE_PREVIEW_STALE_SECONDS)
         if frame is None:
             now = time.monotonic()
-            if now - last_placeholder_at >= 0.5:
+            if last_frame_jpeg and now - last_frame_at <= LIVE_PREVIEW_STALE_SECONDS:
+                yield (
+                    b'--frame\r\n'
+                    b'Content-Type: image/jpeg\r\n\r\n'
+                    + last_frame_jpeg
+                    + b'\r\n'
+                )
+            elif now - last_placeholder_at >= 0.5:
                 last_placeholder_at = now
                 placeholder = placeholder_jpeg()
                 if placeholder:
@@ -1547,29 +2070,32 @@ def mjpeg_frames(ip: str, rtsp_port: int, username: str, password: str, channel:
                         + placeholder
                         + b'\r\n'
                     )
-            time.sleep(0.05)
+            time.sleep(frame_delay)
             continue
-        ok, encoded = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+        frame = prepare_live_preview_frame(frame)
+        ok, encoded = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 68])
         if ok:
+            last_frame_jpeg = encoded.tobytes()
+            last_frame_at = time.monotonic()
             yield (
                 b'--frame\r\n'
                 b'Content-Type: image/jpeg\r\n\r\n'
-                + encoded.tobytes()
+                + last_frame_jpeg
                 + b'\r\n'
             )
-        time.sleep(0.02)
+        time.sleep(frame_delay)
 
 
 def record_camera_ffmpeg_worker(request: RecordingRequest) -> bool:
     global recording_process, recording_state
-    ffmpeg_path = shutil.which('ffmpeg')
+    ffmpeg_path = ffmpeg_executable()
     if not ffmpeg_path:
         return False
 
     started_at = datetime.now()
     _, output_path, final_path = build_recording_paths(request.storage_root, request.ip, request.channel, started_at)
-    candidate_urls = rtsp_urls(request.ip, request.rtsp_port, request.username, request.password, request.channel)
-    ensure_shared_camera_worker(request.ip, request.rtsp_port, request.username, request.password, request.channel)
+    candidate_urls = rtsp_urls(request.ip, request.rtsp_port, request.username, request.password, request.channel, request.rtsp_path)
+    ensure_shared_camera_worker(request.ip, request.rtsp_port, request.username, request.password, request.channel, request.rtsp_path)
     shared_url = latest_shared_rtsp_url()
     working_url = shared_url or candidate_urls[0]
     ffmpeg_success = False
@@ -1615,6 +2141,8 @@ def record_camera_ffmpeg_worker(request: RecordingRequest) -> bool:
         f'scale=min({RECORDING_MAX_WIDTH}\\,iw):-2,fps={RECORDING_TARGET_FPS:g}',
         '-c:a',
         'aac',
+        '-af',
+        RECORDING_AUDIO_FILTER,
         '-b:a',
         '96k',
         '-movflags',
@@ -1623,24 +2151,19 @@ def record_camera_ffmpeg_worker(request: RecordingRequest) -> bool:
     ]
 
     try:
-        recording_process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        recording_process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         while not recording_stop_event.is_set() and recording_process.poll() is None:
             time.sleep(0.25)
         if recording_stop_event.is_set() and recording_process.poll() is None:
             try:
-                recording_process.communicate(input=b'q', timeout=5)
+                recording_process.communicate(input=b'q', timeout=20)
             except subprocess.TimeoutExpired:
                 recording_process.terminate()
                 try:
-                    recording_process.wait(timeout=5)
+                    recording_process.wait(timeout=10)
                 except subprocess.TimeoutExpired:
                     recording_process.kill()
         stderr = b''
-        if recording_process and recording_process.stderr:
-            try:
-                stderr = recording_process.stderr.read()[-1000:]
-            except Exception:
-                stderr = b''
         if recording_process and recording_process.returncode not in (0, None) and (not output_path.exists() or output_path.stat().st_size == 0):
             recording_state['error'] = stderr.decode(errors='ignore') or f'FFmpeg exited with {recording_process.returncode}'
     except Exception as exc:
@@ -1667,12 +2190,18 @@ def record_camera_ffmpeg_worker(request: RecordingRequest) -> bool:
                 'video_codec': 'libx264',
                 'crf': RECORDING_CRF,
                 'profile': 'storage-balanced',
+                'audio_filter': RECORDING_AUDIO_FILTER,
             },
             'auto_stopped': bool(recording_state.get('auto_stopped')),
             'event_type': event_type,
             'event_started_at': recording_state.get('event_started_at') or started_at.isoformat(timespec='seconds'),
             'event_ended_at': recording_state.get('event_ended_at') or (None if auto_stopped_breakdown else ended_at.isoformat(timespec='seconds')),
             'event_duration_seconds': recording_state.get('event_duration_seconds') or (None if auto_stopped_breakdown else round(duration_seconds, 2)),
+            'reason_category': recording_state.get('reason_category'),
+            'reason': recording_state.get('reason'),
+            'reason_note': recording_state.get('reason_note'),
+            'reason_submitted_by': recording_state.get('reason_submitted_by'),
+            'reason_submitted_at': recording_state.get('reason_submitted_at'),
         }
         if output_path.exists() and output_path.stat().st_size > 0 and not recording_state.get('error'):
             end_suffix = ended_at.strftime('%H%M%S')
@@ -1729,7 +2258,7 @@ def record_camera_worker(request: RecordingRequest):
     try:
         working_url = None
         first_frame = None
-        ensure_shared_camera_worker(request.ip, request.rtsp_port, request.username, request.password, request.channel)
+        ensure_shared_camera_worker(request.ip, request.rtsp_port, request.username, request.password, request.channel, request.rtsp_path)
         wait_until = time.monotonic() + 5.0
         while time.monotonic() < wait_until:
             first_frame, working_url, source_fps = latest_shared_frame(max_age_seconds=2.0)
@@ -1738,7 +2267,7 @@ def record_camera_worker(request: RecordingRequest):
             time.sleep(0.05)
 
         if first_frame is None:
-            for url in rtsp_urls(request.ip, request.rtsp_port, request.username, request.password, request.channel):
+            for url in rtsp_urls(request.ip, request.rtsp_port, request.username, request.password, request.channel, request.rtsp_path):
                 capture = cv2.VideoCapture()
                 capture.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, RTSP_RECORD_OPEN_TIMEOUT_MS)
                 capture.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, RTSP_RECORD_OPEN_TIMEOUT_MS)
@@ -1769,7 +2298,7 @@ def record_camera_worker(request: RecordingRequest):
 
         _, output_path, final_path = build_recording_paths(request.storage_root, request.ip, request.channel, started_at)
         codec_used = None
-        for codec_name in ('avc1', 'H264', 'X264', 'mp4v'):
+        for codec_name in ('mp4v', 'avc1', 'H264', 'X264'):
             writer = cv2.VideoWriter(str(output_path), cv2.VideoWriter_fourcc(*codec_name), fps, (output_width, output_height))
             if writer.isOpened():
                 codec_used = codec_name
@@ -1876,6 +2405,11 @@ def record_camera_worker(request: RecordingRequest):
             'event_started_at': recording_state.get('event_started_at') or started_at.isoformat(timespec='seconds'),
             'event_ended_at': recording_state.get('event_ended_at') or (None if auto_stopped_breakdown else ended_at.isoformat(timespec='seconds')),
             'event_duration_seconds': recording_state.get('event_duration_seconds') or (None if auto_stopped_breakdown else round(duration_seconds, 2)),
+            'reason_category': recording_state.get('reason_category'),
+            'reason': recording_state.get('reason'),
+            'reason_note': recording_state.get('reason_note'),
+            'reason_submitted_by': recording_state.get('reason_submitted_by'),
+            'reason_submitted_at': recording_state.get('reason_submitted_at'),
         }
         if output_path and output_path.exists():
             target_path = final_path or output_path
@@ -1900,13 +2434,93 @@ def record_camera_worker(request: RecordingRequest):
 
 @app.post('/verify')
 def verify(request: CameraRequest):
-    try:
-        login(camera_base_url(request.ip, request.http_port), request.username, request.password)
-        return {'ok': True, 'method': 'http'}
-    except Exception as exc:
-        if tcp_reachable(request.ip, request.rtsp_port):
-            return {'ok': True, 'method': 'rtsp', 'warning': str(exc)}
-        raise HTTPException(status_code=400, detail=str(exc))
+    ensure_shared_camera_worker(request.ip, request.rtsp_port, request.username, request.password, request.channel, request.rtsp_path)
+    time.sleep(8.0)
+    frame, url, _ = latest_shared_frame(max_age_seconds=10.0)
+    if frame is not None:
+        return {'ok': True, 'method': 'rtsp', 'url': hide_secret(url or '', request.password)}
+    if tcp_reachable(request.ip, request.rtsp_port):
+        raise HTTPException(
+            status_code=400,
+            detail='RTSP port reachable but no video frame received. Check camera password, RTSP enabled setting, channel, and stream path.',
+        )
+    raise HTTPException(status_code=400, detail='Camera RTSP port is not reachable.')
+
+
+@app.post('/camera-diagnostics')
+def camera_diagnostics(request: CameraRequest):
+    http_candidates = camera_base_url_candidates(request.ip, request.http_port)
+    rtsp_candidates = rtsp_urls(
+        request.ip,
+        request.rtsp_port,
+        request.username,
+        request.password,
+        request.channel,
+        request.rtsp_path,
+    )
+    http_reachable = tcp_reachable(request.ip, request.http_port, timeout=2.0)
+    rtsp_reachable = tcp_reachable(request.ip, request.rtsp_port, timeout=2.0)
+    frame, url, _ = latest_shared_frame(max_age_seconds=5.0)
+    with shared_camera_lock:
+        worker_key = shared_camera_state.get('key')
+        worker_running = shared_camera_state.get('running')
+        worker_error = shared_camera_state.get('last_error')
+
+    if not rtsp_reachable:
+        likely_cause = (
+            f'RTSP {request.ip}:{request.rtsp_port} is not reachable from this helper PC. '
+            'This is normally network route/VLAN/firewall/camera RTSP service, not React UI.'
+        )
+    elif frame is None:
+        likely_cause = (
+            'RTSP TCP is reachable but no frame is available. Check camera credentials, RTSP enabled setting, '
+            'channel number, and stream path.'
+        )
+    else:
+        likely_cause = 'Camera stream is producing frames.'
+
+    return {
+        'ip': request.ip,
+        'configured': {
+            'http_port': request.http_port,
+            'rtsp_port': request.rtsp_port,
+            'channel': request.channel,
+            'rtsp_path': normalize_rtsp_path(request.rtsp_path, request.channel),
+        },
+        'tcp': {
+            'http_reachable': http_reachable,
+            'rtsp_reachable': rtsp_reachable,
+        },
+        'http_base_candidates': http_candidates,
+        'rtsp_url_candidates': [hide_secret(item, request.password) for item in rtsp_candidates[:8]],
+        'shared_worker': {
+            'running': worker_running,
+            'same_camera': worker_key == shared_camera_key(
+                request.ip,
+                request.rtsp_port,
+                request.username,
+                request.password,
+                request.channel,
+                request.rtsp_path,
+            ),
+            'has_recent_frame': frame is not None,
+            'url': hide_secret(url or '', request.password),
+            'last_error': worker_error,
+        },
+        'likely_cause': likely_cause,
+    }
+
+
+@app.post('/auth/login')
+def auth_login(request: LoginRequest):
+    return auth_session(request.username, request.password)
+
+
+@app.post('/auth/elevate')
+def auth_elevate(request: LoginRequest):
+    if request.username.strip().lower() != 'admin':
+        raise HTTPException(status_code=401, detail='Incorrect ID or password.')
+    return auth_session(request.username, request.password)
 
 
 @app.post('/recordings')
@@ -1914,8 +2528,7 @@ def recordings(request: CameraRequest):
     if not request.start_at or not request.end_at:
         raise HTTPException(status_code=400, detail='start_at and end_at are required')
     try:
-        base_url = camera_base_url(request.ip, request.http_port)
-        http, session_id = login(base_url, request.username, request.password)
+        http, session_id, base_url = login_camera(request.ip, request.http_port, request.username, request.password)
         instance = rpc(http, base_url, session_id, 'mediaFileFind.factory.create', None, request_id=3)
         object_id = instance.get('result') or instance.get('object') or instance
         condition = {
@@ -1957,8 +2570,7 @@ def recordings(request: CameraRequest):
 @app.post('/stream-urls')
 def stream_urls(request: CameraRequest):
     try:
-        base_url = camera_base_url(request.ip, request.http_port)
-        http, session_id = login(base_url, request.username, request.password)
+        http, session_id, base_url = login_camera(request.ip, request.http_port, request.username, request.password)
         result = rpc(
             http,
             base_url,
@@ -1978,7 +2590,7 @@ def stream_urls(request: CameraRequest):
 
 @app.post('/live-frame')
 def live_frame(request: CameraRequest):
-    ensure_shared_camera_worker(request.ip, request.rtsp_port, request.username, request.password, request.channel)
+    ensure_shared_camera_worker(request.ip, request.rtsp_port, request.username, request.password, request.channel, request.rtsp_path)
     frame, url, _ = latest_shared_frame(max_age_seconds=2.0)
     if frame is not None:
         ok, encoded = cv2.imencode('.jpg', frame)
@@ -1989,7 +2601,7 @@ def live_frame(request: CameraRequest):
     http = requests.Session()
     for url in snapshot_urls(request.ip, request.http_port, request.channel):
         try:
-            response = http.get(url, auth=(request.username, request.password), timeout=10)
+            response = http.get(url, auth=(request.username, request.password), timeout=10, verify=False)
             if response.ok and response.content:
                 content_type = response.headers.get('content-type', '')
                 if 'image' in content_type or response.content.startswith(b'\xff\xd8'):
@@ -2001,7 +2613,7 @@ def live_frame(request: CameraRequest):
         except requests.RequestException as exc:
             errors.append(f'snapshot error {hide_secret(str(exc), request.password)}')
 
-    for url in rtsp_urls(request.ip, request.rtsp_port, request.username, request.password, request.channel):
+    for url in rtsp_urls(request.ip, request.rtsp_port, request.username, request.password, request.channel, request.rtsp_path):
         capture = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
         try:
             if not capture.isOpened():
@@ -2023,9 +2635,10 @@ def mjpeg_stream(
     username: str = 'admin',
     password: str = '',
     channel: int = 1,
+    rtsp_path: str | None = None,
 ):
     return StreamingResponse(
-        mjpeg_frames(ip, rtsp_port, username, password, channel),
+        mjpeg_frames(ip, rtsp_port, username, password, channel, rtsp_path),
         media_type='multipart/x-mixed-replace; boundary=frame',
     )
 
@@ -2036,23 +2649,31 @@ def live_audio_response(
     username: str,
     password: str,
     channel: int,
+    rtsp_path: str | None = None,
 ):
-    ffmpeg_path = shutil.which('ffmpeg')
+    ffmpeg_path = ffmpeg_executable()
     if not ffmpeg_path:
         raise HTTPException(status_code=503, detail='FFmpeg is required for live audio.')
 
-    ensure_shared_camera_worker(ip, rtsp_port, username, password, channel)
-    working_url = latest_shared_rtsp_url() or rtsp_urls(ip, rtsp_port, username, password, channel)[0]
+    ensure_shared_camera_worker(ip, rtsp_port, username, password, channel, rtsp_path)
+    working_url = latest_shared_rtsp_url() or rtsp_urls(ip, rtsp_port, username, password, channel, rtsp_path)[0]
     command = [
         ffmpeg_path,
+        '-nostdin',
         '-hide_banner',
         '-loglevel',
         'error',
+        '-fflags',
+        'nobuffer',
+        '-flags',
+        'low_delay',
         '-rtsp_transport',
         'tcp',
         '-i',
         working_url,
         '-vn',
+        '-af',
+        RECORDING_AUDIO_FILTER,
         '-ac',
         '1',
         '-ar',
@@ -2094,8 +2715,9 @@ def audio_stream(
     username: str = 'admin',
     password: str = '',
     channel: int = 1,
+    rtsp_path: str | None = None,
 ):
-    return live_audio_response(ip, rtsp_port, username, password, channel)
+    return live_audio_response(ip, rtsp_port, username, password, channel, rtsp_path)
 
 
 @app.get('/audio.wav')
@@ -2105,8 +2727,9 @@ def legacy_audio_stream(
     username: str = 'admin',
     password: str = '',
     channel: int = 1,
+    rtsp_path: str | None = None,
 ):
-    return live_audio_response(ip, rtsp_port, username, password, channel)
+    return live_audio_response(ip, rtsp_port, username, password, channel, rtsp_path)
 
 
 @app.get('/recording/status')
@@ -2117,8 +2740,9 @@ def recording_status():
         'target_fps': RECORDING_TARGET_FPS,
         'crf': RECORDING_CRF,
         'profile': 'storage-balanced',
+        'audio_filter': RECORDING_AUDIO_FILTER,
     }
-    status['ffmpeg_available'] = bool(shutil.which('ffmpeg'))
+    status['ffmpeg_available'] = bool(ffmpeg_executable())
     with shared_camera_lock:
         frame_at = shared_camera_state.get('frame_at')
         status['shared_camera'] = {
@@ -2133,13 +2757,14 @@ def recording_status():
     return status
 
 
-@app.post('/recording/start')
-def start_recording(request: RecordingRequest):
+def start_recording_internal(request: RecordingRequest):
     global recording_thread
-    if request.event_type not in {'minor_stoppage', 'breakdown'}:
+    if request.event_type == 'manual':
+        request.event_type = 'self_capture'
+    if request.event_type not in {'minor_stoppage', 'breakdown', 'self_capture'}:
         raise HTTPException(
             status_code=400,
-            detail='Only Gate Trigger recordings are allowed.',
+            detail='Only manual and Gate Trigger recordings are allowed.',
         )
     if recording_state.get('running') or (recording_thread and recording_thread.is_alive()):
         return recording_state
@@ -2160,6 +2785,11 @@ def start_recording(request: RecordingRequest):
             'event_started_at': datetime.now().isoformat(timespec='seconds'),
             'event_ended_at': None,
             'event_duration_seconds': None,
+            'reason_category': None,
+            'reason': None,
+            'reason_note': None,
+            'reason_submitted_by': None,
+            'reason_submitted_at': None,
             'auto_stopped': False,
         }
     )
@@ -2168,12 +2798,23 @@ def start_recording(request: RecordingRequest):
     return recording_state
 
 
-@app.post('/recording/stop')
-def stop_recording():
+@app.post('/recording/start')
+def start_recording(request: RecordingRequest, x_auth_token: str | None = Header(default=None)):
+    require_role(x_auth_token, {'superadmin', 'admin'})
+    return start_recording_internal(request)
+
+
+def stop_recording_internal():
     recording_stop_event.set()
     if recording_thread and recording_thread.is_alive():
         recording_thread.join(timeout=5)
     return recording_state
+
+
+@app.post('/recording/stop')
+def stop_recording(x_auth_token: str | None = Header(default=None)):
+    require_role(x_auth_token, {'superadmin', 'admin'})
+    return stop_recording_internal()
 
 
 def plc_monitor_worker(request: PlcMonitorRequest):
@@ -2192,6 +2833,11 @@ def plc_monitor_worker(request: PlcMonitorRequest):
     plc_monitor_state.update(
         {
             'running': True,
+            'camera_ip': request.ip,
+            'http_port': request.http_port,
+            'rtsp_port': request.rtsp_port,
+            'channel': request.channel,
+            'storage_root': request.storage_root,
             'capture_video': bool(request.capture_video),
             'capture_breakdown_video': bool(request.capture_breakdown_video),
             'plc_host': request.plc_host,
@@ -2320,7 +2966,7 @@ def plc_monitor_worker(request: PlcMonitorRequest):
                     gate_event_started_at = datetime.now()
                     breakdown_marked = False
                 request.event_type = 'minor_stoppage'
-                start_recording(request)
+                start_recording_internal(request)
                 recording_state['event_type'] = 'minor_stoppage'
                 recording_state['event_started_at'] = gate_event_started_at.isoformat(timespec='seconds')
                 plc_monitor_state['current_event_type'] = 'minor_stoppage'
@@ -2359,7 +3005,7 @@ def plc_monitor_worker(request: PlcMonitorRequest):
                     recording_state['event_ended_at'] = closed_at.isoformat(timespec='seconds')
                     if event_duration_seconds is not None:
                         recording_state['event_duration_seconds'] = event_duration_seconds
-                    stop_recording()
+                    stop_recording_internal()
                     label = 'Breakdown' if close_event_type == 'breakdown' else 'Minor stoppage'
                     if recording_state.get('metadata_path') and not recording_state.get('error'):
                         plc_monitor_state['last_action'] = f'{label} saved on {request.plc_device.upper()} signal ON at {closed_at.isoformat(timespec="seconds")}'
@@ -2426,7 +3072,7 @@ def plc_monitor_worker(request: PlcMonitorRequest):
                 breakdown_marked = True
                 if not request.capture_breakdown_video:
                     recording_state['auto_stopped'] = True
-                    stop_recording()
+                    stop_recording_internal()
                 plc_monitor_state['machine_state'] = 'breakdown'
                 plc_monitor_state['machine_state_started_at'] = (
                     gate_event_started_at.isoformat(timespec='seconds')
@@ -2477,13 +3123,54 @@ def plc_monitor_status():
     return state
 
 
-@app.post('/plc-monitor/start')
-def start_plc_monitor(request: PlcMonitorRequest):
+@app.get('/settings')
+def get_settings():
+    return load_helper_settings().model_dump()
+
+
+@app.post('/settings')
+def update_settings(settings: HelperSettings, x_auth_token: str | None = Header(default=None)):
+    require_role(x_auth_token, {'superadmin'})
+    saved = save_helper_settings(settings)
+    if saved.plc_enabled:
+        start_plc_monitor_internal(settings_to_plc_request(saved))
+    else:
+        plc_monitor_state['enabled'] = False
+        plc_monitor_stop_event.set()
+        ensure_shared_camera_worker(saved.ip, saved.rtsp_port, saved.username, saved.password, saved.channel, saved.rtsp_path)
+    return saved.model_dump()
+
+
+def start_plc_monitor_internal(request: PlcMonitorRequest):
     global plc_monitor_thread
+    save_helper_settings(
+        HelperSettings(
+            ip=request.ip,
+            http_port=request.http_port,
+            rtsp_port=request.rtsp_port,
+            username=request.username,
+            password=request.password,
+            channel=request.channel,
+            rtsp_path=request.rtsp_path,
+            storage_root=request.storage_root,
+            capture_video=request.capture_video,
+            capture_breakdown_video=request.capture_breakdown_video,
+            plc_host=request.plc_host,
+            plc_port=request.plc_port,
+            plc_device=request.plc_device,
+            plc_address=str((request.gate_open_addresses or request.gate_close_addresses or ['4A'])[0]),
+            max_record_seconds=request.max_record_seconds,
+        )
+    )
     plc_monitor_state['enabled'] = True
     if plc_monitor_state.get('running') and plc_monitor_thread and plc_monitor_thread.is_alive():
         same_request = (
-            bool(plc_monitor_state.get('capture_video', True)) == bool(request.capture_video)
+            plc_monitor_state.get('camera_ip') == request.ip
+            and int(plc_monitor_state.get('http_port') or 80) == int(request.http_port)
+            and int(plc_monitor_state.get('rtsp_port') or 554) == int(request.rtsp_port)
+            and int(plc_monitor_state.get('channel') or 1) == int(request.channel)
+            and normalize_storage_root(plc_monitor_state.get('storage_root') or DEFAULT_STORAGE_ROOT) == normalize_storage_root(request.storage_root)
+            and bool(plc_monitor_state.get('capture_video', True)) == bool(request.capture_video)
             and bool(plc_monitor_state.get('capture_breakdown_video', True)) == bool(request.capture_breakdown_video)
             and plc_monitor_state.get('plc_host') == request.plc_host
             and int(plc_monitor_state.get('plc_port') or 0) in plc_candidate_ports(request.plc_port)
@@ -2505,8 +3192,15 @@ def start_plc_monitor(request: PlcMonitorRequest):
     return plc_monitor_state
 
 
+@app.post('/plc-monitor/start')
+def start_plc_monitor(request: PlcMonitorRequest, x_auth_token: str | None = Header(default=None)):
+    require_role(x_auth_token, {'superadmin', 'admin'})
+    return start_plc_monitor_internal(request)
+
+
 @app.post('/plc-test')
-def plc_test(request: PlcMonitorRequest):
+def plc_test(request: PlcMonitorRequest, x_auth_token: str | None = Header(default=None)):
+    require_role(x_auth_token, {'superadmin'})
     tested_ports = []
     selected_port = None
     reachable = False
@@ -2551,13 +3245,14 @@ def plc_test(request: PlcMonitorRequest):
 
 
 @app.post('/plc-monitor/stop')
-def stop_plc_monitor():
+def stop_plc_monitor(x_auth_token: str | None = Header(default=None)):
+    require_role(x_auth_token, {'superadmin', 'admin'})
     plc_monitor_state['enabled'] = False
     plc_monitor_stop_event.set()
     if plc_monitor_thread and plc_monitor_thread.is_alive():
         plc_monitor_thread.join(timeout=3)
     if recording_state.get('running') and recording_state.get('event_type') in {'minor_stoppage', 'breakdown'}:
-        stop_recording()
+        stop_recording_internal()
     plc_monitor_state.update(
         {
             'enabled': False,
@@ -2579,25 +3274,32 @@ def stop_plc_monitor():
     return plc_monitor_state
 
 
+@app.get('/reasons')
+def reasons(storage_root: str = DEFAULT_STORAGE_ROOT):
+    try:
+        return list_reason_options(storage_root)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post('/reasons')
+def create_reason(request: ReasonRequest):
+    try:
+        return add_reason_option(request)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post('/recording-reason')
+def save_recording_reason(request: RecordingReasonRequest):
+    try:
+        return update_recording_reason(request)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 def default_plc_monitor_request() -> PlcMonitorRequest:
-    return PlcMonitorRequest(
-        ip=DEFAULT_CAMERA_IP,
-        http_port=80,
-        rtsp_port=554,
-        username=DEFAULT_CAMERA_USER,
-        password=DEFAULT_CAMERA_PASSWORD,
-        channel=1,
-        storage_root=DEFAULT_STORAGE_ROOT,
-        plc_host='192.168.117.201',
-        plc_port=5003,
-        plc_device='X',
-        gate_open_addresses=['4A'],
-        gate_close_addresses=['4A'],
-        gate_open_when=False,
-        gate_close_when=True,
-        poll_seconds=1.0,
-        max_record_seconds=MAX_GATE_RECORD_SECONDS,
-    )
+    return settings_to_plc_request(load_helper_settings())
 
 
 def ensure_auto_plc_monitor_running():
@@ -2606,16 +3308,18 @@ def ensure_auto_plc_monitor_running():
     if plc_monitor_state.get('running') and plc_monitor_thread and plc_monitor_thread.is_alive():
         return
     try:
-        start_plc_monitor(default_plc_monitor_request())
+        start_plc_monitor_internal(default_plc_monitor_request())
     except Exception as exc:
         plc_monitor_state['last_error'] = f'PLC monitor auto-start failed: {exc}'
 
 
 @app.on_event('startup')
 def auto_start_plc_monitor():
-    plc_monitor_state['enabled'] = True
-    ensure_shared_camera_worker(DEFAULT_CAMERA_IP, 554, DEFAULT_CAMERA_USER, DEFAULT_CAMERA_PASSWORD, 1)
-    ensure_auto_plc_monitor_running()
+    settings = load_helper_settings()
+    plc_monitor_state['enabled'] = bool(settings.plc_enabled)
+    ensure_shared_camera_worker(settings.ip, settings.rtsp_port, settings.username, settings.password, settings.channel, settings.rtsp_path)
+    if settings.plc_enabled:
+        ensure_auto_plc_monitor_running()
 
 
 @app.post('/recording-index/scan')
@@ -2666,11 +3370,11 @@ def recording_index_export(
             page=1,
             page_size=100,
         )
-        content = recording_export_xlsx(request)
-        filename = f'machine_stoppage_report_{datetime.now():%Y%m%d_%H%M%S}.xlsx'
+        content = recording_export_csv(request).encode('utf-8-sig')
+        filename = f'machine_stoppage_report_{datetime.now():%Y%m%d_%H%M%S}.csv'
         return StreamingResponse(
             iter([content]),
-            media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            media_type='text/csv; charset=utf-8',
             headers={'Content-Disposition': f'attachment; filename="{filename}"'},
         )
     except Exception as exc:
@@ -2736,14 +3440,263 @@ def recording_file(storage_root: str, file_path: str, download: bool = False):
 @app.post('/download')
 def download(request: DownloadRequest):
     try:
-        base_url = camera_base_url(request.ip, request.http_port)
-        http, _ = login(base_url, request.username, request.password)
-        response = http.get(f'{base_url}/cpapi_Loadfile{request.file_path}', timeout=120)
+        http, _, base_url = login_camera(request.ip, request.http_port, request.username, request.password)
+        response = http.get(f'{base_url}/cpapi_Loadfile{request.file_path}', timeout=120, verify=False)
         response.raise_for_status()
         return {'content': base64.b64encode(response.content).decode()}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+def _camera_proxy_base() -> str:
+    settings = load_helper_settings()
+    return camera_base_url(settings.ip, settings.http_port)
+
+
+def _strip_frame_blocking_headers(headers: dict) -> dict:
+    blocked = {
+        'content-encoding',
+        'content-length',
+        'transfer-encoding',
+        'connection',
+        'x-frame-options',
+        'content-security-policy',
+    }
+    return {key: value for key, value in headers.items() if key.lower() not in blocked}
+
+
+CAMERA_AUTOLOGIN_SCRIPT = r"""
+<script>
+(function () {
+  var user = "admin";
+  var password = "Admin@123";
+  var key = "rico_camera_autologin_attempted";
+
+  function visible(element) {
+    if (!element) return false;
+    var rect = element.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }
+
+  function clickLogin() {
+    if (sessionStorage.getItem(key)) return;
+    var inputs = Array.prototype.slice.call(document.querySelectorAll("input"));
+    var passwordInput = inputs.find(function (input) {
+      return input.type === "password" && visible(input);
+    });
+    if (!passwordInput) return;
+
+    var userInput = inputs.find(function (input) {
+      var type = (input.type || "text").toLowerCase();
+      return type !== "password" && visible(input);
+    });
+    if (userInput) {
+      userInput.focus();
+      userInput.value = user;
+      userInput.dispatchEvent(new Event("input", { bubbles: true }));
+      userInput.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    passwordInput.focus();
+    passwordInput.value = password;
+    passwordInput.dispatchEvent(new Event("input", { bubbles: true }));
+    passwordInput.dispatchEvent(new Event("change", { bubbles: true }));
+
+    var buttons = Array.prototype.slice.call(document.querySelectorAll("button,input[type=button],input[type=submit]"));
+    var loginButton = buttons.find(function (button) {
+      return /login/i.test((button.innerText || button.value || "").trim()) && visible(button);
+    });
+    if (loginButton) {
+      sessionStorage.setItem(key, String(Date.now()));
+      loginButton.click();
+    }
+  }
+
+  var timer = window.setInterval(clickLogin, 1000);
+  window.setTimeout(function () { window.clearInterval(timer); }, 15000);
+})();
+</script>
+"""
+
+
+def _inject_camera_autologin(content: bytes, content_type: str | None) -> bytes:
+    if not content_type or 'text/html' not in content_type.lower():
+        return content
+    try:
+        html = content.decode('utf-8')
+    except UnicodeDecodeError:
+        return content
+    if 'rico_camera_autologin_attempted' in html:
+        return content
+    marker = '</body>'
+    if marker in html:
+        html = html.replace(marker, f'{CAMERA_AUTOLOGIN_SCRIPT}{marker}', 1)
+    else:
+        html = f'{html}{CAMERA_AUTOLOGIN_SCRIPT}'
+    return html.encode('utf-8')
+
+
+def _proxy_camera_http(path: str, request: Request) -> Response:
+    base_url = _camera_proxy_base()
+    target_url = f'{base_url}/{path.lstrip("/")}'
+    if request.url.query:
+        target_url = f'{target_url}?{request.url.query}'
+    try:
+        body = request._body if hasattr(request, '_body') else None
+    except Exception:
+        body = None
+    try:
+        headers = {
+            key: value
+            for key, value in request.headers.items()
+            if key.lower()
+            not in {
+                'host',
+                'content-length',
+                'connection',
+                'accept-encoding',
+                'origin',
+                'referer',
+            }
+        }
+        headers['Origin'] = base_url
+        headers['Referer'] = f'{base_url}/'
+        upstream = requests.request(
+            request.method,
+            target_url,
+            headers=headers,
+            data=body,
+            timeout=30,
+            verify=False,
+            allow_redirects=False,
+        )
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f'Camera proxy failed: {exc}')
+    content_type = upstream.headers.get('content-type')
+    content = (
+        _inject_camera_autologin(upstream.content, content_type)
+        if 200 <= upstream.status_code < 300
+        else upstream.content
+    )
+    return Response(
+        content=content,
+        status_code=upstream.status_code,
+        headers=_strip_frame_blocking_headers(dict(upstream.headers)),
+        media_type=content_type,
+    )
+
+
+@app.api_route('/camera-web', methods=['GET', 'POST'])
+@app.api_route('/camera-web/{path:path}', methods=['GET', 'POST'])
+async def camera_web_proxy(request: Request, path: str = ''):
+    body = await request.body()
+    request._body = body
+    return _proxy_camera_http(path or '/', request)
+
+
+@app.websocket('/rtspoverwebsocket')
+async def camera_rtsp_websocket(websocket: WebSocket):
+    await websocket.accept()
+    settings = load_helper_settings()
+    scheme = 'wss' if int(settings.http_port) == 443 else 'ws'
+    target = f'{scheme}://{settings.ip}:{settings.http_port}/rtspoverwebsocket'
+    ssl_context = None
+    if scheme == 'wss':
+        ssl_context = ssl._create_unverified_context()
+    try:
+        async with websockets.connect(target, ssl=ssl_context, open_timeout=10) as upstream:
+            async def client_to_camera():
+                while True:
+                    message = await websocket.receive()
+                    if message.get('type') == 'websocket.disconnect':
+                        break
+                    if message.get('bytes') is not None:
+                        await upstream.send(message['bytes'])
+                    elif message.get('text') is not None:
+                        await upstream.send(message['text'])
+
+            async def camera_to_client():
+                async for message in upstream:
+                    if isinstance(message, bytes):
+                        await websocket.send_bytes(message)
+                    else:
+                        await websocket.send_text(message)
+
+            done, pending = await asyncio.wait(
+                {asyncio.create_task(client_to_camera()), asyncio.create_task(camera_to_client())},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in pending:
+                task.cancel()
+    except WebSocketDisconnect:
+        return
+    except Exception:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+
+
+@app.api_route('/cpapi2_Login', methods=['GET', 'POST'])
+@app.api_route('/cpapi2', methods=['GET', 'POST'])
+@app.api_route('/cpapi3', methods=['GET', 'POST'])
+@app.api_route('/cpapi_outsidecmd', methods=['GET', 'POST'])
+@app.api_route('/cpapi2_Notify_Method', methods=['GET', 'POST'])
+@app.api_route('/cpapi/{path:path}', methods=['GET', 'POST'])
+@app.api_route('/web_caps/{path:path}', methods=['GET', 'POST'])
+@app.api_route('/style/{path:path}', methods=['GET', 'POST'])
+@app.api_route('/custom_lang/{path:path}', methods=['GET', 'POST'])
+@app.api_route('/default_lang/{path:path}', methods=['GET', 'POST'])
+@app.api_route('/static/{path:path}', methods=['GET', 'POST'])
+@app.api_route('/register.json', methods=['GET', 'POST'])
+@app.api_route('/qrcode.js', methods=['GET'])
+@app.api_route('/less.min.js', methods=['GET'])
+@app.api_route('/favicon.ico', methods=['GET'])
+@app.api_route('/{asset_path:path}', methods=['GET', 'POST'])
+async def camera_asset_proxy(request: Request, asset_path: str = ''):
+    camera_api_paths = {
+        'cpapi2_Login',
+        'cpapi2',
+        'cpapi3',
+        'cpapi_outsidecmd',
+        'cpapi2_Notify_Method',
+        'qrcode.js',
+        'less.min.js',
+        'favicon.ico',
+        'register.json',
+    }
+    if asset_path and not (
+        asset_path in camera_api_paths
+        or
+        asset_path.endswith((
+            '.js',
+            '.css',
+            '.less',
+            '.txt',
+            '.json',
+            '.png',
+            '.jpg',
+            '.jpeg',
+            '.gif',
+            '.svg',
+            '.ico',
+            '.wasm',
+            '.worker.js',
+        ))
+        or asset_path.startswith((
+            'static/',
+            'style/',
+            'locales/',
+            'custom_lang/',
+            'default_lang/',
+            'web_caps/',
+            'cpapi/',
+        ))
+    ):
+        raise HTTPException(status_code=404, detail='Not found')
+    body = await request.body()
+    request._body = body
+    return _proxy_camera_http(request.url.path, request)
+
+
 if __name__ == '__main__':
-    uvicorn.run(app, host='0.0.0.0', port=8010, reload=False)
+    uvicorn.run(app, host='127.0.0.1', port=8010, reload=False, log_config=None)

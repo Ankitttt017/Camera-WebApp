@@ -1,0 +1,19 @@
+{
+  "ip": "172.16.4.19",
+  "http_port": 443,
+  "rtsp_port": 554,
+  "username": "admin",
+  "password": "Admin@123",
+  "channel": 1,
+  "rtsp_path": "/video/live?channel=1&subtype=0",
+  "storage_root": "C:\\CPPLUS_RECORDINGS",
+  "public_helper_url": null,
+  "capture_video": true,
+  "capture_breakdown_video": false,
+  "plc_enabled": false,
+  "plc_host": "192.168.117.201",
+  "plc_port": 5003,
+  "plc_device": "X",
+  "plc_address": "4A",
+  "max_record_seconds": 120
+}
