@@ -29,7 +29,6 @@ jobs:
           npm install
           npm run build
 
-      - name: Restart camera app
+      - name: Restart camera backend
         run: |
           pm2 restart camera-backend
-          pm2 restart camera-webapp || true
