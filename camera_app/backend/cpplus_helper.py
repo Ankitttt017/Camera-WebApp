@@ -3699,4 +3699,4 @@ async def camera_asset_proxy(request: Request, asset_path: str = ''):
 
 
 if __name__ == '__main__':
-    uvicorn.run(app, host='127.0.0.1', port=8010, reload=False, log_config=None)
+    uvicorn.run(app, host='0.0.0.0', port=8010, reload=False, log_config=None)
