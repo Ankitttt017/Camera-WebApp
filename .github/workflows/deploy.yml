@@ -31,5 +31,5 @@ jobs:
 
       - name: Restart camera app
         run: |
-          cd /home/automation/apps/Camera-WebApp/camera_app
-          pm2 restart camera-webapp || pm2 start "python backend/cpplus_helper.py" --name camera-webapp --cwd /home/automation/apps/Camera-WebApp/camera_app
+          pm2 restart camera-backend
+          pm2 restart camera-webapp || true
