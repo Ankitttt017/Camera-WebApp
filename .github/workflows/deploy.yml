@@ -1,0 +1,35 @@
+name: Deploy Camera WebApp
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+
+    steps:
+      - name: Update code on server
+        run: |
+          cd /home/automation/apps/Camera-WebApp
+          git fetch origin main
+          git reset --hard origin/main
+
+      - name: Install backend dependencies
+        run: |
+          cd /home/automation/apps/Camera-WebApp/camera_app
+          if [ ! -d ".venv" ]; then python3 -m venv .venv; fi
+          source .venv/bin/activate
+          pip install -r requirements.txt
+
+      - name: Install and build frontend
+        run: |
+          cd /home/automation/apps/Camera-WebApp/camera_app/frontend
+          npm install
+          npm run build
+
+      - name: Restart camera app
+        run: |
+          cd /home/automation/apps/Camera-WebApp/camera_app
+          pm2 restart camera-webapp || pm2 start "python backend/cpplus_helper.py" --name camera-webapp --cwd /home/automation/apps/Camera-WebApp/camera_app
