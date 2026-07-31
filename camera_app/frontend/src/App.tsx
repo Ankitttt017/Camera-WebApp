@@ -34,7 +34,7 @@ const LEGACY_PUBLIC_HELPER_URLS = new Set([
   'http://172.16.4.242:8010',
   'http://127.0.0.1:8010',
 ]);
-const DEFAULT_STORAGE_ROOT = 'C:\\CPPLUS_RECORDINGS';
+const DEFAULT_STORAGE_ROOT = '/home/automation/apps/Camera-WebApp/camera_app/recordings';
 const LEGACY_STORAGE_ROOTS = new Set([
   'D:\\CPPLUS_RECORDINGS',
 ]);
@@ -69,12 +69,25 @@ const RICO_LOGO_SRC = '/rico-logo.png';
 type Page = 'live' | 'saved';
 type UserRole = 'superadmin' | 'admin' | 'user';
 
+function normalizePublicHelperUrl(value?: string | null) {
+  const text = String(value || '').trim();
+  if (!text || text.toLowerCase() === 'null' || text.toLowerCase() === 'undefined') return DEFAULT_PUBLIC_HELPER_URL;
+  return text;
+}
+
+function normalizeSettings(settings: CameraSettings): CameraSettings {
+  return {
+    ...settings,
+    public_helper_url: normalizePublicHelperUrl(settings.public_helper_url),
+  };
+}
+
 function loadSavedSettings(): CameraSettings {
   try {
     const raw = window.localStorage.getItem(SETTINGS_STORAGE_KEY);
     if (!raw) return DEFAULT_SETTINGS;
-    const saved = { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
-    if (!saved.public_helper_url || LEGACY_PUBLIC_HELPER_URLS.has(String(saved.public_helper_url).trim())) {
+    const saved = normalizeSettings({ ...DEFAULT_SETTINGS, ...JSON.parse(raw) });
+    if (LEGACY_PUBLIC_HELPER_URLS.has(String(saved.public_helper_url).trim())) {
       saved.public_helper_url = DEFAULT_PUBLIC_HELPER_URL;
     }
     if (!saved.storage_root || LEGACY_STORAGE_ROOTS.has(String(saved.storage_root).trim())) {
@@ -1747,7 +1760,7 @@ export function App() {
   async function loadBackendSettings() {
     try {
       const backendSettings = await getJson<CameraSettings>('/settings');
-      const mergedSettings = { ...settings, ...backendSettings };
+      const mergedSettings = normalizeSettings({ ...settings, ...backendSettings });
       setSettings(mergedSettings);
       window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(mergedSettings));
     } catch {
@@ -1821,7 +1834,7 @@ export function App() {
       let monitorApplied = false;
       try {
         const savedSettings = await postJson<CameraSettings>('/settings', buildSettingsPayload(nextSettings));
-        mergedSettings = { ...nextSettings, ...savedSettings };
+        mergedSettings = normalizeSettings({ ...nextSettings, ...savedSettings });
       } catch {
         if (nextSettings.plc_enabled) {
           const status = await postJson<PlcStatus>('/plc-monitor/start', buildPlcPayload(nextSettings));

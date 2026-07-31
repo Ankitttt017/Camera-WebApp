@@ -254,10 +254,11 @@ export async function authElevate(password: string): Promise<AuthSession> {
   return postJson<AuthSession>('/auth/elevate', { username: 'admin', password });
 }
 
-export function queryUrl(path: string, params: Record<string, string | number | boolean | undefined>) {
+export function queryUrl(path: string, params: Record<string, string | number | boolean | null | undefined>) {
   const query = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
-    if (value !== undefined) query.set(key, String(value));
+    if (value === undefined || value === null || String(value).trim().toLowerCase() === 'null') continue;
+    query.set(key, String(value));
   }
   return `${API_BASE}${path}?${query.toString()}`;
 }

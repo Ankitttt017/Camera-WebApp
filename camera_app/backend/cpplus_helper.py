@@ -48,7 +48,7 @@ VIDEO_FILE_EXTENSIONS = {'.mp4', '.webm', '.mov', '.m4v', '.avi', '.mkv', '.dav'
 DEFAULT_CAMERA_IP = '192.168.119.205'
 DEFAULT_CAMERA_USER = 'admin'
 DEFAULT_CAMERA_PASSWORD = 'Admin@123'
-DEFAULT_STORAGE_ROOT = r'C:\CPPLUS_RECORDINGS'
+DEFAULT_STORAGE_ROOT = '/home/automation/apps/Camera-WebApp/camera_app/recordings'
 LEGACY_STORAGE_ROOT = r'D:\CPPLUS_RECORDINGS'
 APP_BASE_DIR = Path(__file__).resolve().parents[1]
 FALLBACK_STORAGE_ROOT = APP_BASE_DIR / 'recordings'
@@ -1933,7 +1933,7 @@ def report_action_label(row: dict) -> str:
 
 def normalized_public_helper_url(value: str | None) -> str:
     text = str(value or '').strip().rstrip('/')
-    if not text:
+    if not text or text.lower() in {'null', 'none', 'undefined'}:
         return ''
     if not text.startswith(('http://', 'https://')):
         text = f'http://{text}'
@@ -1941,10 +1941,10 @@ def normalized_public_helper_url(value: str | None) -> str:
 
 
 def report_video_url(row: dict, request: RecordingIndexRequest) -> str:
-    base_url = normalized_public_helper_url(request.public_helper_url)
-    if not base_url or not report_video_available(row):
+    base_url = normalized_public_helper_url(request.public_helper_url) or 'http://127.0.0.1:8010'
+    if not report_video_available(row):
         return ''
-    storage_root = quote(str(request.storage_root), safe='')
+    storage_root = quote(str(row.get('storage_root') or request.storage_root), safe='')
     file_path = quote(str(row.get('file_path') or ''), safe='')
     return f'{base_url}/recording-file?storage_root={storage_root}&file_path={file_path}'
 
