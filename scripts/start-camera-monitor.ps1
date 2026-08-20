@@ -93,7 +93,7 @@ function Get-NpmExe {
     throw 'npm.cmd not found.'
 }
 
-$LanIp = '192.168.100.136'
+$LanIp = Get-LanIp
 $localHelperUrl = "http://$LanIp:8010"
 $env:VITE_HELPER_URL = $localHelperUrl
 $env:BROWSER = 'none'
