@@ -45,6 +45,10 @@ export type RecordingStatus = {
   reason_note?: string | null;
   reason_submitted_by?: string | null;
   reason_submitted_at?: string | null;
+  transcript?: string | null;
+  transcript_status?: string | null;
+  transcript_error?: string | null;
+  transcribed_at?: string | null;
   updated_at?: string | null;
   shared_camera?: {
     running?: boolean;
@@ -120,6 +124,10 @@ export type RecordingRecord = {
   reason_note?: string | null;
   reason_submitted_by?: string | null;
   reason_submitted_at?: string | null;
+  transcript?: string | null;
+  transcript_status?: string | null;
+  transcript_error?: string | null;
+  transcribed_at?: string | null;
   updated_at?: string | null;
 };
 
@@ -201,14 +209,14 @@ export function buildPlcPayload(settings: CameraSettings) {
     ...buildCameraPayload(settings),
     plc_host: settings.plc_host.trim(),
     plc_port: Number(settings.plc_port),
-    plc_device: settings.plc_device.trim() || 'X',
-    gate_open_addresses: [settings.plc_address.trim() || '4A'],
-    gate_close_addresses: [settings.plc_address.trim() || '4A'],
-    gate_open_when: false,
-    gate_close_when: true,
+    plc_device: settings.plc_device.trim() || 'M',
+    gate_open_addresses: [settings.plc_address.trim() || '810'],
+    gate_close_addresses: [settings.plc_address.trim() || '810'],
+    gate_open_when: true,
+    gate_close_when: false,
     poll_seconds: 1,
     max_record_seconds: Math.max(1, Number(settings.max_record_seconds || 30)),
-    admin_password: 'Admin@123',
+    admin_password: 'Pass-RicoAuto123',
   };
 }
 
@@ -218,10 +226,10 @@ export function buildSettingsPayload(settings: CameraSettings) {
     public_helper_url: settings.public_helper_url,
     plc_host: settings.plc_host.trim(),
     plc_port: Number(settings.plc_port),
-    plc_device: settings.plc_device.trim() || 'X',
-    plc_address: settings.plc_address.trim() || '4A',
+    plc_device: settings.plc_device.trim() || 'M',
+    plc_address: settings.plc_address.trim() || '810',
     max_record_seconds: Math.max(1, Number(settings.max_record_seconds || 300)),
-    admin_password: 'Admin@123',
+    admin_password: 'Pass-RicoAuto123',
   };
 }
 
@@ -251,7 +259,7 @@ export async function authLogin(username: string, password: string): Promise<Aut
 }
 
 export async function authElevate(password: string): Promise<AuthSession> {
-  return postJson<AuthSession>('/auth/elevate', { username: 'admin', password });
+  return postJson<AuthSession>('/auth/elevate', { username: 'Ricoadmin', password });
 }
 
 export function queryUrl(path: string, params: Record<string, string | number | boolean | null | undefined>) {
@@ -264,16 +272,37 @@ export function queryUrl(path: string, params: Record<string, string | number | 
 }
 
 export function mjpegUrl(settings: CameraSettings) {
-  const livePreviewPath = settings.rtsp_path
-    ? settings.rtsp_path.replace(/subtype=0/g, 'subtype=1')
-    : undefined;
   return queryUrl('/mjpeg', {
     ip: settings.ip.trim(),
     rtsp_port: settings.rtsp_port,
     username: settings.username,
     password: settings.password,
     channel: settings.channel,
-    rtsp_path: livePreviewPath,
+    rtsp_path: settings.rtsp_path || undefined,
+  });
+}
+
+export function liveVideoUrl(settings: CameraSettings, nonce: number) {
+  return queryUrl('/live.mp4', {
+    ip: settings.ip.trim(),
+    rtsp_port: settings.rtsp_port,
+    username: settings.username,
+    password: settings.password,
+    channel: settings.channel,
+    rtsp_path: settings.rtsp_path || undefined,
+    t: nonce,
+  });
+}
+
+export function liveJpegUrl(settings: CameraSettings, nonce: number) {
+  return queryUrl('/live.jpg', {
+    ip: settings.ip.trim(),
+    rtsp_port: settings.rtsp_port,
+    username: settings.username,
+    password: settings.password,
+    channel: settings.channel,
+    rtsp_path: settings.rtsp_path || undefined,
+    t: nonce,
   });
 }
 

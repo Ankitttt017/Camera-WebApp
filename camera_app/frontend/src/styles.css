@@ -796,17 +796,22 @@ nav button.active .nav-icon {
   background: #020508;
 }
 
-.live-frame img {
+.live-frame img,
+.live-frame video {
   display: block;
   width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 
-.live-frame.compact img {
+.live-frame.compact img,
+.live-frame.compact video {
   max-height: 240px;
   object-fit: cover;
 }
 
-.live-frame:fullscreen img {
+.live-frame:fullscreen img,
+.live-frame:fullscreen video {
   width: auto;
   max-width: 100vw;
   max-height: 100vh;
@@ -3371,22 +3376,22 @@ footer.status-footer time {
 
 /* Product polish: final responsive dashboard layer */
 :root {
-  --rico-bg: #eef3f8;
+  --rico-bg: #f8fafc;
   --rico-panel: #ffffff;
-  --rico-panel-soft: #f7faff;
-  --rico-border: #d8e2ef;
-  --rico-border-strong: #b7c7dc;
+  --rico-panel-soft: #f1f5f9;
+  --rico-border: #e2e8f0;
+  --rico-border-strong: #cbd5e1;
   --rico-text: #0f172a;
   --rico-muted: #64748b;
-  --rico-blue: #2856d9;
-  --rico-blue-soft: #eaf0ff;
-  --rico-green: #059669;
-  --rico-green-soft: #e8f8ef;
-  --rico-red: #b42318;
-  --rico-red-soft: #fff1f0;
-  --rico-amber: #b7791f;
-  --rico-shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
-  --rico-radius: 8px;
+  --rico-blue: #1d4ed8;
+  --rico-blue-soft: #eff6ff;
+  --rico-green: #0d9488;
+  --rico-green-soft: #f0fdfa;
+  --rico-red: #e11d48;
+  --rico-red-soft: #fff1f2;
+  --rico-amber: #d97706;
+  --rico-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
+  --rico-radius: 12px;
 }
 
 * {
@@ -9683,6 +9688,30 @@ footer.status-footer {
   gap: 12px !important;
 }
 
+.live-workbench .live-frame video,
+.live-workbench .live-frame.fit video,
+.live-workbench .live-frame.fill video,
+.live-frame:fullscreen video,
+.live-frame.fill:fullscreen video {
+  display: block !important;
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: contain !important;
+  object-position: center center !important;
+  background: #020617 !important;
+}
+
+/* Operator footer: hide debug paths/URLs and keep only operational warnings + clock. */
+footer.status-footer {
+  display: flex !important;
+  justify-content: flex-end !important;
+  grid-template-columns: none !important;
+}
+
+footer.status-footer .footer-alert {
+  margin-right: auto !important;
+}
+
 footer.status-footer .footer-alert {
   justify-self: start !important;
   max-width: 360px !important;
@@ -10235,6 +10264,15 @@ footer.status-footer .footer-alert .icon {
   text-overflow: ellipsis;
   white-space: nowrap;
   text-align: left;
+}
+
+.reason-chip.expanded {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  height: auto;
+  min-height: 36px;
+  padding: 8px 10px;
 }
 
 .reason-chip.saved {

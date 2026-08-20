@@ -1,4 +1,4 @@
-﻿import base64
+import base64
 import csv
 import hashlib
 import io
@@ -30,6 +30,7 @@ import websockets
 from fastapi import FastAPI, Header, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
+from dotenv import load_dotenv
 from pydantic import BaseModel
 
 
@@ -51,22 +52,60 @@ DEFAULT_CAMERA_PASSWORD = 'Admin@123'
 DEFAULT_STORAGE_ROOT = '/home/automation/apps/Camera-WebApp/camera_app/recordings'
 LEGACY_STORAGE_ROOT = r'D:\CPPLUS_RECORDINGS'
 APP_BASE_DIR = Path(__file__).resolve().parents[1]
+load_dotenv(APP_BASE_DIR / '.env')
 FALLBACK_STORAGE_ROOT = APP_BASE_DIR / 'recordings'
 HELPER_SETTINGS_PATH = Path(os.getenv('HELPER_SETTINGS_PATH', APP_BASE_DIR / 'helper_settings.json'))
 MAX_GATE_RECORD_SECONDS = 300
-RECORDING_MAX_WIDTH = 1280
-RECORDING_TARGET_FPS = 15.0
-RECORDING_CRF = 28
-RECORDING_AUDIO_FILTER = 'highpass=f=120,lowpass=f=3500,afftdn=nf=-25,dynaudnorm=f=150:g=15,volume=2.5,alimiter=limit=0.95'
-LIVE_PREVIEW_MAX_WIDTH = 1280
-LIVE_PREVIEW_TARGET_FPS = 8.0
-LIVE_PREVIEW_STALE_SECONDS = 8.0
+RECORDING_MAX_WIDTH = int(os.getenv('RECORDING_MAX_WIDTH', '1280'))
+RECORDING_TARGET_FPS = float(os.getenv('RECORDING_TARGET_FPS', os.getenv('RECORDING_FPS', '20')))
+RECORDING_CRF = int(os.getenv('RECORDING_CRF', '24'))
+RECORDING_AUDIO_FILTER = os.getenv(
+    'RECORDING_AUDIO_FILTER',
+    'highpass=f=250,lowpass=f=3200,afftdn=nf=-45:nt=w,anlmdn=s=0.00003:p=0.002:r=0.01,agate=threshold=0.03:ratio=12:attack=15:release=250,dynaudnorm=f=200:g=10:p=0.85,volume=8.0,alimiter=limit=0.90',
+).strip()
+LIVE_PREVIEW_MAX_WIDTH = int(os.getenv('LIVE_PREVIEW_MAX_WIDTH', '1280'))
+LIVE_PREVIEW_TARGET_FPS = float(os.getenv('LIVE_PREVIEW_TARGET_FPS', '15'))
+LIVE_PREVIEW_JPEG_QUALITY = int(os.getenv('LIVE_PREVIEW_JPEG_QUALITY', '75'))
+LIVE_PREVIEW_STALE_SECONDS = float(os.getenv('LIVE_PREVIEW_STALE_SECONDS', '3'))
+LIVE_PREVIEW_RTSP_PATH = os.getenv('LIVE_PREVIEW_RTSP_PATH', '').strip()
+LIVE_VIDEO_MAX_WIDTH = int(os.getenv('LIVE_VIDEO_MAX_WIDTH', str(LIVE_PREVIEW_MAX_WIDTH)))
+LIVE_VIDEO_TARGET_FPS = float(os.getenv('LIVE_VIDEO_TARGET_FPS', str(LIVE_PREVIEW_TARGET_FPS)))
+LIVE_VIDEO_BITRATE = os.getenv('LIVE_VIDEO_BITRATE', '1800k').strip()
+LIVE_VIDEO_MAXRATE = os.getenv('LIVE_VIDEO_MAXRATE', '2200k').strip()
+LIVE_VIDEO_BUFSIZE = os.getenv('LIVE_VIDEO_BUFSIZE', '1000k').strip()
+LIVE_RTSP_TRANSPORT = os.getenv('LIVE_RTSP_TRANSPORT', 'udp').strip().lower() or 'udp'
+LIVE_AUDIO_FILTER = os.getenv(
+    'LIVE_AUDIO_FILTER',
+    'highpass=f=250,lowpass=f=3200,afftdn=nf=-45:nt=w,anlmdn=s=0.00003:p=0.002:r=0.01,agate=threshold=0.03:ratio=12:attack=15:release=250,dynaudnorm=f=200:g=10:p=0.85,volume=8.0,alimiter=limit=0.90',
+).strip()
 USE_FFMPEG_RECORDING = True
 RECORDING_START_RETRY_SECONDS = 1.0
 RECORDING_START_STALE_SECONDS = 4.0
 RTSP_RECORD_OPEN_TIMEOUT_MS = 5000
 GATE_CLOSE_START_COOLDOWN_SECONDS = 2.0
 PLC_FAILOVER_PORTS = [5003]
+TRANSCRIPTION_ENABLED = os.getenv('TRANSCRIPTION_ENABLED', '1').strip().lower() not in {'0', 'false', 'no', 'off'}
+TRANSCRIPTION_MODEL = os.getenv('TRANSCRIPTION_MODEL', 'base')
+TRANSCRIPTION_LANGUAGE = os.getenv('TRANSCRIPTION_LANGUAGE', 'hi').strip() or 'hi'
+TRANSCRIPTION_REASON_MAX_CHARS = int(os.getenv('TRANSCRIPTION_REASON_MAX_CHARS', '240'))
+TRANSCRIPTION_AUDIO_SECONDS = int(os.getenv('TRANSCRIPTION_AUDIO_SECONDS', '0'))
+TRANSCRIPTION_TMP_DIR = APP_BASE_DIR / 'transcription_tmp'
+TRANSCRIPTION_MODEL_CACHE = Path(os.getenv('TRANSCRIPTION_MODEL_CACHE', APP_BASE_DIR / 'model_cache'))
+TRANSCRIPTION_VAD_FILTER = os.getenv('TRANSCRIPTION_VAD_FILTER', '0').strip().lower() not in {'0', 'false', 'no', 'off'}
+TRANSCRIPTION_AUDIO_FILTER = os.getenv(
+    'TRANSCRIPTION_AUDIO_FILTER',
+    'highpass=f=250,lowpass=f=3200,afftdn=nf=-45:nt=w,anlmdn=s=0.00003:p=0.002:r=0.01,agate=threshold=0.03:ratio=12:attack=15:release=250,dynaudnorm=f=200:g=10:p=0.85,volume=8.0,alimiter=limit=0.90',
+).strip()
+TRANSCRIPTION_BEAM_SIZE = int(os.getenv('TRANSCRIPTION_BEAM_SIZE', '5'))
+TRANSCRIPTION_NO_SPEECH_THRESHOLD = float(os.getenv('TRANSCRIPTION_NO_SPEECH_THRESHOLD', '0.95'))
+TRANSCRIPTION_MAX_SEGMENT_NO_SPEECH_PROB = float(os.getenv('TRANSCRIPTION_MAX_SEGMENT_NO_SPEECH_PROB', '0.65'))
+TRANSCRIPTION_MIN_AVG_LOGPROB = float(os.getenv('TRANSCRIPTION_MIN_AVG_LOGPROB', '-1.0'))
+TRANSCRIPTION_MIN_REASON_CHARS = int(os.getenv('TRANSCRIPTION_MIN_REASON_CHARS', '8'))
+TRANSCRIPTION_MIN_REASON_WORDS = int(os.getenv('TRANSCRIPTION_MIN_REASON_WORDS', '2'))
+TRANSCRIPTION_AUTO_REASON_ENABLED = os.getenv('TRANSCRIPTION_AUTO_REASON_ENABLED', '0').strip().lower() not in {'0', 'false', 'no', 'off'}
+TRANSCRIPTION_INITIAL_PROMPT = os.getenv('TRANSCRIPTION_INITIAL_PROMPT', 'हिंदी में देवनागरी लिपि में लिखें। ट्रायल, गेट खुला है, मशीन, माइनर स्टॉपेज, ब्रेकडाउन, ऑपरेटर, रीज़न।').strip()
+os.environ.setdefault('HF_HOME', str(TRANSCRIPTION_MODEL_CACHE / 'hf_home'))
+os.environ.setdefault('HF_HUB_CACHE', str(TRANSCRIPTION_MODEL_CACHE / 'hf_hub'))
 KNOWN_FFMPEG_PATHS = [
     Path.home() / 'AppData' / 'Local' / 'Microsoft' / 'WinGet' / 'Packages' / 'Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe' / 'ffmpeg-8.1.2-full_build' / 'bin' / 'ffmpeg.exe',
 ]
@@ -82,6 +121,21 @@ def ffmpeg_executable() -> str | None:
     for path in KNOWN_FFMPEG_PATHS:
         if path.exists():
             return str(path)
+    return None
+
+
+def ffprobe_executable() -> str | None:
+    configured_path = os.getenv('FFPROBE_PATH')
+    if configured_path and Path(configured_path).exists():
+        return configured_path
+    ffprobe_path = shutil.which('ffprobe')
+    if ffprobe_path:
+        return ffprobe_path
+    ffmpeg_path = ffmpeg_executable()
+    if ffmpeg_path:
+        sibling = Path(ffmpeg_path).with_name('ffprobe.exe')
+        if sibling.exists():
+            return str(sibling)
     return None
 
 
@@ -117,11 +171,11 @@ class RecordingRequest(CameraRequest):
 class PlcMonitorRequest(RecordingRequest):
     plc_host: str = '192.168.117.201'
     plc_port: int = 5003
-    plc_device: str = 'X'
-    gate_open_addresses: list[int | str] = ['4A']
-    gate_close_addresses: list[int | str] = ['4A']
-    gate_open_when: bool = False
-    gate_close_when: bool = True
+    plc_device: str = 'M'
+    gate_open_addresses: list[int | str] = ['810']
+    gate_close_addresses: list[int | str] = ['810']
+    gate_open_when: bool = True
+    gate_close_when: bool = False
     poll_seconds: float = 1.0
     max_record_seconds: int = MAX_GATE_RECORD_SECONDS
 
@@ -141,8 +195,8 @@ class HelperSettings(BaseModel):
     plc_enabled: bool = True
     plc_host: str = '192.168.117.201'
     plc_port: int = 5003
-    plc_device: str = 'X'
-    plc_address: str = '4A'
+    plc_device: str = 'M'
+    plc_address: str = '810'
     max_record_seconds: int = MAX_GATE_RECORD_SECONDS
 
 
@@ -210,6 +264,10 @@ recording_state = {
     'event_ended_at': None,
     'event_duration_seconds': None,
     'auto_stopped': False,
+    'transcript': None,
+    'transcript_status': None,
+    'transcript_error': None,
+    'transcribed_at': None,
 }
 recording_stop_event = threading.Event()
 recording_thread: threading.Thread | None = None
@@ -239,6 +297,8 @@ plc_monitor_state = {
     'last_gate_closed_at': None,
     'last_action': None,
     'last_read_at': None,
+    'last_successful_read_at': None,
+    'consecutive_read_failures': 0,
     'last_error': None,
     'open_values': {},
     'close_values': {},
@@ -255,6 +315,7 @@ shared_camera_state = {
     'url': None,
     'raw_url': None,
     'frame': None,
+    'frame_jpeg': None,
     'frame_at': None,
     'width': None,
     'height': None,
@@ -476,6 +537,15 @@ def rtsp_urls(ip: str, port: int, username: str, password: str, channel_no: int,
     return [f'{scheme}://{user}:{secret}@{host}{path}' for scheme in schemes for user, secret in credential_pairs for path in paths]
 
 
+def live_preview_rtsp_path(rtsp_path: str | None, channel_no: int) -> str | None:
+    if LIVE_PREVIEW_RTSP_PATH:
+        return normalize_rtsp_path(LIVE_PREVIEW_RTSP_PATH, channel_no)
+    normalized = normalize_rtsp_path(rtsp_path, channel_no)
+    if normalized and 'subtype=0' in normalized:
+        return normalized.replace('subtype=0', 'subtype=1')
+    return normalized
+
+
 def open_rtsp_capture(url: str, timeout_ms: int = 5000):
     capture = cv2.VideoCapture()
     capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
@@ -517,11 +587,21 @@ def shared_camera_worker(
     rtsp_path: str | None = None,
 ):
     key = shared_camera_key(ip, rtsp_port, username, password, channel, rtsp_path)
-    capture = None
+    process = None
 
     def is_current_worker() -> bool:
         with shared_camera_lock:
             return shared_camera_state.get('worker_id') == worker_id
+
+    def stop_process():
+        nonlocal process
+        if process and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+        process = None
 
     try:
         with shared_camera_lock:
@@ -531,75 +611,126 @@ def shared_camera_worker(
         while not shared_camera_stop_event.is_set():
             if not is_current_worker():
                 break
-            if capture is None or not capture.isOpened():
-                if not tcp_reachable(ip, rtsp_port, timeout=1.5):
-                    with shared_camera_lock:
-                        if shared_camera_state.get('worker_id') == worker_id:
-                            shared_camera_state['last_error'] = (
-                                f'Camera RTSP port {ip}:{rtsp_port} is not reachable from the helper PC. '
-                                'Check camera IP, VLAN/subnet route, firewall, and RTSP service.'
-                            )
-                    time.sleep(2.0)
-                    continue
-                tried_urls = []
-                for url in rtsp_urls(ip, rtsp_port, username, password, channel, rtsp_path):
-                    if not is_current_worker():
-                        break
-                    tried_urls.append(hide_secret(url, password))
-                    candidate = open_rtsp_capture(url, timeout_ms=5000)
-                    if candidate.isOpened():
-                        capture = candidate
-                        fps = capture.get(cv2.CAP_PROP_FPS)
-                        if fps <= 0 or fps > 60:
-                            fps = RECORDING_TARGET_FPS
-                        with shared_camera_lock:
-                            if shared_camera_state.get('worker_id') == worker_id:
-                                shared_camera_state.update(
-                                    {
-                                        'url': hide_secret(url, password),
-                                        'raw_url': url,
-                                        'fps': min(float(fps), RECORDING_TARGET_FPS),
-                                        'last_error': None,
-                                    }
-                                )
-                        break
-                    candidate.release()
-                if capture is None or not capture.isOpened():
-                    with shared_camera_lock:
-                        if shared_camera_state.get('worker_id') == worker_id:
-                            shared_camera_state['last_error'] = (
-                                'RTSP port is reachable but no video frame opened. '
-                                'Check username/password, channel, RTSP path, and camera RTSP settings. '
-                                f'Tried: {", ".join(tried_urls[:4])}'
-                            )
-                    time.sleep(0.25)
-                    continue
-
-            ok, frame = capture.read()
-            if not ok or frame is None:
-                capture.release()
-                capture = None
+            if not tcp_reachable(ip, rtsp_port, timeout=1.5):
                 with shared_camera_lock:
                     if shared_camera_state.get('worker_id') == worker_id:
-                        shared_camera_state['last_error'] = 'Camera frame read failed.'
-                time.sleep(0.1)
+                        shared_camera_state['last_error'] = (
+                            f'Camera RTSP port {ip}:{rtsp_port} is not reachable from the helper PC. '
+                            'Check camera IP, VLAN/subnet route, firewall, and RTSP service.'
+                        )
+                time.sleep(2.0)
                 continue
 
-            height, width = frame.shape[:2]
-            with shared_camera_lock:
-                if shared_camera_state.get('worker_id') == worker_id:
-                    shared_camera_state.update(
-                        {
-                            'frame': frame.copy(),
-                            'frame_at': time.monotonic(),
-                            'width': width,
-                            'height': height,
-                            'last_error': None,
-                        }
-                    )
+            ffmpeg_path = ffmpeg_executable()
+            urls = rtsp_urls(ip, rtsp_port, username, password, channel, live_preview_rtsp_path(rtsp_path, channel))
+            if not ffmpeg_path:
+                with shared_camera_lock:
+                    if shared_camera_state.get('worker_id') == worker_id:
+                        shared_camera_state['last_error'] = 'FFmpeg is required for low-latency live preview.'
+                time.sleep(2.0)
+                continue
+
+            opened_any = False
+            for url in urls:
+                if not is_current_worker() or shared_camera_stop_event.is_set():
+                    break
+                command = [
+                    ffmpeg_path,
+                    '-nostdin',
+                    '-hide_banner',
+                    '-loglevel',
+                    'error',
+                    '-rtsp_transport',
+                    LIVE_RTSP_TRANSPORT,
+                    '-fflags',
+                    '+genpts+nobuffer+discardcorrupt',
+                    '-flags',
+                    'low_delay',
+                    '-probesize',
+                    '1024',
+                    '-analyzeduration',
+                    '100000',
+                    '-max_delay',
+                    '500000',
+                    '-use_wallclock_as_timestamps',
+                    '1',
+                    '-i',
+                    url,
+                    '-an',
+                    '-vf',
+                    f'scale=min({LIVE_PREVIEW_MAX_WIDTH}\\,iw):-2,fps={LIVE_PREVIEW_TARGET_FPS:g}',
+                    '-q:v',
+                    str(max(2, min(31, 31 - LIVE_PREVIEW_JPEG_QUALITY // 4))),
+                    '-f',
+                    'image2pipe',
+                    '-vcodec',
+                    'mjpeg',
+                    'pipe:1',
+                ]
+                with shared_camera_lock:
+                    if shared_camera_state.get('worker_id') == worker_id:
+                        shared_camera_state.update(
+                            {
+                                'url': hide_secret(url, password),
+                                'raw_url': url,
+                                'fps': LIVE_PREVIEW_TARGET_FPS,
+                                'last_error': None,
+                            }
+                        )
+                process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                opened_any = True
+                buffer = bytearray()
+                last_frame_at = time.monotonic()
+                try:
+                    while process.stdout and process.poll() is None and not shared_camera_stop_event.is_set() and is_current_worker():
+                        chunk = os.read(process.stdout.fileno(), 4096)
+                        if not chunk:
+                            if time.monotonic() - last_frame_at > 8.0:
+                                break
+                            time.sleep(0.02)
+                            continue
+                        buffer.extend(chunk)
+                        while True:
+                            start = buffer.find(b'\xff\xd8')
+                            end = buffer.find(b'\xff\xd9', start + 2) if start >= 0 else -1
+                            if start < 0:
+                                if len(buffer) > 1024 * 1024:
+                                    del buffer[:-2]
+                                break
+                            if end < 0:
+                                if start:
+                                    del buffer[:start]
+                                break
+                            jpg = bytes(buffer[start:end + 2])
+                            del buffer[:end + 2]
+                            image = cv2.imdecode(np.frombuffer(jpg, dtype=np.uint8), cv2.IMREAD_COLOR)
+                            height, width = image.shape[:2] if image is not None else (None, None)
+                            last_frame_at = time.monotonic()
+                            with shared_camera_lock:
+                                if shared_camera_state.get('worker_id') == worker_id:
+                                    shared_camera_state.update(
+                                        {
+                                            'frame': image.copy() if image is not None else shared_camera_state.get('frame'),
+                                            'frame_jpeg': jpg,
+                                            'frame_at': last_frame_at,
+                                            'width': width or shared_camera_state.get('width'),
+                                            'height': height or shared_camera_state.get('height'),
+                                            'last_error': None,
+                                        }
+                                    )
+                        if time.monotonic() - last_frame_at > 8.0:
+                            break
+                finally:
+                    stop_process()
+                if not shared_camera_stop_event.is_set() and is_current_worker():
+                    with shared_camera_lock:
+                        if shared_camera_state.get('worker_id') == worker_id:
+                            shared_camera_state['last_error'] = 'Live preview reconnecting.'
+                if opened_any:
+                    time.sleep(0.25)
+                    break
     finally:
-        if capture is not None:
-            capture.release()
+        stop_process()
         with shared_camera_lock:
             if shared_camera_state.get('worker_id') == worker_id:
                 shared_camera_state['running'] = False
@@ -627,6 +758,7 @@ def ensure_shared_camera_worker(ip: str, rtsp_port: int, username: str, password
                 'url': None,
                 'raw_url': None,
                 'frame': None,
+                'frame_jpeg': None,
                 'frame_at': None,
                 'width': None,
                 'height': None,
@@ -642,17 +774,31 @@ def ensure_shared_camera_worker(ip: str, rtsp_port: int, username: str, password
     shared_camera_thread.start()
 
 
-def latest_shared_frame(max_age_seconds: float = 2.0):
+def latest_shared_frame(max_age_seconds: float = 2.0, include_frame_at: bool = False):
     with shared_camera_lock:
         frame = shared_camera_state.get('frame')
         frame_at = shared_camera_state.get('frame_at')
         url = shared_camera_state.get('url')
         fps = shared_camera_state.get('fps') or RECORDING_TARGET_FPS
     if frame is None or frame_at is None:
-        return None, None, fps
+        return (None, None, fps, frame_at) if include_frame_at else (None, None, fps)
     if time.monotonic() - float(frame_at) > max_age_seconds:
-        return None, url, fps
-    return frame.copy(), url, fps
+        return (None, url, fps, frame_at) if include_frame_at else (None, url, fps)
+    copied = frame.copy()
+    return (copied, url, fps, float(frame_at)) if include_frame_at else (copied, url, fps)
+
+
+def latest_shared_jpeg(max_age_seconds: float = 2.0, include_frame_at: bool = False):
+    with shared_camera_lock:
+        frame_jpeg = shared_camera_state.get('frame_jpeg')
+        frame_at = shared_camera_state.get('frame_at')
+        url = shared_camera_state.get('url')
+        fps = shared_camera_state.get('fps') or LIVE_PREVIEW_TARGET_FPS
+    if not frame_jpeg or frame_at is None:
+        return (None, None, fps, frame_at) if include_frame_at else (None, None, fps)
+    if time.monotonic() - float(frame_at) > max_age_seconds:
+        return (None, url, fps, frame_at) if include_frame_at else (None, url, fps)
+    return (bytes(frame_jpeg), url, fps, float(frame_at)) if include_frame_at else (bytes(frame_jpeg), url, fps)
 
 
 def latest_shared_rtsp_url(max_age_seconds: float = 10.0) -> str | None:
@@ -664,6 +810,35 @@ def latest_shared_rtsp_url(max_age_seconds: float = 10.0) -> str | None:
     if time.monotonic() - float(frame_at) > max_age_seconds:
         return None
     return raw_url
+
+
+def primary_rtsp_url(ip: str, rtsp_port: int, username: str, password: str, channel: int, rtsp_path: str | None = None) -> str:
+    return rtsp_urls(ip, rtsp_port, username, password, channel, rtsp_path)[0]
+
+
+def media_file_has_audio(path: Path) -> bool:
+    ffprobe_path = ffprobe_executable()
+    if not ffprobe_path or not path.exists():
+        return False
+    result = subprocess.run(
+        [
+            ffprobe_path,
+            '-v',
+            'error',
+            '-select_streams',
+            'a:0',
+            '-show_entries',
+            'stream=codec_type',
+            '-of',
+            'csv=p=0',
+            str(path),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        timeout=30,
+    )
+    return result.returncode == 0 and 'audio' in result.stdout.lower()
 
 
 def snapshot_urls(ip: str, port: int, channel_no: int) -> list[str]:
@@ -678,7 +853,7 @@ def snapshot_urls(ip: str, port: int, channel_no: int) -> list[str]:
     return urls
 
 
-def slmp_read_m_bit(host: str, port: int, device: str, address: int | str, timeout: float = 2.0) -> bool:
+def slmp_read_m_bit(host: str, port: int, device: str, address: int | str, timeout: float = 4.0) -> bool:
     device_codes = {
         'M': 0x90,
         'X': 0x9C,
@@ -751,7 +926,10 @@ def read_plc_addresses(request: PlcMonitorRequest, addresses: list[int | str], p
         try:
             values[key] = slmp_read_m_bit(request.plc_host, read_port, request.plc_device, address)
         except Exception as exc:
-            errors.append(f'{request.plc_host}:{read_port} {exc}')
+            try:
+                values[key] = slmp_read_m_bit(request.plc_host, read_port, request.plc_device, address)
+            except Exception as retry_exc:
+                errors.append(f'{request.plc_host}:{read_port} {retry_exc}')
     return values, errors
 
 
@@ -763,7 +941,7 @@ def read_plc_failover(request: PlcMonitorRequest) -> tuple[dict[str, bool], dict
     for port in plc_candidate_ports(request.plc_port):
         open_values, open_errors = read_plc_addresses(request, request.gate_open_addresses, port)
         if same_addresses:
-            close_values, close_errors = dict(open_values), list(open_errors)
+            close_values, close_errors = dict(open_values), []
         else:
             close_values, close_errors = read_plc_addresses(request, request.gate_close_addresses, port)
         errors = [*open_errors, *close_errors]
@@ -781,6 +959,10 @@ def tcp_reachable(host: str, port: int, timeout: float = 1.5) -> bool:
             return True
     except OSError:
         return False
+
+
+def signal_state_label(value: bool) -> str:
+    return 'ON' if bool(value) else 'OFF'
 
 
 def reset_stale_recording_start(max_age_seconds: float = RECORDING_START_STALE_SECONDS) -> bool:
@@ -836,9 +1018,6 @@ def hide_secret(text: str, password: str) -> str:
 
 def normalize_storage_root(root_text: str | Path | None) -> str:
     text = str(root_text or DEFAULT_STORAGE_ROOT).strip() or DEFAULT_STORAGE_ROOT
-    normalized = text.rstrip('\\/').lower()
-    if normalized == LEGACY_STORAGE_ROOT.lower():
-        return DEFAULT_STORAGE_ROOT
     return text
 
 
@@ -861,8 +1040,8 @@ def normalized_helper_settings(settings: HelperSettings) -> HelperSettings:
     data['username'] = str(data.get('username') or DEFAULT_CAMERA_USER)
     data['password'] = str(data.get('password') or DEFAULT_CAMERA_PASSWORD)
     data['rtsp_path'] = normalize_rtsp_path(data.get('rtsp_path'), max(int(data.get('channel') or 1), 1))
-    data['plc_device'] = str(data.get('plc_device') or 'X').strip().upper() or 'X'
-    data['plc_address'] = str(data.get('plc_address') or '4A').strip().upper() or '4A'
+    data['plc_device'] = str(data.get('plc_device') or 'M').strip().upper() or 'M'
+    data['plc_address'] = str(data.get('plc_address') or '810').strip().upper() or '810'
     data['storage_root'] = normalize_storage_root(data.get('storage_root') or DEFAULT_STORAGE_ROOT)
     data['plc_enabled'] = bool(data.get('plc_enabled', True))
     data['http_port'] = max(int(data.get('http_port') or 80), 1)
@@ -906,32 +1085,39 @@ def settings_to_plc_request(settings: HelperSettings) -> PlcMonitorRequest:
         plc_device=settings.plc_device,
         gate_open_addresses=[settings.plc_address],
         gate_close_addresses=[settings.plc_address],
-        gate_open_when=False,
-        gate_close_when=True,
+        gate_open_when=True,
+        gate_close_when=False,
         poll_seconds=1.0,
         max_record_seconds=settings.max_record_seconds,
     )
 
 
+AUTH_USERS = {
+    'ricosuper': {'password': 'Ricoautosuper@321', 'role': 'superadmin', 'username': 'Ricosuper'},
+    'ricoadmin': {'password': 'RicoAdmin@321', 'role': 'admin', 'username': 'Ricoadmin'},
+    'operator': {'password': 'operator', 'role': 'user', 'username': 'operator'},
+    'user': {'password': 'user', 'role': 'user', 'username': 'user'},
+}
+AUTH_SESSIONS: dict[str, str] = {}
+AUTH_LOCK = threading.Lock()
+
+
 def auth_session(username: str, password: str) -> dict:
     normalized_username = username.strip().lower()
-    if normalized_username == 'superadmin' and password == 'Super@123':
-        return {'username': 'superadmin', 'role': 'superadmin', 'token': 'superadmin-token'}
-    if normalized_username == 'admin' and password == 'Admin@123':
-        return {'username': 'admin', 'role': 'admin', 'token': 'admin-token'}
-    if normalized_username in {'user', 'operator'} and password in {'user123', 'operator123'}:
-        return {'username': 'user', 'role': 'user', 'token': 'user-token'}
+    account = AUTH_USERS.get(normalized_username)
+    if account and secrets.compare_digest(password, account['password']):
+        token = secrets.token_urlsafe(32)
+        with AUTH_LOCK:
+            AUTH_SESSIONS[token] = account['role']
+        return {'username': account['username'], 'role': account['role'], 'token': token}
     raise HTTPException(status_code=401, detail='Incorrect ID or password.')
 
 
 def role_from_token(token: str | None) -> str | None:
-    if token == 'superadmin-token':
-        return 'superadmin'
-    if token == 'admin-token':
-        return 'admin'
-    if token in {'user-token', 'operator-token'}:
-        return 'user'
-    return None
+    if not token:
+        return None
+    with AUTH_LOCK:
+        return AUTH_SESSIONS.get(token)
 
 
 def require_role(token: str | None, allowed_roles: set[str]) -> str:
@@ -1028,6 +1214,10 @@ def init_recording_index(storage_root: str | Path) -> Path:
                 reason_note TEXT,
                 reason_submitted_by TEXT,
                 reason_submitted_at TEXT,
+                transcript TEXT,
+                transcript_status TEXT,
+                transcript_error TEXT,
+                transcribed_at TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
@@ -1044,9 +1234,17 @@ def init_recording_index(storage_root: str | Path) -> Path:
             'reason_note': 'TEXT',
             'reason_submitted_by': 'TEXT',
             'reason_submitted_at': 'TEXT',
+            'transcript': 'TEXT',
+            'transcript_status': 'TEXT',
+            'transcript_error': 'TEXT',
+            'transcribed_at': 'TEXT',
         }.items():
             if column_name not in existing_columns:
-                connection.execute(f"ALTER TABLE recordings ADD COLUMN {column_name} {column_type}")
+                try:
+                    connection.execute(f"ALTER TABLE recordings ADD COLUMN {column_name} {column_type}")
+                except sqlite3.OperationalError as exc:
+                    if 'duplicate column name' not in str(exc).lower():
+                        raise
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS reason_options (
@@ -1124,6 +1322,10 @@ def index_event_only_record(
         'reason_note': None,
         'reason_submitted_by': None,
         'reason_submitted_at': None,
+        'transcript': None,
+        'transcript_status': None,
+        'transcript_error': None,
+        'transcribed_at': None,
         'created_at': now_text,
         'updated_at': now_text,
     }
@@ -1136,14 +1338,16 @@ def index_event_only_record(
                 started_at, ended_at, duration_seconds, frames, file_size, status,
                 error, source_url, recording_engine, audio, event_type, event_started_at,
                 event_ended_at, event_duration_seconds, reason_category, reason, reason_note,
-                reason_submitted_by, reason_submitted_at, created_at, updated_at
+                reason_submitted_by, reason_submitted_at, transcript, transcript_status,
+                transcript_error, transcribed_at, created_at, updated_at
             )
             VALUES (
                 :file_path, :file_name, :metadata_path, :storage_root, :camera_ip, :channel,
                 :started_at, :ended_at, :duration_seconds, :frames, :file_size, :status,
                 :error, :source_url, :recording_engine, :audio, :event_type, :event_started_at,
                 :event_ended_at, :event_duration_seconds, :reason_category, :reason, :reason_note,
-                :reason_submitted_by, :reason_submitted_at, :created_at, :updated_at
+                :reason_submitted_by, :reason_submitted_at, :transcript, :transcript_status,
+                :transcript_error, :transcribed_at, :created_at, :updated_at
             )
             ON CONFLICT(file_path) DO UPDATE SET
                 file_name = excluded.file_name,
@@ -1157,6 +1361,10 @@ def index_event_only_record(
                 reason_note = COALESCE(recordings.reason_note, excluded.reason_note),
                 reason_submitted_by = COALESCE(recordings.reason_submitted_by, excluded.reason_submitted_by),
                 reason_submitted_at = COALESCE(recordings.reason_submitted_at, excluded.reason_submitted_at),
+                transcript = COALESCE(excluded.transcript, recordings.transcript),
+                transcript_status = COALESCE(excluded.transcript_status, recordings.transcript_status),
+                transcript_error = excluded.transcript_error,
+                transcribed_at = COALESCE(excluded.transcribed_at, recordings.transcribed_at),
                 updated_at = excluded.updated_at
             """,
             record,
@@ -1209,6 +1417,10 @@ def index_recording_file(storage_root: str | Path, video_path: Path, metadata: d
         'reason_note': metadata.get('reason_note'),
         'reason_submitted_by': metadata.get('reason_submitted_by'),
         'reason_submitted_at': metadata.get('reason_submitted_at'),
+        'transcript': metadata.get('transcript'),
+        'transcript_status': metadata.get('transcript_status'),
+        'transcript_error': metadata.get('transcript_error'),
+        'transcribed_at': metadata.get('transcribed_at'),
         'created_at': now_text,
         'updated_at': now_text,
     }
@@ -1221,14 +1433,16 @@ def index_recording_file(storage_root: str | Path, video_path: Path, metadata: d
                 started_at, ended_at, duration_seconds, frames, file_size, status,
                 error, source_url, recording_engine, audio, event_type, event_started_at,
                 event_ended_at, event_duration_seconds, reason_category, reason, reason_note,
-                reason_submitted_by, reason_submitted_at, created_at, updated_at
+                reason_submitted_by, reason_submitted_at, transcript, transcript_status,
+                transcript_error, transcribed_at, created_at, updated_at
             )
             VALUES (
                 :file_path, :file_name, :metadata_path, :storage_root, :camera_ip, :channel,
                 :started_at, :ended_at, :duration_seconds, :frames, :file_size, :status,
                 :error, :source_url, :recording_engine, :audio, :event_type, :event_started_at,
                 :event_ended_at, :event_duration_seconds, :reason_category, :reason, :reason_note,
-                :reason_submitted_by, :reason_submitted_at, :created_at, :updated_at
+                :reason_submitted_by, :reason_submitted_at, :transcript, :transcript_status,
+                :transcript_error, :transcribed_at, :created_at, :updated_at
             )
             ON CONFLICT(file_path) DO UPDATE SET
                 file_name = excluded.file_name,
@@ -1255,6 +1469,10 @@ def index_recording_file(storage_root: str | Path, video_path: Path, metadata: d
                 reason_note = COALESCE(excluded.reason_note, recordings.reason_note),
                 reason_submitted_by = COALESCE(excluded.reason_submitted_by, recordings.reason_submitted_by),
                 reason_submitted_at = COALESCE(excluded.reason_submitted_at, recordings.reason_submitted_at),
+                transcript = COALESCE(excluded.transcript, recordings.transcript),
+                transcript_status = COALESCE(excluded.transcript_status, recordings.transcript_status),
+                transcript_error = excluded.transcript_error,
+                transcribed_at = COALESCE(excluded.transcribed_at, recordings.transcribed_at),
                 updated_at = excluded.updated_at
             """,
             record,
@@ -1316,6 +1534,220 @@ def apply_reason_to_metadata(file_path_text: str | None, reason_data: dict) -> N
     metadata.update(reason_data)
     if video_path.exists() or sidecar_path.exists():
         atomic_write_json(sidecar_path, metadata)
+
+
+def compact_transcript_reason(transcript: str) -> str:
+    text = ' '.join(str(transcript or '').split())
+    if len(text) <= TRANSCRIPTION_REASON_MAX_CHARS:
+        return text
+    return f'{text[: max(TRANSCRIPTION_REASON_MAX_CHARS - 3, 1)].rstrip()}...'
+
+
+def meaningful_transcript_text(transcript: str | None) -> bool:
+    text = ' '.join(str(transcript or '').split())
+    if not text:
+        return False
+    signal_chars = sum(1 for char in text if char.isalnum())
+    words = [word for word in text.replace('|', ' ').split() if any(char.isalnum() for char in word)]
+    if signal_chars < TRANSCRIPTION_MIN_REASON_CHARS:
+        return False
+    return len(words) >= TRANSCRIPTION_MIN_REASON_WORDS or signal_chars >= TRANSCRIPTION_MIN_REASON_CHARS * 2
+
+
+def write_transcription_metadata(
+    storage_root: str | Path,
+    video_path: Path,
+    transcript: str | None,
+    status: str,
+    error: str | None = None,
+) -> dict:
+    now_text = datetime.now().isoformat(timespec='seconds')
+    metadata = load_sidecar_metadata(video_path)
+    transcript_text = ' '.join(str(transcript or '').split()) or None
+    metadata.update(
+        {
+            'transcript': transcript_text,
+            'transcript_status': status,
+            'transcript_error': str(error or '').strip() or None,
+            'transcribed_at': now_text if status in {'completed', 'failed', 'skipped'} else None,
+        }
+    )
+
+    if (
+        TRANSCRIPTION_AUTO_REASON_ENABLED
+        and transcript_text
+        and meaningful_transcript_text(transcript_text)
+        and not str(metadata.get('reason') or '').strip()
+    ):
+        event_type = normalize_reason_category(metadata.get('event_type'))
+        metadata.update(
+            {
+                'reason_category': event_type,
+                'reason': compact_transcript_reason(transcript_text),
+                'reason_note': transcript_text if len(transcript_text) > TRANSCRIPTION_REASON_MAX_CHARS else None,
+                'reason_submitted_by': 'Voice Transcript',
+                'reason_submitted_at': now_text,
+            }
+        )
+
+    atomic_write_json(metadata_path_for(video_path), metadata)
+    record = index_recording_file(storage_root, video_path, metadata)
+
+    with threading.Lock():
+        if str(recording_state.get('path') or '') == str(video_path):
+            recording_state.update(
+                {
+                    'transcript': metadata.get('transcript'),
+                    'transcript_status': metadata.get('transcript_status'),
+                    'transcript_error': metadata.get('transcript_error'),
+                    'transcribed_at': metadata.get('transcribed_at'),
+                    'reason_category': metadata.get('reason_category'),
+                    'reason': metadata.get('reason'),
+                    'reason_note': metadata.get('reason_note'),
+                    'reason_submitted_by': metadata.get('reason_submitted_by'),
+                    'reason_submitted_at': metadata.get('reason_submitted_at'),
+                }
+            )
+
+    return record
+
+
+def extract_transcription_audio(video_path: Path) -> Path:
+    ffmpeg_path = ffmpeg_executable()
+    if not ffmpeg_path:
+        raise RuntimeError('FFmpeg not available for audio extraction.')
+    TRANSCRIPTION_TMP_DIR.mkdir(parents=True, exist_ok=True)
+    audio_path = TRANSCRIPTION_TMP_DIR / f'{video_path.stem}_{int(time.time())}.wav'
+    command = [
+        ffmpeg_path,
+        '-y',
+        '-i',
+        str(video_path),
+        '-vn',
+        '-ac',
+        '1',
+        '-ar',
+        '16000',
+    ]
+    if TRANSCRIPTION_AUDIO_FILTER:
+        command.extend(['-af', TRANSCRIPTION_AUDIO_FILTER])
+    if TRANSCRIPTION_AUDIO_SECONDS > 0:
+        command.extend(['-t', str(TRANSCRIPTION_AUDIO_SECONDS)])
+    command.append(str(audio_path))
+    result = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=180)
+    if result.returncode != 0 or not audio_path.exists() or audio_path.stat().st_size == 0:
+        message = result.stderr.decode(errors='ignore').strip() or 'Audio extraction failed.'
+        raise RuntimeError(message[-800:])
+    return audio_path
+
+
+def transcribe_with_command(audio_path: Path) -> str | None:
+    command_template = os.getenv('TRANSCRIPTION_COMMAND', '').strip()
+    if not command_template:
+        return None
+    command_text = command_template.format(audio_path=str(audio_path))
+    result = subprocess.run(
+        command_text,
+        shell=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=int(os.getenv('TRANSCRIPTION_COMMAND_TIMEOUT', '300')),
+    )
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout or 'Transcription command failed.').strip()[-800:])
+    return result.stdout.strip()
+
+
+def faster_whisper_available() -> bool:
+    if os.getenv('TRANSCRIPTION_USE_FASTER_WHISPER', '1').strip().lower() in {'0', 'false', 'no', 'off'}:
+        return False
+    try:
+        from faster_whisper import WhisperModel  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
+def transcribe_with_faster_whisper(audio_path: Path) -> str | None:
+    if not faster_whisper_available():
+        return None
+    from faster_whisper import WhisperModel
+
+    model_size = TRANSCRIPTION_MODEL or 'base'
+    device = os.getenv('TRANSCRIPTION_DEVICE', 'cpu')
+    compute_type = os.getenv('TRANSCRIPTION_COMPUTE_TYPE', 'int8')
+    model = WhisperModel(model_size, device=device, compute_type=compute_type)
+    segments, _ = model.transcribe(
+        str(audio_path),
+        language=TRANSCRIPTION_LANGUAGE,
+        initial_prompt=TRANSCRIPTION_INITIAL_PROMPT,
+        vad_filter=TRANSCRIPTION_VAD_FILTER,
+        beam_size=TRANSCRIPTION_BEAM_SIZE,
+        no_speech_threshold=TRANSCRIPTION_NO_SPEECH_THRESHOLD,
+    )
+    accepted_segments = []
+    for segment in segments:
+        text = str(segment.text or '').strip()
+        if not text:
+            continue
+        no_speech_prob = float(getattr(segment, 'no_speech_prob', 0.0) or 0.0)
+        avg_logprob = float(getattr(segment, 'avg_logprob', 0.0) or 0.0)
+        if no_speech_prob > TRANSCRIPTION_MAX_SEGMENT_NO_SPEECH_PROB:
+            continue
+        if avg_logprob < TRANSCRIPTION_MIN_AVG_LOGPROB:
+            continue
+        accepted_segments.append(text)
+    transcript = ' '.join(accepted_segments).strip()
+    return transcript if meaningful_transcript_text(transcript) else None
+
+
+def transcribe_recording_worker(storage_root: str | Path, video_path_text: str) -> None:
+    video_path = Path(video_path_text)
+    audio_path: Path | None = None
+    if not TRANSCRIPTION_ENABLED:
+        write_transcription_metadata(storage_root, video_path, None, 'skipped', 'Transcription disabled.')
+        return
+    try:
+        write_transcription_metadata(storage_root, video_path, None, 'processing')
+        audio_path = extract_transcription_audio(video_path)
+        transcript = transcribe_with_command(audio_path)
+        provider_name = 'custom command' if transcript is not None else None
+        if transcript is None:
+            provider_name = 'faster-whisper' if faster_whisper_available() else None
+            transcript = transcribe_with_faster_whisper(audio_path)
+        if not transcript:
+            message = (
+                'No operator speech detected in recording audio.'
+                if provider_name
+                else 'No local transcription provider configured. Set TRANSCRIPTION_COMMAND or install faster-whisper.'
+            )
+            write_transcription_metadata(
+                storage_root,
+                video_path,
+                None,
+                'skipped',
+                message,
+            )
+            return
+        write_transcription_metadata(storage_root, video_path, transcript, 'completed')
+    except Exception as exc:
+        write_transcription_metadata(storage_root, video_path, None, 'failed', str(exc))
+    finally:
+        if audio_path and audio_path.exists():
+            try:
+                audio_path.unlink()
+            except Exception:
+                pass
+
+
+def schedule_recording_transcription(storage_root: str | Path, video_path: Path) -> None:
+    thread = threading.Thread(
+        target=transcribe_recording_worker,
+        args=(str(storage_root), str(video_path)),
+        daemon=True,
+    )
+    thread.start()
 
 
 def update_recording_reason(request: RecordingReasonRequest) -> dict:
@@ -1473,6 +1905,10 @@ def active_recording_index_row(storage_root: str | Path) -> dict | None:
         'reason_note': recording_state.get('reason_note'),
         'reason_submitted_by': recording_state.get('reason_submitted_by'),
         'reason_submitted_at': recording_state.get('reason_submitted_at'),
+        'transcript': recording_state.get('transcript'),
+        'transcript_status': recording_state.get('transcript_status'),
+        'transcript_error': recording_state.get('transcript_error'),
+        'transcribed_at': recording_state.get('transcribed_at'),
         'created_at': started_at,
         'updated_at': now_text,
     }
@@ -2045,25 +2481,22 @@ def xlsx_cell_text(value: object) -> str:
 
 def mjpeg_frames(ip: str, rtsp_port: int, username: str, password: str, channel: int, rtsp_path: str | None = None):
     last_placeholder_at = 0.0
-    last_frame_jpeg = None
-    last_frame_at = 0.0
+    last_sent_frame_at = 0.0
     frame_delay = 1.0 / max(LIVE_PREVIEW_TARGET_FPS, 1.0)
+    next_frame_at = 0.0
     ensure_shared_camera_worker(ip, rtsp_port, username, password, channel, rtsp_path)
     while True:
-        frame, _, _ = latest_shared_frame(max_age_seconds=LIVE_PREVIEW_STALE_SECONDS)
-        if frame is None:
-            now = time.monotonic()
-            if last_frame_jpeg and now - last_frame_at <= LIVE_PREVIEW_STALE_SECONDS:
-                yield (
-                    b'--frame\r\n'
-                    b'Content-Type: image/jpeg\r\n\r\n'
-                    + last_frame_jpeg
-                    + b'\r\n'
-                )
-            elif now - last_placeholder_at >= 0.5:
+        now = time.monotonic()
+        if now < next_frame_at:
+            time.sleep(min(next_frame_at - now, frame_delay / 2))
+            continue
+        frame_jpeg, _, _, source_frame_at = latest_shared_jpeg(max_age_seconds=LIVE_PREVIEW_STALE_SECONDS, include_frame_at=True)
+        if frame_jpeg is None:
+            if now - last_placeholder_at >= 1.0:
                 last_placeholder_at = now
                 placeholder = placeholder_jpeg()
                 if placeholder:
+                    next_frame_at = time.monotonic() + frame_delay
                     yield (
                         b'--frame\r\n'
                         b'Content-Type: image/jpeg\r\n\r\n'
@@ -2072,17 +2505,17 @@ def mjpeg_frames(ip: str, rtsp_port: int, username: str, password: str, channel:
                     )
             time.sleep(frame_delay)
             continue
-        frame = prepare_live_preview_frame(frame)
-        ok, encoded = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 68])
-        if ok:
-            last_frame_jpeg = encoded.tobytes()
-            last_frame_at = time.monotonic()
-            yield (
-                b'--frame\r\n'
-                b'Content-Type: image/jpeg\r\n\r\n'
-                + last_frame_jpeg
-                + b'\r\n'
-            )
+        if source_frame_at and float(source_frame_at) <= last_sent_frame_at:
+            time.sleep(min(frame_delay / 3, 0.02))
+            continue
+        last_sent_frame_at = float(source_frame_at or now)
+        next_frame_at = time.monotonic() + frame_delay
+        yield (
+            b'--frame\r\n'
+            b'Content-Type: image/jpeg\r\n\r\n'
+            + frame_jpeg
+            + b'\r\n'
+        )
         time.sleep(frame_delay)
 
 
@@ -2094,10 +2527,8 @@ def record_camera_ffmpeg_worker(request: RecordingRequest) -> bool:
 
     started_at = datetime.now()
     _, output_path, final_path = build_recording_paths(request.storage_root, request.ip, request.channel, started_at)
-    candidate_urls = rtsp_urls(request.ip, request.rtsp_port, request.username, request.password, request.channel, request.rtsp_path)
     ensure_shared_camera_worker(request.ip, request.rtsp_port, request.username, request.password, request.channel, request.rtsp_path)
-    shared_url = latest_shared_rtsp_url()
-    working_url = shared_url or candidate_urls[0]
+    working_url = primary_rtsp_url(request.ip, request.rtsp_port, request.username, request.password, request.channel, request.rtsp_path)
     ffmpeg_success = False
     recording_state.update(
         {
@@ -2116,6 +2547,10 @@ def record_camera_ffmpeg_worker(request: RecordingRequest) -> bool:
             'event_started_at': recording_state.get('event_started_at') or started_at.isoformat(timespec='seconds'),
             'event_ended_at': None,
             'event_duration_seconds': None,
+            'transcript': None,
+            'transcript_status': None,
+            'transcript_error': None,
+            'transcribed_at': None,
             'auto_stopped': False,
         }
     )
@@ -2123,6 +2558,10 @@ def record_camera_ffmpeg_worker(request: RecordingRequest) -> bool:
     command = [
         ffmpeg_path,
         '-y',
+        '-fflags',
+        '+genpts',
+        '-use_wallclock_as_timestamps',
+        '1',
         '-rtsp_transport',
         'tcp',
         '-i',
@@ -2139,12 +2578,22 @@ def record_camera_ffmpeg_worker(request: RecordingRequest) -> bool:
         str(RECORDING_CRF),
         '-vf',
         f'scale=min({RECORDING_MAX_WIDTH}\\,iw):-2,fps={RECORDING_TARGET_FPS:g}',
+        '-fps_mode',
+        'cfr',
+        '-r',
+        f'{RECORDING_TARGET_FPS:g}',
+        '-video_track_timescale',
+        '90000',
         '-c:a',
         'aac',
         '-af',
         RECORDING_AUDIO_FILTER,
+        '-ar',
+        '44100',
         '-b:a',
         '96k',
+        '-max_muxing_queue_size',
+        '1024',
         '-movflags',
         '+faststart',
         str(output_path),
@@ -2202,6 +2651,10 @@ def record_camera_ffmpeg_worker(request: RecordingRequest) -> bool:
             'reason_note': recording_state.get('reason_note'),
             'reason_submitted_by': recording_state.get('reason_submitted_by'),
             'reason_submitted_at': recording_state.get('reason_submitted_at'),
+            'transcript': recording_state.get('transcript'),
+            'transcript_status': recording_state.get('transcript_status'),
+            'transcript_error': recording_state.get('transcript_error'),
+            'transcribed_at': recording_state.get('transcribed_at'),
         }
         if output_path.exists() and output_path.stat().st_size > 0 and not recording_state.get('error'):
             end_suffix = ended_at.strftime('%H%M%S')
@@ -2209,6 +2662,8 @@ def record_camera_ffmpeg_worker(request: RecordingRequest) -> bool:
             if target_path.exists():
                 target_path = final_path.with_name(f'{final_path.stem}_to_{end_suffix}_{int(time.time())}{final_path.suffix}')
             output_path.replace(target_path)
+            has_audio = media_file_has_audio(target_path)
+            metadata['audio'] = 'enabled' if has_audio else 'disabled; no audio stream in camera output'
             metadata['file_name'] = target_path.name
             metadata['relative_path_hint'] = str(target_path)
             sidecar_path = metadata_path_for(target_path)
@@ -2216,6 +2671,17 @@ def record_camera_ffmpeg_worker(request: RecordingRequest) -> bool:
             index_recording_file(request.storage_root, target_path, metadata)
             recording_state['path'] = str(target_path)
             recording_state['metadata_path'] = str(sidecar_path)
+            recording_state['audio'] = metadata['audio']
+            if has_audio:
+                schedule_recording_transcription(request.storage_root, target_path)
+            else:
+                write_transcription_metadata(
+                    request.storage_root,
+                    target_path,
+                    None,
+                    'skipped',
+                    'No audio stream found in recording.',
+                )
             ffmpeg_success = True
         recording_state['ended_at'] = ended_at.isoformat(timespec='seconds')
         recording_state['duration_seconds'] = round(duration_seconds, 2)
@@ -2325,6 +2791,10 @@ def record_camera_worker(request: RecordingRequest):
                 'event_type': request.event_type,
                 'event_started_at': recording_state.get('event_started_at') or started_at.isoformat(timespec='seconds'),
                 'event_ended_at': None,
+                'transcript': None,
+                'transcript_status': None,
+                'transcript_error': None,
+                'transcribed_at': None,
                 'event_duration_seconds': None,
                 'auto_stopped': False,
             }
@@ -2410,6 +2880,10 @@ def record_camera_worker(request: RecordingRequest):
             'reason_note': recording_state.get('reason_note'),
             'reason_submitted_by': recording_state.get('reason_submitted_by'),
             'reason_submitted_at': recording_state.get('reason_submitted_at'),
+            'transcript': recording_state.get('transcript'),
+            'transcript_status': recording_state.get('transcript_status'),
+            'transcript_error': recording_state.get('transcript_error'),
+            'transcribed_at': recording_state.get('transcribed_at'),
         }
         if output_path and output_path.exists():
             target_path = final_path or output_path
@@ -2426,6 +2900,8 @@ def record_camera_worker(request: RecordingRequest):
             index_recording_file(request.storage_root, target_path, metadata)
             recording_state['path'] = str(target_path)
             recording_state['metadata_path'] = str(sidecar_path)
+            if metadata.get('audio') == 'enabled':
+                schedule_recording_transcription(request.storage_root, target_path)
         recording_state['ended_at'] = ended_at.isoformat(timespec='seconds')
         recording_state['duration_seconds'] = round(duration_seconds, 2)
         recording_state['running'] = False
@@ -2518,7 +2994,7 @@ def auth_login(request: LoginRequest):
 
 @app.post('/auth/elevate')
 def auth_elevate(request: LoginRequest):
-    if request.username.strip().lower() != 'admin':
+    if request.username.strip().lower() != 'ricoadmin':
         raise HTTPException(status_code=401, detail='Incorrect ID or password.')
     return auth_session(request.username, request.password)
 
@@ -2628,6 +3104,40 @@ def live_frame(request: CameraRequest):
         finally:
             capture.release()
     raise HTTPException(status_code=400, detail='; '.join(errors[-3:]))
+
+
+@app.get('/live.jpg')
+def live_jpeg(
+    ip: str,
+    rtsp_port: int = 554,
+    username: str = 'admin',
+    password: str = '',
+    channel: int = 1,
+    rtsp_path: str | None = None,
+):
+    ensure_shared_camera_worker(ip, rtsp_port, username, password, channel, rtsp_path)
+    frame_jpeg, _, _, frame_at = latest_shared_jpeg(max_age_seconds=8.0, include_frame_at=True)
+    if frame_jpeg is None:
+        content = placeholder_jpeg('Camera reconnecting')
+        headers = {
+            'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+            'Pragma': 'no-cache',
+            'X-Live-Frame-Age': '',
+        }
+        return Response(content=content, media_type='image/jpeg', headers=headers, status_code=200)
+
+    age = max(time.monotonic() - float(frame_at), 0.0) if frame_at else 0.0
+    return Response(
+        content=frame_jpeg,
+        media_type='image/jpeg',
+        headers={
+            'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+            'Pragma': 'no-cache',
+            'X-Live-Frame-Age': f'{age:.3f}',
+        },
+    )
+
+
 @app.get('/mjpeg')
 def mjpeg_stream(
     ip: str,
@@ -2640,7 +3150,128 @@ def mjpeg_stream(
     return StreamingResponse(
         mjpeg_frames(ip, rtsp_port, username, password, channel, rtsp_path),
         media_type='multipart/x-mixed-replace; boundary=frame',
+        headers={
+            'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+            'Pragma': 'no-cache',
+            'X-Accel-Buffering': 'no',
+        },
     )
+
+
+def live_video_response(
+    ip: str,
+    rtsp_port: int,
+    username: str,
+    password: str,
+    channel: int,
+    rtsp_path: str | None = None,
+):
+    ffmpeg_path = ffmpeg_executable()
+    if not ffmpeg_path:
+        raise HTTPException(status_code=503, detail='FFmpeg is required for smooth live video.')
+
+    ensure_shared_camera_worker(ip, rtsp_port, username, password, channel, rtsp_path)
+    working_url = primary_rtsp_url(ip, rtsp_port, username, password, channel, rtsp_path)
+    keyframe_seconds = 2
+    gop_size = max(int(LIVE_VIDEO_TARGET_FPS * keyframe_seconds), 1)
+    command = [
+        ffmpeg_path,
+        '-nostdin',
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        '-fflags',
+        '+genpts+nobuffer',
+        '-flags',
+        'low_delay',
+        '-use_wallclock_as_timestamps',
+        '1',
+        '-rtsp_transport',
+        LIVE_RTSP_TRANSPORT,
+        '-i',
+        working_url,
+        '-map',
+        '0:v:0',
+        '-map',
+        '0:a?',
+        '-c:v',
+        'libx264',
+        '-preset',
+        'ultrafast',
+        '-tune',
+        'zerolatency',
+        '-pix_fmt',
+        'yuv420p',
+        '-vf',
+        f'scale=min({LIVE_VIDEO_MAX_WIDTH}\\,iw):-2,fps={LIVE_VIDEO_TARGET_FPS:g}',
+        '-b:v',
+        LIVE_VIDEO_BITRATE,
+        '-maxrate',
+        LIVE_VIDEO_MAXRATE,
+        '-bufsize',
+        LIVE_VIDEO_BUFSIZE,
+        '-g',
+        str(gop_size),
+        '-keyint_min',
+        str(gop_size),
+        '-sc_threshold',
+        '0',
+        '-c:a',
+        'aac',
+        '-af',
+        LIVE_AUDIO_FILTER,
+        '-ac',
+        '1',
+        '-ar',
+        '44100',
+        '-b:a',
+        '64k',
+        '-movflags',
+        'frag_keyframe+empty_moov+default_base_moof',
+        '-f',
+        'mp4',
+        'pipe:1',
+    ]
+
+    def stream_video():
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        try:
+            if not process.stdout:
+                return
+            while True:
+                chunk = process.stdout.read(16384)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+
+    return StreamingResponse(
+        stream_video(),
+        media_type='video/mp4',
+        headers={
+            'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+            'Pragma': 'no-cache',
+            'X-Accel-Buffering': 'no',
+        },
+    )
+
+
+@app.get('/live.mp4')
+def live_video_stream(
+    ip: str,
+    rtsp_port: int = 554,
+    username: str = 'admin',
+    password: str = '',
+    channel: int = 1,
+    rtsp_path: str | None = None,
+):
+    return live_video_response(ip, rtsp_port, username, password, channel, rtsp_path)
 
 
 def live_audio_response(
@@ -2656,7 +3287,7 @@ def live_audio_response(
         raise HTTPException(status_code=503, detail='FFmpeg is required for live audio.')
 
     ensure_shared_camera_worker(ip, rtsp_port, username, password, channel, rtsp_path)
-    working_url = latest_shared_rtsp_url() or rtsp_urls(ip, rtsp_port, username, password, channel, rtsp_path)[0]
+    working_url = primary_rtsp_url(ip, rtsp_port, username, password, channel, rtsp_path)
     command = [
         ffmpeg_path,
         '-nostdin',
@@ -2664,16 +3295,18 @@ def live_audio_response(
         '-loglevel',
         'error',
         '-fflags',
-        'nobuffer',
+        '+genpts+nobuffer',
         '-flags',
         'low_delay',
+        '-use_wallclock_as_timestamps',
+        '1',
         '-rtsp_transport',
-        'tcp',
+        LIVE_RTSP_TRANSPORT,
         '-i',
         working_url,
         '-vn',
         '-af',
-        RECORDING_AUDIO_FILTER,
+        LIVE_AUDIO_FILTER,
         '-ac',
         '1',
         '-ar',
@@ -2693,7 +3326,7 @@ def live_audio_response(
             if not process.stdout:
                 return
             while True:
-                chunk = process.stdout.read(4096)
+                chunk = process.stdout.read(1024)
                 if not chunk:
                     break
                 yield chunk
@@ -2705,7 +3338,11 @@ def live_audio_response(
                 except subprocess.TimeoutExpired:
                     process.kill()
 
-    return StreamingResponse(stream_audio(), media_type='audio/mpeg')
+    return StreamingResponse(
+        stream_audio(),
+        media_type='audio/mpeg',
+        headers={'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no'},
+    )
 
 
 @app.get('/audio.mp3')
@@ -2741,6 +3378,16 @@ def recording_status():
         'crf': RECORDING_CRF,
         'profile': 'storage-balanced',
         'audio_filter': RECORDING_AUDIO_FILTER,
+    }
+    status['live_settings'] = {
+        'preview_max_width': LIVE_PREVIEW_MAX_WIDTH,
+        'preview_target_fps': LIVE_PREVIEW_TARGET_FPS,
+        'preview_jpeg_quality': LIVE_PREVIEW_JPEG_QUALITY,
+        'video_max_width': LIVE_VIDEO_MAX_WIDTH,
+        'video_target_fps': LIVE_VIDEO_TARGET_FPS,
+        'video_bitrate': LIVE_VIDEO_BITRATE,
+        'rtsp_transport': LIVE_RTSP_TRANSPORT,
+        'audio_filter': LIVE_AUDIO_FILTER,
     }
     status['ffmpeg_available'] = bool(ffmpeg_executable())
     with shared_camera_lock:
@@ -2790,6 +3437,10 @@ def start_recording_internal(request: RecordingRequest):
             'reason_note': None,
             'reason_submitted_by': None,
             'reason_submitted_at': None,
+            'transcript': None,
+            'transcript_status': None,
+            'transcript_error': None,
+            'transcribed_at': None,
             'auto_stopped': False,
         }
     )
@@ -2887,14 +3538,20 @@ def plc_monitor_worker(request: PlcMonitorRequest):
                 plc_monitor_state['plc_port'] = active_plc_port
 
             plc_read_failed = bool(errors) and not open_values and not close_values
+            previous_open_values = dict(plc_monitor_state.get('open_values') or {})
+            previous_close_values = dict(plc_monitor_state.get('close_values') or {})
             active_gate_event = bool(gate_event_started_at) or (
                 recording_state.get('running')
                 and recording_state.get('event_type') in {'minor_stoppage', 'breakdown'}
             )
             if plc_read_failed:
+                failure_count = int(plc_monitor_state.get('consecutive_read_failures') or 0) + 1
+                open_values = previous_open_values
+                close_values = previous_close_values
                 gate_open = bool(previous_open) or active_gate_event
                 gate_close = False
             else:
+                failure_count = 0
                 gate_open = any(value == bool(request.gate_open_when) for value in open_values.values())
                 gate_close = any(value == bool(request.gate_close_when) for value in close_values.values())
             now = datetime.now()
@@ -2944,7 +3601,17 @@ def plc_monitor_worker(request: PlcMonitorRequest):
                     'current_event_started_at': current_event_started_at,
                     'current_event_duration_seconds': current_event_duration_seconds,
                     'last_read_at': datetime.now().isoformat(timespec='seconds'),
-                    'last_error': '; '.join(errors[-3:]) if errors else None,
+                    'last_successful_read_at': (
+                        datetime.now().isoformat(timespec='seconds')
+                        if not plc_read_failed
+                        else plc_monitor_state.get('last_successful_read_at')
+                    ),
+                    'consecutive_read_failures': failure_count,
+                    'last_error': (
+                        '; '.join(errors[-3:])
+                        if plc_read_failed and failure_count >= 3
+                        else None
+                    ),
                     'open_values': open_values,
                     'close_values': close_values,
                     'plc_port': active_plc_port or plc_monitor_state.get('plc_port') or request.plc_port,
@@ -2971,9 +3638,15 @@ def plc_monitor_worker(request: PlcMonitorRequest):
                 recording_state['event_started_at'] = gate_event_started_at.isoformat(timespec='seconds')
                 plc_monitor_state['current_event_type'] = 'minor_stoppage'
                 plc_monitor_state['current_event_started_at'] = gate_event_started_at.isoformat(timespec='seconds')
-                plc_monitor_state['last_action'] = f'Auto recording started on {request.plc_device.upper()} signal OFF at {datetime.now().isoformat(timespec="seconds")}'
+                plc_monitor_state['last_action'] = (
+                    f'Auto recording started on {request.plc_device.upper()} signal '
+                    f'{signal_state_label(request.gate_open_when)} at {datetime.now().isoformat(timespec="seconds")}'
+                )
             elif gate_open and not request.capture_video and (previous_open is False or previous_open is None):
-                plc_monitor_state['last_action'] = f'Timing-only event started on {request.plc_device.upper()} signal OFF at {datetime.now().isoformat(timespec="seconds")}'
+                plc_monitor_state['last_action'] = (
+                    f'Timing-only event started on {request.plc_device.upper()} signal '
+                    f'{signal_state_label(request.gate_open_when)} at {datetime.now().isoformat(timespec="seconds")}'
+                )
 
             recording_age = current_recording_age_seconds()
 
@@ -3008,7 +3681,10 @@ def plc_monitor_worker(request: PlcMonitorRequest):
                     stop_recording_internal()
                     label = 'Breakdown' if close_event_type == 'breakdown' else 'Minor stoppage'
                     if recording_state.get('metadata_path') and not recording_state.get('error'):
-                        plc_monitor_state['last_action'] = f'{label} saved on {request.plc_device.upper()} signal ON at {closed_at.isoformat(timespec="seconds")}'
+                        plc_monitor_state['last_action'] = (
+                            f'{label} saved on {request.plc_device.upper()} signal '
+                            f'{signal_state_label(request.gate_close_when)} at {closed_at.isoformat(timespec="seconds")}'
+                        )
                     elif gate_event_started_at:
                         index_event_only_record(
                             request.storage_root,
@@ -3018,7 +3694,10 @@ def plc_monitor_worker(request: PlcMonitorRequest):
                             gate_event_started_at,
                             closed_at,
                         )
-                        plc_monitor_state['last_action'] = f'{label} timing saved after video failure on {request.plc_device.upper()} signal ON at {closed_at.isoformat(timespec="seconds")}'
+                        plc_monitor_state['last_action'] = (
+                            f'{label} timing saved after video failure on {request.plc_device.upper()} signal '
+                            f'{signal_state_label(request.gate_close_when)} at {closed_at.isoformat(timespec="seconds")}'
+                        )
                 elif gate_event_started_at and (not request.capture_video or not recording_state.get('metadata_path')):
                     index_event_only_record(
                         request.storage_root,
@@ -3034,7 +3713,10 @@ def plc_monitor_worker(request: PlcMonitorRequest):
                     recording_state['event_duration_seconds'] = event_duration_seconds
                     label = 'Breakdown' if close_event_type == 'breakdown' else 'Minor stoppage'
                     reason = 'without video' if not request.capture_video else 'after video failure'
-                    plc_monitor_state['last_action'] = f'{label} timing saved {reason} on {request.plc_device.upper()} signal ON at {closed_at.isoformat(timespec="seconds")}'
+                    plc_monitor_state['last_action'] = (
+                        f'{label} timing saved {reason} on {request.plc_device.upper()} signal '
+                        f'{signal_state_label(request.gate_close_when)} at {closed_at.isoformat(timespec="seconds")}'
+                    )
                 elif breakdown_marked:
                     update_recording_event_metadata(
                         request.storage_root,
@@ -3047,7 +3729,10 @@ def plc_monitor_worker(request: PlcMonitorRequest):
                     recording_state['event_started_at'] = gate_event_started_at.isoformat(timespec='seconds') if gate_event_started_at else None
                     recording_state['event_ended_at'] = closed_at.isoformat(timespec='seconds')
                     recording_state['event_duration_seconds'] = event_duration_seconds
-                    plc_monitor_state['last_action'] = f'Breakdown closed on {request.plc_device.upper()} signal ON at {closed_at.isoformat(timespec="seconds")}'
+                    plc_monitor_state['last_action'] = (
+                        f'Breakdown closed on {request.plc_device.upper()} signal '
+                        f'{signal_state_label(request.gate_close_when)} at {closed_at.isoformat(timespec="seconds")}'
+                    )
                 gate_event_started_at = None
                 breakdown_marked = False
                 gate_cycle_maxed_out = False
@@ -3317,9 +4002,16 @@ def ensure_auto_plc_monitor_running():
 def auto_start_plc_monitor():
     settings = load_helper_settings()
     plc_monitor_state['enabled'] = bool(settings.plc_enabled)
-    ensure_shared_camera_worker(settings.ip, settings.rtsp_port, settings.username, settings.password, settings.channel, settings.rtsp_path)
-    if settings.plc_enabled:
-        ensure_auto_plc_monitor_running()
+
+    def start_background_services():
+        try:
+            ensure_shared_camera_worker(settings.ip, settings.rtsp_port, settings.username, settings.password, settings.channel, settings.rtsp_path)
+            if settings.plc_enabled:
+                ensure_auto_plc_monitor_running()
+        except Exception as exc:
+            plc_monitor_state['last_error'] = f'Background startup failed: {exc}'
+
+    threading.Thread(target=start_background_services, daemon=True).start()
 
 
 @app.post('/recording-index/scan')
@@ -3699,4 +4391,4 @@ async def camera_asset_proxy(request: Request, asset_path: str = ''):
 
 
 if __name__ == '__main__':
-    uvicorn.run(app, host='0.0.0.0', port=8010, reload=False, log_config=None)
+    uvicorn.run(app, host='127.0.0.1', port=8010, reload=False, log_config=None)

@@ -461,36 +461,21 @@ function Icon({ name }: { name: IconName }) {
 }
 
 function Login({ onLogin }: { onLogin: (session: AuthSession) => void }) {
-  const [username, setUsername] = useState('admin');
-  const [password, setPassword] = useState('');
+  const [username, setUsername] = useState('operator');
+  const [password, setPassword] = useState('operator');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     const normalizedUsername = username.trim().toLowerCase();
-    const loginUsername = normalizedUsername === 'operaor' || normalizedUsername === 'operator' ? 'user' : normalizedUsername;
+    const loginUsername = normalizedUsername === 'operaor' ? 'operator' : normalizedUsername;
     try {
       const session = await authLogin(loginUsername, password);
       onLogin(session);
       return;
     } catch {
-      if (loginUsername === 'superadmin' && password === 'Super@123') {
-        onLogin({ username: 'superadmin', role: 'superadmin', token: 'superadmin-token' });
-        return;
-      }
-      if (loginUsername === 'admin' && password === 'Admin@123') {
-        onLogin({ username: 'admin', role: 'admin', token: 'admin-token' });
-        return;
-      }
-      if (loginUsername === 'user' && password === 'user123') {
-        onLogin({ username: 'user', role: 'user', token: 'user-token' });
-        return;
-      }
-      if (loginUsername === 'user' && password === 'operator123') {
-        onLogin({ username: 'user', role: 'user', token: 'user-token' });
-        return;
-      }
+      // Mock logins removed for security. Only backend AUTH_USERS are allowed.
     }
     setError('Invalid username or password.');
   }
@@ -1160,6 +1145,7 @@ function SavedPage({
   userRole: UserRole;
 }) {
   const [page, setPage] = useState(1);
+  const [expandedRowPaths, setExpandedRowPaths] = useState<Record<string, boolean>>({});
   const [datePreset, setDatePreset] = useState<ReportDatePreset>('today');
   const [fromDate, setFromDate] = useState(todayInputValue());
   const [toDate, setToDate] = useState(todayInputValue());
@@ -1527,10 +1513,15 @@ function SavedPage({
                 <span className={record.event_type === 'breakdown' ? 'status-badge bad' : 'status-badge neutral'}>{eventTypeLabel(record.event_type)}</span>
                 <button
                   type="button"
-                  className={record.reason ? 'reason-chip saved' : 'reason-chip pending'}
-                  disabled
+                  className={`${record.reason ? 'reason-chip saved' : 'reason-chip pending'} ${expandedRowPaths[record.file_path] ? 'expanded' : ''}`}
+                  disabled={!record.reason}
                   title={record.reason || 'Reason not required'}
-                  onClick={() => onEditReason(record)}
+                  onClick={() => {
+                    setExpandedRowPaths(prev => ({
+                      ...prev,
+                      [record.file_path]: !prev[record.file_path]
+                    }));
+                  }}
                 >
                   {record.reason || 'Pending reason'}
                 </button>
@@ -1891,20 +1882,7 @@ export function App() {
       action?.();
       return;
     } catch {
-      if (adminPromptPassword === 'Admin@123') {
-        localStorage.setItem('mer_role', 'admin');
-        localStorage.setItem('mer_token', 'admin-token');
-        setAuthToken('admin-token');
-        setUserRole('admin');
-        setSettingsMessageTone('good');
-        setSettingsMessage('Admin access unlocked.');
-        setAdminPromptOpen(false);
-        setAdminPromptPassword('');
-        const action = pendingAdminActionRef.current;
-        pendingAdminActionRef.current = null;
-        action?.();
-        return;
-      }
+      // Mock elevation removed for security. Only backend elevation is allowed.
     }
     setAdminPromptError('Incorrect ID or password.');
   }

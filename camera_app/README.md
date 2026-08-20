@@ -8,6 +8,7 @@ Production-floor camera recording system for CP Plus IP cameras. The app uses a 
 - Manual start/stop PC recording
 - Automatic PLC gate-triggered recording
 - Local recording archive with metadata and SQLite index
+- Background voice-to-text transcription after recordings complete
 - React operator console
 - FastAPI helper API
 
@@ -42,6 +43,12 @@ cd ..
 ```
 
 Copy `.env.example` to `.env` and update values if needed.
+
+Voice-to-text is enabled after each successful FFmpeg recording and uses local-only
+providers. Install `faster-whisper` for offline transcription, or set
+`TRANSCRIPTION_COMMAND` to a local command that prints transcript text to stdout.
+If no local provider is configured, recording still completes normally and
+transcription is marked skipped. No paid cloud API is used.
 
 ## Run
 

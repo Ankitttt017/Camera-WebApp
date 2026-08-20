@@ -88,4 +88,11 @@ tmp_verify_report/
 *.bin
 server_export_*
 plc_gate_connection_test.py
-,
+
+# Large Files & Local Assets Exclusions
+camera_app/model_cache/
+camera_app/tools/
+camera_app/transcription_tmp/
+*.wav
+*.mp3
+
