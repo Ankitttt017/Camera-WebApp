@@ -26,7 +26,7 @@ Start-Sleep -Seconds 1
 Start-Process `
     -WindowStyle Hidden `
     -FilePath python `
-    -ArgumentList @('-m', 'uvicorn', 'backend.cpplus_helper:app', '--host', '127.0.0.1', '--port', '8010') `
+    -ArgumentList @('-m', 'uvicorn', 'backend.cpplus_helper:app', '--host', '0.0.0.0', '--port', '8010') `
     -WorkingDirectory $AppRoot
 
 Start-Sleep -Seconds 4
