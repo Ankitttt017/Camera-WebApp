@@ -414,7 +414,7 @@ function friendlyError(exc: unknown) {
     return `Helper API is not running on ${API_BASE}. Start the helper and refresh.`;
   }
   if (message.includes('RTSP') || message.includes('Unauthorized') || message.includes('stream open')) {
-    return 'Camera stream connect nahi ho pa raha. Live preview chal raha ho to ek moment wait karke retry karein; camera login/RTSP access bhi check karein.';
+    return 'Unable to connect to camera stream. If live preview is active, wait a moment and retry; also check camera login/RTSP settings.';
   }
   return message;
 }
@@ -422,15 +422,16 @@ function friendlyError(exc: unknown) {
 function friendlyRecordingError(message?: string | null) {
   if (!message) return '';
   if (message.includes('RTSP') || message.includes('Unauthorized') || message.includes('stream open')) {
-    return 'Recording stream connect nahi ho pa raha. Camera access check karke retry karein.';
+    return 'Unable to connect to recording stream. Check camera access settings and retry.';
   }
-  return 'Recording complete nahi ho payi. Settings aur camera connection check karein.';
+  return 'Recording could not be completed. Check settings and camera connection.';
 }
 
-type IconName = 'live' | 'archive' | 'record' | 'settings' | 'logout' | 'camera' | 'maximize' | 'minimize' | 'fit' | 'audio' | 'storage' | 'activity' | 'power' | 'info' | 'play' | 'pause' | 'stop' | 'chevron' | 'eye' | 'eyeOff' | 'lock';
+type IconName = 'live' | 'archive' | 'record' | 'settings' | 'logout' | 'camera' | 'maximize' | 'minimize' | 'fit' | 'audio' | 'storage' | 'activity' | 'power' | 'info' | 'play' | 'pause' | 'stop' | 'chevron' | 'eye' | 'eyeOff' | 'lock' | 'close';
 
 function Icon({ name }: { name: IconName }) {
   const paths: Record<IconName, string> = {
+    close: 'M18 6L6 18M6 6l12 12',
     live: 'M4 6.5h16v11H4z M9 20h6 M12 17.5V20',
     archive: 'M5 7h14v12H5z M8 4h8v3 M8 11h8',
     record: 'M12 7a5 5 0 1 0 0 10a5 5 0 0 0 0-10z',
@@ -438,7 +439,7 @@ function Icon({ name }: { name: IconName }) {
     logout: 'M10 5H5v14h5 M14 8l4 4-4 4 M8 12h10',
     camera: 'M4 7h11v10H4z M15 10l5-3v10l-5-3z',
     maximize: 'M5 10V5h5 M14 5h5v5 M19 14v5h-5 M10 19H5v-5',
-    minimize: 'M6 12h12',
+    minimize: 'M10 4v6h-6 M14 4v6h6 M10 20v-6h-6 M14 20v-6h6',
     fit: 'M8 5H5v3 M16 5h3v3 M19 16v3h-3 M8 19H5v-3',
     audio: 'M5 10v4h3l4 3V7L8 10z M16 9a4 4 0 0 1 0 6',
     storage: 'M5 6c0-1.1 3.1-2 7-2s7 .9 7 2-3.1 2-7 2-7-.9-7-2z M5 6v6c0 1.1 3.1 2 7 2s7-.9 7-2V6 M5 12v6c0 1.1 3.1 2 7 2s7-.9 7-2v-6',
@@ -707,21 +708,14 @@ function Sidebar({
 
   return (
     <aside className={collapsed ? 'sidebar collapsed' : 'sidebar'}>
-      <button className="sidebar-toggle" type="button" title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} onClick={onToggleSidebar}>
-        <Icon name="chevron" />
-      </button>
       <div className="sidebar-brand">
         <div className="brand-lockup" aria-label="RICO">
-          <img className="sidebar-logo-img" src={RICO_LOGO_SRC} alt="RICO" />
-          <div className="rico-wordmark">RICO</div>
+          <div className="rico-wordmark full-logo">RICO</div>
+          <div className="rico-wordmark mini-logo">R</div>
         </div>
       </div>
 
-      <div className="stream-pill">
-        <span aria-hidden="true"></span>
-        <strong>{recording.running ? 'Recording now' : recording.shared_camera?.has_frame ? 'Stream active' : 'Stream offline'}</strong>
-        <small>CH {settings.channel}</small>
-      </div>
+
 
       <nav>
         <span className="nav-label">Monitor</span>
@@ -791,8 +785,7 @@ function Sidebar({
         {canOperate ? <details className="settings-menu">
           <summary>
             <span className="nav-icon"><Icon name="settings" /></span>
-            <span>{isSuperadmin ? 'Settings' : 'System Status'}</span>
-            <span className="settings-admin-lock"><Icon name="lock" /> {isSuperadmin ? 'Superadmin' : 'Admin'}</span>
+            <span>Settings</span>
             <Icon name="chevron" />
           </summary>
           <div className="dropdown-body">
@@ -942,13 +935,7 @@ function Sidebar({
         )}
       </nav>
 
-      <div className="sidebar-footer">
-        <div>
-          <strong>{isSuperadmin ? 'Superadmin' : isAdmin ? 'Admin' : 'User'}</strong>
-          <span>{isSuperadmin ? 'System config' : isAdmin ? 'Operations access' : 'View only'}</span>
-        </div>
-        <button className="logout-button" onClick={onLogout}><Icon name="logout" /> Logout</button>
-      </div>
+      {/* Sidebar footer removed as requested */}
     </aside>
   );
 }
@@ -972,9 +959,10 @@ function TopBar({
   const recordingClass = recording.running ? 'record-chip active' : eventActive ? 'record-chip event' : 'record-chip';
   return (
     <div className="topbar">
-      <div>
-        <strong>{APP_TITLE}</strong>
-        <span>{page === 'live' ? 'Live View' : 'Event Report'}</span>
+      <div className="topbar-title-lockup">
+        <h1 className="topbar-main-title">UBE 850 T-2</h1>
+        <span className="topbar-machine-badge">Camera Monitor</span>
+        <span className="topbar-page-label">{page === 'live' ? 'Live View' : 'Event Report'}</span>
       </div>
       <div className="topbar-actions">
         <span className={displayOnline ? 'topbar-cta' : 'topbar-cta off'}><i></i> {displayOnline ? 'Stream on' : 'Stream off'}</span>
@@ -1009,6 +997,7 @@ function LivePage({
     startedAt: string;
     lastSeenAt: number;
   } | null>(null);
+  const [liveFullscreen, setLiveFullscreen] = useState(false);
 
   async function toggleFullscreen() {
     const target = liveFrameRef.current;
@@ -1031,9 +1020,17 @@ function LivePage({
       return;
     }
     audioRef.current?.play().catch(() => {
-      setAudioError('Live audio start nahi hua. FFmpeg install/path aur camera audio enable check karein.');
+      setAudioError('Live audio stream could not be started. Check if the camera has audio enabled and FFmpeg is properly configured.');
     });
   }, [audioEnabled, liveAudioUrl]);
+
+  useEffect(() => {
+    function onFullscreenChange() {
+      setLiveFullscreen(document.fullscreenElement === liveFrameRef.current);
+    }
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
+  }, []);
 
   const liveEventType = normalizeGateEventType(plc.current_event_type || recording.event_type);
   const liveEventStartedAt = plc.current_event_started_at || recording.event_started_at || recording.started_at;
@@ -1110,7 +1107,9 @@ function LivePage({
             >
               <Icon name="audio" />
             </button>
-            <button type="button" title="Fullscreen" onClick={toggleFullscreen}><Icon name="maximize" /></button>
+            <button type="button" title={liveFullscreen ? 'Exit Fullscreen' : 'Fullscreen'} onClick={toggleFullscreen}>
+              <Icon name={liveFullscreen ? 'minimize' : 'maximize'} />
+            </button>
           </div>
           <img src={liveUrl} alt="Live camera feed" />
           {audioEnabled && (
@@ -1118,7 +1117,7 @@ function LivePage({
               ref={audioRef}
               src={liveAudioUrl}
               autoPlay
-              onError={() => setAudioError('Live audio unavailable hai. FFmpeg install/path aur camera audio enable check karein.')}
+              onError={() => setAudioError('Live audio is unavailable. Check FFmpeg installation path and verify camera audio is enabled.')}
             />
           )}
         </div>
@@ -1172,6 +1171,10 @@ function SavedPage({
   const videoLoadRetryRef = useRef(0);
   const [playerFullscreen, setPlayerFullscreen] = useState(false);
   const [videoRetryNonce, setVideoRetryNonce] = useState(0);
+  const [editingReason, setEditingReason] = useState(false);
+  const [editReasonText, setEditReasonText] = useState('');
+  const [editNoteText, setEditNoteText] = useState('');
+  const [savingReason, setSavingReason] = useState(false);
   const [playbackState, setPlaybackState] = useState<PlaybackState>('idle');
   const activeBusinessRange = useMemo(
     () => businessDateTimeRange(presetDateRange(appliedFilters.datePreset, appliedFilters.fromDate, appliedFilters.toDate)),
@@ -1339,8 +1342,11 @@ function SavedPage({
     flushSync(() => {
       setSelected({ ...record });
     });
+    setEditingReason(false);
+    setEditReasonText(record.reason || '');
+    setEditNoteText(record.reason_note || '');
     enterPlayerFullscreen()
-      .catch(() => setError('Fullscreen browser ne block kar diya. Video same page me ready hai; Play dobara dabayein.'))
+      .catch(() => setError('Fullscreen was blocked by the browser. Video is ready on the page; click Play again.'))
       .finally(() => window.setTimeout(() => startPlayer(record.file_path, false), 0));
   }
 
@@ -1364,6 +1370,62 @@ function SavedPage({
       return;
     }
     player.pause();
+  }
+
+  async function togglePlayerFullscreen() {
+    const target = playerWrapRef.current;
+    if (!target) return;
+    try {
+      if (document.fullscreenElement === target) {
+        await document.exitFullscreen();
+      } else {
+        await target.requestFullscreen();
+      }
+    } catch (err) {
+      console.error('Fullscreen toggle failed:', err);
+    }
+  }
+
+  async function saveEditedReason() {
+    if (!selected) return;
+    setSavingReason(true);
+    try {
+      await postJson('/recording-reason', {
+        storage_root: selected.storage_root || settings.storage_root,
+        file_path: selected.file_path,
+        event_started_at: selected.event_started_at,
+        event_type: selected.event_type || 'minor_stoppage',
+        reason: editReasonText.trim(),
+        note: editNoteText.trim() || undefined,
+        submitted_by: 'Operator (Correction)',
+      });
+
+      setSelected((current) => (current ? {
+        ...current,
+        reason: editReasonText.trim(),
+        reason_note: editNoteText.trim() || null,
+        reason_submitted_by: 'Operator (Correction)',
+        reason_submitted_at: new Date().toISOString().substring(0, 19),
+      } : null));
+
+      setList((current) => ({
+        ...current,
+        records: current.records.map((r) => (r.file_path === selected.file_path ? {
+          ...r,
+          reason: editReasonText.trim(),
+          reason_note: editNoteText.trim() || null,
+          reason_submitted_by: 'Operator (Correction)',
+          reason_submitted_at: new Date().toISOString().substring(0, 19),
+        } : r)),
+      }));
+
+      setEditingReason(false);
+    } catch (exc) {
+      console.error('Failed to update reason:', exc);
+      alert('Failed to save reason. Please reload and try again.');
+    } finally {
+      setSavingReason(false);
+    }
   }
 
   const latestOpenBreakdownPath = stats.latest_event?.event_type === 'breakdown' ? stats.latest_event.file_path : latest?.event_type === 'breakdown' ? latest.file_path : null;
@@ -1405,7 +1467,7 @@ function SavedPage({
   }
 
   return (
-    <section className="workbench saved-workbench">
+    <section className={selected ? 'workbench saved-workbench active-player' : 'workbench saved-workbench'}>
       <div className="library-column">
         <KpiCards stats={reportStats} thresholdSeconds={settings.max_record_seconds} />
 
@@ -1511,20 +1573,52 @@ function SavedPage({
                 <span className="record-duration">{formatDuration(liveBreakdownDuration(record))}</span>
                 <span className="record-size">{formatSize(record.file_size)}</span>
                 <span className={record.event_type === 'breakdown' ? 'status-badge bad' : 'status-badge neutral'}>{eventTypeLabel(record.event_type)}</span>
-                <button
-                  type="button"
-                  className={`${record.reason ? 'reason-chip saved' : 'reason-chip pending'} ${expandedRowPaths[record.file_path] ? 'expanded' : ''}`}
-                  disabled={!record.reason}
-                  title={record.reason || 'Reason not required'}
-                  onClick={() => {
-                    setExpandedRowPaths(prev => ({
-                      ...prev,
-                      [record.file_path]: !prev[record.file_path]
-                    }));
-                  }}
-                >
-                  {record.reason || 'Pending reason'}
-                </button>
+                {(() => {
+                  const hasReason = Boolean(record.reason);
+                  const isSkipped = record.transcript_status === 'skipped';
+                  const isFailed = record.transcript_status === 'failed';
+                  const isProcessing = record.transcript_status === 'processing';
+
+                  let chipClass = 'reason-chip pending';
+                  let chipText = 'Pending reason';
+                  let titleText = 'Reason is pending';
+                  let isDisabled = !hasReason;
+
+                  if (hasReason) {
+                    chipClass = 'reason-chip saved';
+                    chipText = record.reason!;
+                    titleText = record.reason!;
+                  } else if (isSkipped) {
+                    chipClass = 'reason-chip skipped';
+                    chipText = 'No voice detected';
+                    titleText = 'No speech detected in audio';
+                  } else if (isFailed) {
+                    chipClass = 'reason-chip failed';
+                    chipText = 'Transcription failed';
+                    titleText = record.transcript_error || 'Audio transcription failed';
+                  } else if (isProcessing) {
+                    chipClass = 'reason-chip processing';
+                    chipText = 'Transcribing...';
+                    titleText = 'Transcription is running in background';
+                  }
+
+                  return (
+                    <button
+                      type="button"
+                      className={`${chipClass} ${expandedRowPaths[record.file_path] ? 'expanded' : ''}`}
+                      disabled={isDisabled}
+                      title={titleText}
+                      onClick={() => {
+                        setExpandedRowPaths(prev => ({
+                          ...prev,
+                          [record.file_path]: !prev[record.file_path]
+                        }));
+                      }}
+                    >
+                      {chipText}
+                    </button>
+                  );
+                })()}
                 <span className={record.error ? 'status-badge bad' : 'status-badge good'}>{status}</span>
                 <div className="row-actions">
                   {readyForVideo ? (
@@ -1552,82 +1646,157 @@ function SavedPage({
 
       {selected && videoReady(selected) && (
         <div className="record-player-wrap report-fullscreen-player" ref={playerWrapRef} aria-hidden={!playerFullscreen}>
-          <video
-            ref={playerRef}
-            key={selected.file_path}
-            className="record-player"
-            src={selectedVideoUrl}
-            controls
-            controlsList="nofullscreen"
-            disablePictureInPicture
-            preload="auto"
-            onPlay={() => {
-              pendingPlayPathRef.current = null;
-              setPlayingPath(selected.file_path);
-              setPlaybackState('ready');
-            }}
-            onPause={() => setPlayingPath((current) => current === selected.file_path ? '' : current)}
-            onEnded={() => setPlayingPath((current) => current === selected.file_path ? '' : current)}
-            onLoadedMetadata={() => {
-              setError('');
-              setPlaybackState('ready');
-            }}
-            onCanPlay={() => {
-              setPlaybackState('ready');
-              if (pendingPlayPathRef.current === selected.file_path) startPlayer(selected.file_path);
-            }}
-            onWaiting={() => setPlaybackState((current) => current === 'error' ? current : 'loading')}
-            onPlaying={() => setPlaybackState('ready')}
-            onError={() => {
-              if (videoLoadRetryRef.current < 2) {
-                setPlaybackState('loading');
-                videoLoadRetryRef.current += 1;
-                window.setTimeout(() => setVideoRetryNonce((value) => value + 1), 700);
-                return;
-              }
-              pendingPlayPathRef.current = null;
-              setPlayingPath('');
-              setPlaybackState('error');
-            }}
-          />
-          {playbackState === 'ready' && (
-            <button
-              type="button"
-              className={playingPath === selected.file_path ? 'record-player-center-toggle playing' : 'record-player-center-toggle'}
-              title={playingPath === selected.file_path ? 'Pause video' : 'Play video'}
-              aria-label={playingPath === selected.file_path ? 'Pause video' : 'Play video'}
-              onClick={toggleSelectedPlayback}
-            >
-              <Icon name={playingPath === selected.file_path ? 'pause' : 'play'} />
-            </button>
-          )}
-          {playbackState !== 'ready' && (
-            <div className={playbackState === 'error' ? 'video-loading-overlay error' : 'video-loading-overlay'}>
-              {playbackState === 'loading' ? (
-                <>
-                  <span className="video-spinner" aria-hidden="true"></span>
-                  <strong>Preparing video</strong>
-                  <em>{selected.file_name}</em>
-                  <small>{videoLoadRetryRef.current ? `Retry ${videoLoadRetryRef.current} of 2` : 'Loading secure recording...'}</small>
-                </>
-              ) : (
-                <>
-                  <strong>Video load nahi ho paya</strong>
-                  <em>File ready ho sakti hai, browser ne stream request drop kar di.</em>
-                  <div className="video-loading-actions">
-                    <button type="button" onClick={retrySelectedVideo}>Retry</button>
-                    <a className="download-button" href={recordingFileUrl(recordStorageRoot(selected), selected.file_path, true)}>
-                      Download
-                    </a>
-                  </div>
-                </>
+          <div className="modal-player-card">
+            <div className="modal-video-container">
+              <div className="video-player-toolbar close-only">
+                <button
+                  type="button"
+                  className="toolbar-btn close-btn"
+                  title="Close player"
+                  onClick={() => setSelected(null)}
+                >
+                  <Icon name="close" />
+                </button>
+              </div>
+              <video
+                ref={playerRef}
+                key={selected.file_path}
+                className="record-player"
+                src={selectedVideoUrl}
+                controls
+                controlsList="nofullscreen"
+                disablePictureInPicture
+                preload="auto"
+                onPlay={() => {
+                  pendingPlayPathRef.current = null;
+                  setPlayingPath(selected.file_path);
+                  setPlaybackState('ready');
+                }}
+                onPause={() => setPlayingPath((current) => current === selected.file_path ? '' : current)}
+                onEnded={() => setPlayingPath((current) => current === selected.file_path ? '' : current)}
+                onLoadedMetadata={() => {
+                  setError('');
+                  setPlaybackState('ready');
+                }}
+                onCanPlay={() => {
+                  setPlaybackState('ready');
+                  if (pendingPlayPathRef.current === selected.file_path) startPlayer(selected.file_path);
+                }}
+                onWaiting={() => setPlaybackState((current) => current === 'error' ? current : 'loading')}
+                onPlaying={() => setPlaybackState('ready')}
+                onError={() => {
+                  if (videoLoadRetryRef.current < 2) {
+                    setPlaybackState('loading');
+                    videoLoadRetryRef.current += 1;
+                    window.setTimeout(() => setVideoRetryNonce((value) => value + 1), 700);
+                    return;
+                  }
+                  pendingPlayPathRef.current = null;
+                  setPlayingPath('');
+                  setPlaybackState('error');
+                }}
+              />
+              {playbackState === 'ready' && (
+                <button
+                  type="button"
+                  className={playingPath === selected.file_path ? 'record-player-center-toggle playing' : 'record-player-center-toggle'}
+                  title={playingPath === selected.file_path ? 'Pause video' : 'Play video'}
+                  aria-label={playingPath === selected.file_path ? 'Pause video' : 'Play video'}
+                  onClick={toggleSelectedPlayback}
+                >
+                  <Icon name={playingPath === selected.file_path ? 'pause' : 'play'} />
+                </button>
+              )}
+              {playbackState !== 'ready' && (
+                <div className={playbackState === 'error' ? 'video-loading-overlay error' : 'video-loading-overlay'}>
+                  {playbackState === 'loading' ? (
+                    <>
+                      <span className="video-spinner" aria-hidden="true"></span>
+                      <strong>Preparing video</strong>
+                      <em>{selected.file_name}</em>
+                      <small>{videoLoadRetryRef.current ? `Retry ${videoLoadRetryRef.current} of 2` : 'Loading secure recording...'}</small>
+                    </>
+                  ) : (
+                    <>
+                      <strong>Video failed to load</strong>
+                      <em>The video file might be ready, but the browser interrupted the stream request.</em>
+                      <div className="video-loading-actions">
+                        <button type="button" onClick={retrySelectedVideo}>Retry</button>
+                        <a className="download-button" href={recordingFileUrl(recordStorageRoot(selected), selected.file_path, true)}>
+                          Download
+                        </a>
+                      </div>
+                    </>
+                  )}
+                </div>
               )}
             </div>
-          )}
-          <div className={selected.reason ? 'video-reason-overlay saved' : 'video-reason-overlay pending'}>
-            <span>{selected.reason ? 'Reason' : 'Reason pending'}</span>
-            {selected.reason && <strong>{selected.reason}</strong>}
-            {selected.reason_note && <em>{selected.reason_note}</em>}
+            <div className={selected.reason ? 'video-reason-overlay saved' : 'video-reason-overlay pending'}>
+              {editingReason ? (
+                <div className="reason-edit-form">
+                  <label className="edit-label">
+                    <span>Correction Reason:</span>
+                    <input
+                      type="text"
+                      className="edit-reason-input"
+                      value={editReasonText}
+                      onChange={(e) => setEditReasonText(e.target.value)}
+                      placeholder="Reason likhein (Hindi/English)..."
+                      disabled={savingReason}
+                    />
+                  </label>
+                  <label className="edit-label">
+                    <span>Remark (Optional):</span>
+                    <input
+                      type="text"
+                      className="edit-note-input"
+                      value={editNoteText}
+                      onChange={(e) => setEditNoteText(e.target.value)}
+                      placeholder="Note likhein..."
+                      disabled={savingReason}
+                    />
+                  </label>
+                  <div className="edit-actions">
+                    <button
+                      type="button"
+                      className="edit-save-btn"
+                      onClick={saveEditedReason}
+                      disabled={savingReason || !editReasonText.trim()}
+                    >
+                      {savingReason ? 'Saving...' : 'Save'}
+                    </button>
+                    <button
+                      type="button"
+                      className="edit-cancel-btn"
+                      onClick={() => setEditingReason(false)}
+                      disabled={savingReason}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="reason-display-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+                  <div className="reason-text-group" style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <span>{selected.reason ? 'Reason' : 'Reason pending'}</span>
+                    <strong>{selected.reason || 'No voice reason captured'}</strong>
+                    {selected.reason_note && <em>{selected.reason_note}</em>}
+                  </div>
+                  <button
+                    type="button"
+                    className="reason-edit-trigger-btn"
+                    title="Correct Reason"
+                    onClick={() => {
+                      setEditReasonText(selected.reason || '');
+                      setEditNoteText(selected.reason_note || '');
+                      setEditingReason(true);
+                    }}
+                  >
+                    Edit
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -1636,13 +1805,9 @@ function SavedPage({
 }
 
 export function App() {
-  const [authenticated, setAuthenticated] = useState(() => localStorage.getItem('mer_auth') === 'true');
-  const [userRole, setUserRole] = useState<UserRole>(() => {
-    const savedRole = localStorage.getItem('mer_role');
-    if (savedRole === 'superadmin' || savedRole === 'admin' || savedRole === 'user') return savedRole;
-    if (savedRole === 'operator') return 'user';
-    return 'user';
-  });
+  // Login security bypassed: always authenticate as superadmin
+  const [authenticated, setAuthenticated] = useState(true);
+  const [userRole, setUserRole] = useState<UserRole>('superadmin');
   const [page, setPage] = useState<Page>('live');
   const [settings, setSettings] = useState<CameraSettings>(() => loadSavedSettings());
   const [recording, setRecording] = useState<RecordingStatus>({ running: false, frames: 0 });
@@ -2031,14 +2196,7 @@ export function App() {
           />
         )}
         <footer className="status-footer">
-          <span><Icon name="storage" /> {settings.storage_root}</span>
-          {plc.last_error && (
-            <span className="footer-alert" title={plc.last_error}>
-              <Icon name="info" /> PLC offline {plcEndpoint}
-            </span>
-          )}
-          <span>Helper: {API_BASE}</span>
-          <time>{clock.toLocaleString()}</time>
+          <time className="footer-time"><Icon name="activity" /> {clock.toLocaleString()}</time>
         </footer>
       </main>
       {adminPromptOpen && (
@@ -2078,6 +2236,9 @@ export function App() {
           </form>
         </div>
       )}
+      <button className="sidebar-toggle" type="button" title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} onClick={() => setSidebarCollapsed((value) => !value)}>
+        <Icon name="chevron" />
+      </button>
     </div>
   );
 }

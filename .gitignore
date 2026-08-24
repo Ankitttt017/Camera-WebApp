@@ -95,4 +95,6 @@ camera_app/tools/
 camera_app/transcription_tmp/
 *.wav
 *.mp3
+*.tar
+*.tmp
 

