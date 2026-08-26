@@ -729,58 +729,67 @@ function Sidebar({
           <span className="nav-count">{reportCount}</span>
         </button>
         <span className="nav-label">Recording</span>
-        <div className="recording-card recording-stack recording-nav-card">
-          {plcMode ? <div className="recording-control-row recording-nav-row">
-            <div>
-              <strong>Gate Trigger</strong>
-              <span>{smartEnabled ? (settings.capture_video ? 'Auto recording enabled' : 'Timing capture enabled') : 'Auto capture off'}</span>
+        <details className="settings-menu">
+          <summary>
+            <span className="nav-icon"><Icon name="record" /></span>
+            <span>Controls</span>
+            <Icon name="chevron" />
+          </summary>
+          <div className="dropdown-body">
+            <div className="recording-card recording-stack recording-nav-card">
+              {plcMode ? <div className="recording-control-row recording-nav-row">
+                <div>
+                  <strong>Gate Trigger</strong>
+                  <span>{smartEnabled ? (settings.capture_video ? 'Auto recording enabled' : 'Timing capture enabled') : 'Auto capture off'}</span>
+                </div>
+                <button
+                  type="button"
+                  className={smartEnabled ? 'icon-toggle on' : 'icon-toggle'}
+                  aria-pressed={smartEnabled}
+                  aria-disabled={!canOperate}
+                  title={canOperate ? (smartEnabled ? 'Turn gate trigger off' : 'Turn gate trigger on') : 'Admin password required'}
+                  onClick={() => runWithAdmin(smartEnabled ? onStopSmartRecording : onStartSmartRecording)}
+                >
+                  <Icon name="power" />
+                  <span>{smartEnabled ? 'ON' : 'OFF'}</span>
+                </button>
+              </div> : <div className="recording-control-row recording-nav-row">
+                <div>
+                  <strong>Manual Recording</strong>
+                  <span>{recording.running ? 'Recording live view' : 'Start recording from live camera'}</span>
+                </div>
+                <button
+                  type="button"
+                  className={recording.running ? 'icon-toggle on' : 'icon-toggle'}
+                  aria-pressed={recording.running}
+                  aria-disabled={!canOperate}
+                  title={canOperate ? (recording.running ? 'Stop manual recording' : 'Start manual recording') : 'Admin password required'}
+                  onClick={() => runWithAdmin(recording.running ? onStopSmartRecording : onStartSmartRecording)}
+                >
+                  <Icon name={recording.running ? 'stop' : 'record'} />
+                  <span>{recording.running ? 'ON' : 'OFF'}</span>
+                </button>
+              </div>}
+              <div className="recording-control-row recording-nav-row video-mode-row">
+                <div>
+                  <strong>Video</strong>
+                  <span>{plcMode ? (settings.capture_video ? 'Capture video with events' : 'Timing only, no video files') : 'Manual recording enabled'}</span>
+                </div>
+                <button
+                  type="button"
+                  className={settings.capture_video ? 'icon-toggle on' : 'icon-toggle'}
+                  aria-pressed={settings.capture_video}
+                  aria-disabled={!canOperate || !plcMode}
+                  title={!plcMode ? 'Manual mode records by Start/Stop' : canOperate ? (settings.capture_video ? 'Turn event video off' : 'Turn event video on') : 'Admin password required'}
+                  onClick={() => plcMode && runWithAdmin(() => onCaptureVideoChange(!settings.capture_video))}
+                >
+                  <Icon name="camera" />
+                  <span>{settings.capture_video ? 'ON' : 'OFF'}</span>
+                </button>
+              </div>
             </div>
-            <button
-              type="button"
-              className={smartEnabled ? 'icon-toggle on' : 'icon-toggle'}
-              aria-pressed={smartEnabled}
-              aria-disabled={!canOperate}
-              title={canOperate ? (smartEnabled ? 'Turn gate trigger off' : 'Turn gate trigger on') : 'Admin password required'}
-              onClick={() => runWithAdmin(smartEnabled ? onStopSmartRecording : onStartSmartRecording)}
-            >
-              <Icon name="power" />
-              <span>{smartEnabled ? 'ON' : 'OFF'}</span>
-            </button>
-          </div> : <div className="recording-control-row recording-nav-row">
-            <div>
-              <strong>Manual Recording</strong>
-              <span>{recording.running ? 'Recording live view' : 'Start recording from live camera'}</span>
-            </div>
-            <button
-              type="button"
-              className={recording.running ? 'icon-toggle on' : 'icon-toggle'}
-              aria-pressed={recording.running}
-              aria-disabled={!canOperate}
-              title={canOperate ? (recording.running ? 'Stop manual recording' : 'Start manual recording') : 'Admin password required'}
-              onClick={() => runWithAdmin(recording.running ? onStopSmartRecording : onStartSmartRecording)}
-            >
-              <Icon name={recording.running ? 'stop' : 'record'} />
-              <span>{recording.running ? 'ON' : 'OFF'}</span>
-            </button>
-          </div>}
-          <div className="recording-control-row recording-nav-row video-mode-row">
-            <div>
-              <strong>Video</strong>
-              <span>{plcMode ? (settings.capture_video ? 'Capture video with events' : 'Timing only, no video files') : 'Manual recording enabled'}</span>
-            </div>
-            <button
-              type="button"
-              className={settings.capture_video ? 'icon-toggle on' : 'icon-toggle'}
-              aria-pressed={settings.capture_video}
-              aria-disabled={!canOperate || !plcMode}
-              title={!plcMode ? 'Manual mode records by Start/Stop' : canOperate ? (settings.capture_video ? 'Turn event video off' : 'Turn event video on') : 'Admin password required'}
-              onClick={() => plcMode && runWithAdmin(() => onCaptureVideoChange(!settings.capture_video))}
-            >
-              <Icon name="camera" />
-              <span>{settings.capture_video ? 'ON' : 'OFF'}</span>
-            </button>
           </div>
-        </div>
+        </details>
         <span className="nav-label">System</span>
         {canOperate ? <details className="settings-menu">
           <summary>
