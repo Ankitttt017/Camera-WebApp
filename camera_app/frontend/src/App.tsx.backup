@@ -1,0 +1,259 @@
+Created At: 2026-09-01T14:39:23+05:30
+Completed At: 2026-09-01T14:39:23+05:30
+File Path: `file:///c:/Users/Admin/OneDrive%20-%20ricoauto.in/Desktop/Live_Project/Camera-WebApp/camera_app/frontend/src/App.tsx`
+Total Lines: 2503
+Total Bytes: 108110
+Showing lines 1790 to 2040
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1790:           <div className="modal-player-card">
+1791:             {!editingReason && (
+1792:               <div className="modal-video-container">
+1793:                 <div className="video-player-toolbar close-only">
+1794:                   <button
+1795:                     type="button"
+1796:                     className="toolbar-btn close-btn"
+1797:                     title="Close player"
+1798:                     onClick={() => setSelected(null)}
+1799:                   >
+1800:                     <Icon name="close" />
+1801:                   </button>
+1802:                 </div>
+1803:                 <video
+1804:                   ref={playerRef}
+1805:                   key={selected.file_path}
+1806:                   className="record-player"
+1807:                   src={selectedVideoUrl}
+1808:                   controls
+1809:                   controlsList="nofullscreen"
+1810:                   disablePictureInPicture
+1811:                   preload="auto"
+1812:                   onPlay={() => {
+1813:                     pendingPlayPathRef.current = null;
+1814:                     setPlayingPath(selected.file_path);
+1815:                     setPlaybackState('ready');
+1816:                   }}
+1817:                   onPause={() => setPlayingPath((current) => current === selected.file_path ? '' : current)}
+1818:                   onEnded={() => setPlayingPath((current) => current === selected.file_path ? '' : current)}
+1819:                   onLoadedMetadata={() => {
+1820:                     setError('');
+1821:                     setPlaybackState('ready');
+1822:                   }}
+1823:                   onCanPlay={() => {
+1824:                     setPlaybackState('ready');
+1825:                     if (pendingPlayPathRef.current === selected.file_path) startPlayer(selected.file_path);
+1826:                   }}
+1827:                   onWaiting={() => setPlaybackState((current) => current === 'error' ? current : 'loading')}
+1828:                   onPlaying={() => setPlaybackState('ready')}
+1829:                   onError={() => {
+1830:                     if (videoLoadRetryRef.current < 2) {
+1831:                       setPlaybackState('loading');
+1832:                       videoLoadRetryRef.current += 1;
+1833:                       window.setTimeout(() => setVideoRetryNonce((value) => value + 1), 700);
+1834:                       return;
+1835:                     }
+1836:                     pendingPlayPathRef.current = null;
+1837:                     setPlayingPath('');
+1838:                     setPlaybackState('error');
+1839:                   }}
+1840:                 />
+1841:                 {playbackState === 'ready' && (
+1842:                   <button
+1843:                     type="button"
+1844:                     className={playingPath === selected.file_path ? 'record-player-center-toggle playing' : 'record-player-center-toggle'}
+1845:                     title={playingPath === selected.file_path ? 'Pause video' : 'Play video'}
+1846:                     aria-label={playingPath === selected.file_path ? 'Pause video' : 'Play video'}
+1847:                     onClick={toggleSelectedPlayback}
+1848:                   >
+1849:                     <Icon name={playingPath === selected.file_path ? 'pause' : 'play'} />
+1850:                   </button>
+1851:                 )}
+1852:                 {playbackState !== 'ready' && (
+1853:                   <div className={playbackState === 'error' ? 'video-loading-overlay error' : 'video-loading-overlay'}>
+1854:                     {playbackState === 'loading' ? (
+1855:                       <>
+1856:                         <span className="video-spinner" aria-hidden="true"></span>
+1857:                         <strong>Preparing video</strong>
+1858:                         <em>{selected.file_name}</em>
+1859:                         <small>{videoLoadRetryRef.current ? `Retry ${videoLoadRetryRef.current} of 2` : 'Loading secure recording...'}</small>
+1860:                       </>
+1861:                     ) : (
+1862:                       <>
+1863:                         <strong>Video failed to load</strong>
+1864:                         <em>The video file might be ready, but the browser interrupted the stream request.</em>
+1865:                         <div className="video-loading-actions">
+1866:                           <button type="button" onClick={retrySelectedVideo}>Retry</button>
+1867:                           <a className="download-button" href={recordingFileUrl(recordStorageRoot(selected), selected.file_path, true)}>
+1868:                             Download
+1869:                           </a>
+1870:                         </div>
+1871:                       </>
+1872:                     )}
+1873:                   </div>
+1874:                 )}
+1875:               </div>
+1876:             )}
+1877:             <div className={selected.reason ? 'video-reason-overlay saved' : 'video-reason-overlay pending'}>
+1878:               {editingReason ? (
+1879:                 <div className="reason-edit-form" style={{ background: '#1e293b', padding: '32px', borderRadius: '16px', boxShadow: '0 10px 30px rgba(0,0,0,0.5)', width: '100%', maxWidth: '800px', margin: 'auto' }}>
+1880:                   <h3 style={{ margin: '0 0 24px 0', fontSize: '1.5rem', fontWeight: '600', color: '#f8fafc', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '12px' }}>
+1881:                     Event Report Details
+1882:                   </h3>
+1883:                   <label className="edit-label">
+1884:                     <span style={{ fontSize: '1.1rem', color: '#94a3b8', marginBottom: '12px', display: 'block' }}>Declare Downtime | डाउनटाइम घोषित करें</span>
+1885:                     <div style={{ display: 'grid', gridTemplateColumns: editReasonText ? '1fr' : 'repeat(auto-fill, minmax(180px, 1fr))', gap: '10px' }}>
+1886:                       {DOWNTIME_TYPES.map(cat => {
+1887:                         const isValidType = DOWNTIME_TYPES.includes(editReasonText);
+1888:                         if (isValidType && editReasonText !== cat) return null; // HIDE if not selected
+1889:                         
+1890:                         return (
+1891:                           <div key={cat} style={{ display: 'flex', width: '100%' }}>
+1892:                             <button
+1893:                               type="button"
+1894:                               onClick={() => {
+1895:                                 setEditReasonText(cat);
+1896:                                 setSelectedCategory(''); // Reset child
+1897:                               }}
+1898:                               disabled={savingReason}
+1899:                               style={{
+1900:                                 flex: 1,
+1901:                                 padding: '12px 16px',
+1902:                                 background: editReasonText === cat ? 'linear-gradient(135deg, #3b82f6, #8b5cf6)' : 'rgba(255, 255, 255, 0.05)',
+1903:                                 border: editReasonText === cat ? '1px solid #8b5cf6' : '1px solid rgba(255, 255, 255, 0.15)',
+1904:                                 color: editReasonText === cat ? 'white' : '#cbd5e1',
+1905:                                 borderRadius: editReasonText === cat ? '8px 0 0 8px' : '8px',
+1906:                                 fontSize: '0.95rem',
+1907:                                 fontWeight: editReasonText === cat ? '600' : '500',
+1908:                                 cursor: 'pointer',
+1909:                                 transition: 'all 0.2s ease',
+1910:                                 textAlign: 'center'
+1911:                               }}
+1912:                             >
+1913:                               {cat}
+1914:                             </button>
+1915:                             {editReasonText === cat && (
+1916:                               <button
+1917:                                 type="button"
+1918:                                 onClick={() => {
+1919:                                   setEditReasonText('');
+1920:                                   setSelectedCategory('');
+1921:                                 }}
+1922:                                 title="Change Type"
+1923:                                 style={{
+1924:                                   padding: '12px 16px',
+1925:                                   background: 'rgba(239, 68, 68, 0.2)',
+1926:                                   border: '1px solid rgba(239, 68, 68, 0.5)',
+1927:                                   borderLeft: 'none',
+1928:                                   color: '#fca5a5',
+1929:                                   borderRadius: '0 8px 8px 0',
+1930:                                   cursor: 'pointer',
+1931:                                   fontWeight: 'bold',
+1932:                                   transition: 'background 0.2s'
+1933:                                 }}
+1934:                               >
+1935:                                 ✖
+1936:                               </button>
+1937:                             )}
+1938:                           </div>
+1939:                         );
+1940:                       })}
+1941:                     </div>
+1942:                   </label>
+1943:                   
+1944:                   {editReasonText && DOWNTIME_TYPES.includes(editReasonText) && (
+1945:                     <label className="edit-label" style={{ marginTop: '16px' }}>
+1946:                       <span style={{ fontSize: '0.9rem', color: '#94a3b8', marginBottom: '8px', display: 'block' }}>Category:</span>
+1947:                       <select 
+1948:                         className="edit-reason-input" 
+1949:                         disabled={savingReason}
+1950:                         value={selectedCategory}
+1951:                         onChange={(e) => setSelectedCategory(e.target.value)}
+1952:                         style={{ padding: '12px', fontSize: '1rem', borderRadius: '8px', background: 'rgba(15, 23, 42, 0.6)', border: '1px solid rgba(255,255,255,0.2)' }}
+1953:                       >
+1954:                         <option value="">-- Select Category --</option>
+1955:                         {Object.keys(DUMMY_DOWNTIME_DATA[editReasonText] || {}).map(catName => (
+1956:                           <option key={catName} value={catName}>{catName}</option>
+1957:                         ))}
+1958:                       </select>
+1959:                     </label>
+1960:                   )}
+1961: 
+1962:                   {selectedCategory && (
+1963:                     <label className="edit-label" style={{ marginTop: '16px' }}>
+1964:                       <span style={{ fontSize: '0.9rem', color: '#94a3b8', marginBottom: '8px', display: 'block' }}>Sub-Reason:</span>
+1965:                       <select 
+1966:                         className="edit-reason-input" 
+1967:                         disabled={savingReason}
+1968:                         style={{ padding: '12px', fontSize: '1rem', borderRadius: '8px', background: 'rgba(15, 23, 42, 0.6)', border: '1px solid rgba(255,255,255,0.2)' }}
+1969:                       >
+1970:                         {DUMMY_DOWNTIME_DATA[editReasonText]?.[selectedCategory]?.map(sub => (
+1971:                           <option key={sub} value={sub}>{sub}</option>
+1972:                         )) || <option>No sub-reasons found</option>}
+1973:                       </select>
+1974:                     </label>
+1975:                   )}
+1976:                   <div style={{ display: 'flex', gap: '12px' }}>
+1977:                     <label className="edit-label" style={{ flex: 1 }}>
+1978:                       <span>Responsibility:</span>
+1979:                       <select className="edit-reason-input" disabled={savingReason}>
+1980:                         <option>Maintenance</option>
+1981:                         <option>Production</option>
+1982:                         <option>Quality</option>
+1983:                       </select>
+1984:                     </label>
+1985:                     <label className="edit-label" style={{ flex: 1 }}>
+1986:                       <span>Person:</span>
+1987:                       <input type="text" className="edit-reason-input" disabled={savingReason} placeholder="e.g. Ramesh" />
+1988:                     </label>
+1989:                     <label className="edit-label" style={{ flex: 1 }}>
+1990:                       <span>Target Date:</span>
+1991:                       <input type="date" className="edit-reason-input" disabled={savingReason} />
+1992:                     </label>
+1993:                   </div>
+1994:                   <label className="edit-label">
+1995:                     <span>Action Taken:</span>
+1996:                     <textarea 
+1997:                       className="edit-note-input" 
+1998:                       rows={2} 
+1999:                       disabled={savingReason} 
+2000:                       placeholder="Kya action liya gaya..."
+2001:                       style={{ 
+2002:                         background: 'rgba(15, 23, 42, 0.6)', 
+2003:                         border: '1px solid #334155', 
+2004:                         borderRadius: '4px', 
+2005:                         color: 'white', 
+2006:                         padding: '8px 12px',
+2007:                         fontFamily: 'inherit',
+2008:                         resize: 'none',
+2009:                         marginTop: '4px'
+2010:                       }} 
+2011:                     />
+2012:                   </label>
+2013:                   <div style={{ display: 'flex', gap: '16px', marginTop: '32px', justifyContent: 'flex-end', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '24px' }}>
+2014:                     <button
+2015:                       type="button"
+2016:                       onClick={() => setEditingReason(false)}
+2017:                       disabled={savingReason}
+2018:                       style={{ padding: '12px 24px', background: 'transparent', border: '1px solid #475569', color: '#cbd5e1', borderRadius: '8px', fontSize: '1rem', fontWeight: '500', cursor: 'pointer', transition: 'all 0.2s' }}
+2019:                       onMouseOver={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+2020:                       onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
+2021:                     >
+2022:                       Cancel
+2023:                     </button>
+2024:                     <button
+2025:                       type="button"
+2026:                       onClick={saveEditedReason}
+2027:                       disabled={savingReason || !editReasonText.trim()}
+2028:                       style={{ padding: '12px 32px', background: 'linear-gradient(135deg, #3b82f6, #8b5cf6)', border: 'none', color: 'white', borderRadius: '8px', fontSize: '1rem', fontWeight: '600', cursor: (savingReason || !editReasonText.trim()) ? 'not-allowed' : 'pointer', opacity: (savingReason || !editReasonText.trim()) ? 0.5 : 1, transition: 'opacity 0.2s, transform 0.1s', boxShadow: '0 4px 15px rgba(59,130,246,0.3)' }}
+2029:                       onMouseDown={(e) => { if(!savingReason && editReasonText.trim()) e.currentTarget.style.transform = 'scale(0.95)'; }}
+2030:                       onMouseUp={(e) => { if(!savingReason && editReasonText.trim()) e.currentTarget.style.transform = 'scale(1)'; }}
+2031:                     >
+2032:                       {savingReason ? 'Saving...' : 'Save Details'}
+2033:                     </button>
+2034:                   </div>
+2035:                 </div>
+2036:               ) : (
+2037:                 <div className="reason-display-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+2038:                   <div className="reason-text-group" style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+2039:                     <span>{selected.reason ? 'Reason' : 'Reason pending'}</span>
+2040:                     <strong>{selected.reason || 'No voice reason captured'}</strong>
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
