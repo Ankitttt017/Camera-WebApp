@@ -1250,6 +1250,7 @@ function SavedPage({
   const [editResponsibility, setEditResponsibility] = useState('Maintenance');
   const [editPerson, setEditPerson] = useState('');
   const [editTargetDate, setEditTargetDate] = useState('');
+  const [editManualTranscript, setEditManualTranscript] = useState('');
   const [savingReason, setSavingReason] = useState(false);
   const [isViewMode, setIsViewMode] = useState(false);
 
@@ -1280,6 +1281,7 @@ function SavedPage({
     setEditPerson(person);
     setEditTargetDate(date);
     setEditNoteText(actionNote);
+    setEditManualTranscript(record.manual_transcript || '');
   }
   const [playbackState, setPlaybackState] = useState<PlaybackState>('idle');
   const activeBusinessRange = useMemo(
@@ -1512,6 +1514,7 @@ function SavedPage({
         reason: newReason.trim(),
         note: fullNote || undefined,
         submitted_by: 'Operator (Correction)',
+        manual_transcript: editManualTranscript.trim() || undefined,
       });
 
       if (selected?.file_path === record.file_path) {
@@ -1521,6 +1524,7 @@ function SavedPage({
           reason_note: editNoteText.trim() || null,
           reason_submitted_by: 'Operator (Correction)',
           reason_submitted_at: new Date().toISOString().substring(0, 19),
+          manual_transcript: editManualTranscript.trim() || null,
         } : null));
       }
 
@@ -1532,6 +1536,7 @@ function SavedPage({
           reason_note: editNoteText.trim() || null,
           reason_submitted_by: 'Operator (Correction)',
           reason_submitted_at: new Date().toISOString().substring(0, 19),
+          manual_transcript: editManualTranscript.trim() || null,
         } : r)),
       }));
 
@@ -1667,10 +1672,10 @@ function SavedPage({
             <span>End Time</span>
             <span>Video Duration</span>
             <span>Event Duration</span>
-            <span>File Size</span>
             <span>Category</span>
             <span>Reason</span>
-            <span>Voice Transcript</span>
+            <span>AI Voice Transcript</span>
+            <span>Manual Correction</span>
             <span>Status</span>
             <span>Actions</span>
           </div>
@@ -1688,7 +1693,6 @@ function SavedPage({
                 <span className="record-duration">{formatTimeOnly(liveEventEnd(record))}</span>
                 <span className="record-duration">{formatDuration(record.duration_seconds)}</span>
                 <span className="record-duration">{formatDuration(liveBreakdownDuration(record))}</span>
-                <span className="record-size">{formatSize(record.file_size)}</span>
                 <span className={record.event_type === 'breakdown' ? 'status-badge bad' : 'status-badge neutral'}>{eventTypeLabel(record.event_type)}</span>
                 {(() => {
                   const hasReason = Boolean(record.reason_submitted_by && record.reason_submitted_by !== 'Voice Transcript');
@@ -1771,6 +1775,10 @@ function SavedPage({
                     textOverflow: expandedRowPaths[`transcript_${record.file_path}`] ? 'unset' : 'ellipsis', 
                   }}>
                   {record.transcript ? record.transcript : (record.transcript_status === 'processing' ? 'Transcribing...' : record.transcript_status === 'failed' ? 'Transcription failed' : 'No voice detected')}
+                </div>
+                
+                <div className="transcript-bubble" style={{ whiteSpace: 'normal', color: record.manual_transcript ? '#f8fafc' : '#64748b', background: record.manual_transcript ? 'rgba(59, 130, 246, 0.15)' : 'rgba(255, 255, 255, 0.05)', border: record.manual_transcript ? '1px solid rgba(59, 130, 246, 0.4)' : '1px dashed rgba(255, 255, 255, 0.1)' }}>
+                  {record.manual_transcript ? record.manual_transcript : 'No manual correction'}
                 </div>
                 
                 <span className={record.error ? 'status-badge bad' : 'status-badge good'}>{status}</span>
@@ -2094,6 +2102,35 @@ function SavedPage({
                 </label>
               </>
             )}
+            
+            <label className="edit-label" style={{ marginTop: '20px', padding: '16px', background: 'rgba(59, 130, 246, 0.05)', borderRadius: '12px', border: '1px solid rgba(59, 130, 246, 0.2)' }}>
+              <span style={{ fontSize: '0.95rem', color: '#93c5fd', marginBottom: '8px', display: 'block', fontWeight: '600' }}>AI Voice Transcript (READ-ONLY):</span>
+              <div style={{ background: 'rgba(0,0,0,0.2)', padding: '12px', borderRadius: '8px', color: '#f1f5f9', fontStyle: editingReasonRecord?.transcript ? 'normal' : 'italic', fontSize: '0.95rem', marginBottom: '16px' }}>
+                {editingReasonRecord?.transcript ? editingReasonRecord.transcript : 'No speech detected by AI.'}
+              </div>
+              <span style={{ fontSize: '0.95rem', color: '#cbd5e1', marginBottom: '8px', display: 'block' }}>MANUAL CORRECTION (IF AI MADE A MISTAKE):</span>
+              <textarea 
+                className="edit-note-input" 
+                rows={2} 
+                disabled={savingReason || isViewMode} 
+                placeholder="Write the actual sentence here to correct AI..."
+                value={editManualTranscript}
+                onChange={e => setEditManualTranscript(e.target.value)}
+                style={{ 
+                  width: '100%',
+                  background: 'rgba(15, 23, 42, 0.8)', 
+                  border: '1px solid rgba(255,255,255,0.2)', 
+                  borderRadius: '8px', 
+                  color: 'white', 
+                  padding: '12px',
+                  fontSize: '0.95rem',
+                  fontFamily: 'inherit',
+                  resize: 'none',
+                  outline: 'none',
+                  boxSizing: 'border-box'
+                }} 
+              />
+            </label>
             
             <div style={{ display: 'flex', gap: '16px', marginTop: '32px', justifyContent: 'flex-end', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '20px' }}>
               <button

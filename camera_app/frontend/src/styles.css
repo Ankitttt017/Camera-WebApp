@@ -2542,6 +2542,230 @@ nav button.active .nav-count {
   min-width: 1250px; /* Prevents column squishing below readable threshold */
 }
 
+/* Analytics dashboard and a roomier Event Report table. */
+.dashboard-workbench {
+  overflow-y: auto;
+  padding-bottom: 28px;
+}
+
+.dashboard-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin: 4px 0 24px;
+}
+
+.dashboard-eyebrow,
+.dashboard-panel-head span {
+  display: block;
+  color: var(--primary);
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.dashboard-heading h2 {
+  margin: 5px 0 4px;
+  font-size: 1.65rem;
+}
+
+.dashboard-heading p {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.dashboard-live-event {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 13px;
+  border: 1px solid rgba(249, 115, 22, 0.4);
+  border-radius: 999px;
+  background: rgba(249, 115, 22, 0.1);
+  color: #fb923c;
+  font-size: 0.82rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.dashboard-live-event.idle {
+  border-color: rgba(20, 184, 166, 0.35);
+  background: rgba(20, 184, 166, 0.1);
+  color: var(--primary);
+}
+
+.dashboard-live-event i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.dashboard-visual-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.dashboard-panel {
+  min-height: 255px;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-sm);
+}
+
+.dashboard-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.dashboard-panel-head strong {
+  display: block;
+  margin-top: 5px;
+  font-size: 1rem;
+}
+
+.dashboard-panel-head > b {
+  color: var(--text-muted);
+  font-size: 0.86rem;
+}
+
+.event-mix-ring {
+  --breakdown-share: 0%;
+  width: 128px;
+  height: 128px;
+  margin: 22px auto 16px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: conic-gradient(#ef4444 0 var(--breakdown-share), #f97316 var(--breakdown-share) 100%);
+}
+
+.event-mix-ring > div {
+  width: 92px;
+  height: 92px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--bg-panel);
+}
+
+.event-mix-ring strong {
+  font-size: 1.45rem;
+}
+
+.event-mix-ring span {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.event-legend {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.event-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.event-legend i { width: 9px; height: 9px; border-radius: 50%; }
+.legend-breakdown { background: #ef4444; }
+.legend-minor { background: #f97316; }
+.event-legend b { color: var(--text-main); }
+
+.event-bars { display: grid; gap: 24px; margin-top: 34px; }
+.event-bar > div:first-child { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 0.86rem; }
+.event-bar > div:first-child span { color: var(--text-muted); }
+.event-bar-track { height: 10px; overflow: hidden; border-radius: 99px; background: var(--bg-panel-soft); }
+.event-bar-fill { display: block; height: 100%; min-width: 3px; border-radius: inherit; transition: width 0.3s ease; }
+.event-bar-fill.blue { background: #3b82f6; }
+.event-bar-fill.red { background: #ef4444; }
+.event-bar-fill.orange { background: #f97316; }
+
+.dashboard-insights dl { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 28px 0 0; }
+.dashboard-insights dl div { padding: 12px; border-radius: var(--radius-sm); background: var(--bg-panel-soft); }
+.dashboard-insights dt { color: var(--text-muted); font-size: 0.76rem; }
+.dashboard-insights dd { margin: 5px 0 0; font-size: 1rem; font-weight: 800; }
+
+/* Keep each report row easy to read on large screens; horizontal scroll remains available on smaller widths. */
+.saved-workbench .record-list-head {
+  padding: 16px 24px;
+  font-size: 0.88rem;
+}
+
+.saved-workbench .record-row {
+  min-height: 76px;
+  padding: 18px 24px;
+  font-size: 0.98rem;
+}
+
+.saved-workbench .record-row strong,
+.saved-workbench .record-duration,
+.saved-workbench .record-size {
+  font-size: 0.98rem;
+}
+
+/* Let the report use the page height instead of compressing the list to one row. */
+.saved-workbench {
+  height: auto;
+  overflow: visible;
+}
+
+.saved-workbench .library-column {
+  height: auto;
+  min-height: 0;
+}
+
+.saved-workbench .record-list {
+  flex: none;
+  min-height: 520px;
+  max-height: 720px;
+  overflow: auto !important;
+}
+
+.saved-workbench .record-list-head,
+.saved-workbench .record-row {
+  min-width: 1450px;
+}
+
+.saved-workbench .record-list-head {
+  padding: 18px 26px;
+  font-size: 0.92rem;
+}
+
+.saved-workbench .record-row {
+  min-height: 88px;
+  padding: 21px 26px;
+  font-size: 1.04rem;
+}
+
+.saved-workbench .record-row strong,
+.saved-workbench .record-duration,
+.saved-workbench .record-size {
+  font-size: 1.04rem;
+}
+
+@media (max-width: 1050px) {
+  .dashboard-visual-grid { grid-template-columns: 1fr; }
+  .dashboard-panel { min-height: auto; }
+}
+
+@media (max-width: 640px) {
+  .dashboard-heading { flex-direction: column; }
+  .dashboard-insights dl { grid-template-columns: 1fr; }
+  .saved-workbench .record-list { min-height: 420px; }
+}
+
 /* 3. Tablet responsive styles */
 @media (max-width: 1024px) {
   .kpi-grid {
