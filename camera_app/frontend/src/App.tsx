@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
+import { Dashboard } from './Dashboard';
 import {
   API_BASE,
   AuthSession,
@@ -49,57 +50,7 @@ const DOWNTIME_TYPES = [
   "HPDC Machine Accessories"
 ];
 
-const DUMMY_DOWNTIME_DATA: Record<string, Record<string, string[]>> = {
-  "Machine Breakdown": {
-    "Mechanical": ["Belt Break", "Bearing Failure", "Spindle Issue", "Hydraulic Leak", "Gear Damage"],
-    "Electrical": ["Motor Burnt", "Sensor Fault", "Cable Break", "Drive Error", "Contactor Welded"],
-    "Control System": ["PLC Stop", "HMI Unresponsive", "Communication Error", "Encoder Fault", "Software Glitch"],
-    "Pneumatic": ["Air Leak", "Cylinder Stuck", "Valve Failed", "Pressure Drop", "Filter Block"],
-    "Lubrication": ["Pump Failure", "Oil Low", "Line Blockage", "Filter Clogged", "Pressure Low"]
-  },
-  "Management Loss": {
-    "No Material": ["Supplier Delay", "Store Delay", "Wrong Material", "Transport Delay", "Stock Out"],
-    "No Operator": ["Absent", "Meeting", "Training", "Shift Change Gap", "Tea Break"],
-    "No Plan": ["Schedule Delay", "Order Cancelled", "Machine Free", "Trial Run", "Production Complete"],
-    "Utility Fail": ["Power Outage", "No Compressed Air", "Water Supply Fail", "Gas Shortage", "Cooling Tower Off"],
-    "Documentation": ["Waiting for Drawing", "SOP Missing", "Quality Clearance Delay", "Work Order Pending", "System Down"]
-  },
-  "Die Breakdown": {
-    "Core/Cavity": ["Core Pin Broken", "Cavity Scratched", "Insert Loose", "Galling", "Cracking"],
-    "Cooling": ["Cooling Line Block", "O-Ring Leak", "Nipple Broken", "Hose Burst", "Flow Rate Low"],
-    "Ejection": ["Ejector Pin Broken", "Ejector Plate Stuck", "Return Pin Damage", "Spring Broken", "Guide Pillar Jam"],
-    "Moving Parts": ["Slide Jam", "Cam Pin Broken", "Wedge Block Damage", "Wear Plate Scored", "Locking Issue"],
-    "Surface": ["Heat Checking", "Soldering", "Wash Out", "Dents", "Flash on Part"]
-  },
-  "Robot Breakdown": {
-    "Arm Assembly": ["Axis 1 Jam", "Axis 2 Motor", "Axis 3 Belt", "Axis 4 Gear", "Axis 5/6 Wrist"],
-    "Controller": ["Teach Pendant Error", "Motherboard Fault", "Servo Amp Trip", "Battery Low", "Safety Circuit Stop"],
-    "End Effector": ["Gripper Stuck", "Vacuum Cup Torn", "Sensor Fault", "Air Tube Leak", "Part Dropped"],
-    "Vision System": ["Camera Unfocused", "Lighting Fail", "Calibration Error", "Lens Dirty", "Communication Loss"],
-    "Base/Track": ["Track Jam", "Cable Track Broken", "Lubrication Issue", "Proximity Sensor Fail", "Motor Overload"]
-  },
-  "Planned Downtime": {
-    "Preventive Maintenance": ["Daily Check", "Weekly Greasing", "Monthly Overhaul", "Filter Change", "Oil Top-up"],
-    "Predictive": ["Vibration Check", "Thermal Scan", "Oil Sampling", "Runout Check", "Calibration"],
-    "Cleaning": ["Machine Wash", "Coolant Tank Clean", "Floor Clean", "Panel Dusting", "Scrap Removal"],
-    "Tool Change": ["Insert Index", "Drill Replacement", "Milling Cutter Change", "Tap Broken", "Holder Clean"],
-    "Die Change / Setup": ["Die Unload", "Die Load", "Pre-heating", "First Piece Approval", "Parameter Adjustment"]
-  },
-  "Process Loss": {
-    "Quality Defect": ["Porosity", "Short Fill", "Cold Shut", "Cracks", "Blisters"],
-    "Dimensional": ["Oversize", "Undersize", "Warping", "Runout", "Taper"],
-    "Parameter Drift": ["Temperature High", "Pressure Low", "Injection Speed Var", "Cooling Time Wait", "Cycle Time High"],
-    "Material Issue": ["Alloy Temp Drop", "Degassing Delay", "Slag Inclusion", "Hard Spots", "Composition Wrong"],
-    "Inspection": ["Waiting for CMM", "Gauge Calibration", "Visual Check Delay", "Destructive Test", "X-Ray Check"]
-  },
-  "HPDC Machine Accessories": {
-    "Furnace": ["Heater Burnt", "Thermocouple Fail", "Crucible Crack", "Lid Stuck", "Refractory Damage"],
-    "Ladle Auto": ["Cup Broken", "Arm Stuck", "Limit Switch Fail", "Spillage", "Motor Trip"],
-    "Auto Sprayer": ["Nozzle Clog", "Manifold Leak", "Pump Fail", "Air Mix Ratio", "Movement Jam"],
-    "Extractor": ["Gripper Slip", "Sensor Fail", "Stroke Limit Error", "Dropping Part", "Belt Broken"],
-    "Plunger/Sleeve": ["Tip Worn", "Sleeve Scored", "Cooling Leak", "Lubrication Fail", "Alignment Issue"]
-  }
-};
+import { ACTUAL_DOWNTIME_DATA } from './downtimeData';
 
 const DEFAULT_SETTINGS: CameraSettings = {
   ip: '192.168.119.205',
@@ -128,7 +79,7 @@ const APP_TITLE = 'Automatic Video Capturing Ube 850 T-2';
 const APP_MARK = 'RCC';
 const RICO_LOGO_SRC = '/rico-logo.png';
 
-type Page = 'live' | 'saved';
+type Page = 'live' | 'saved' | 'analytics';
 type UserRole = 'superadmin' | 'admin' | 'user';
 
 function normalizePublicHelperUrl(value?: string | null) {
@@ -489,13 +440,14 @@ function friendlyRecordingError(message?: string | null) {
   return 'Recording could not be completed. Check settings and camera connection.';
 }
 
-type IconName = 'live' | 'archive' | 'record' | 'settings' | 'logout' | 'camera' | 'maximize' | 'minimize' | 'fit' | 'audio' | 'storage' | 'activity' | 'power' | 'info' | 'play' | 'pause' | 'stop' | 'chevron' | 'eye' | 'eyeOff' | 'lock' | 'close';
+type IconName = 'live' | 'archive' | 'record' | 'settings' | 'logout' | 'camera' | 'maximize' | 'minimize' | 'fit' | 'audio' | 'storage' | 'activity' | 'power' | 'info' | 'play' | 'pause' | 'stop' | 'chevron' | 'eye' | 'eyeOff' | 'lock' | 'close' | 'chart';
 
 function Icon({ name }: { name: IconName }) {
   const paths: Record<IconName, string> = {
     close: 'M18 6L6 18M6 6l12 12',
     live: 'M4 6.5h16v11H4z M9 20h6 M12 17.5V20',
     archive: 'M5 7h14v12H5z M8 4h8v3 M8 11h8',
+    chart: 'M18 20V10M12 20V4M6 20v-6',
     record: 'M12 7a5 5 0 1 0 0 10a5 5 0 0 0 0-10z',
     settings: 'M12 8.5a3.5 3.5 0 1 0 0 7a3.5 3.5 0 0 0 0-7z M12 3v3 M12 18v3 M4.2 6.2l2.1 2.1 M17.7 15.7l2.1 2.1 M3 12h3 M18 12h3 M4.2 17.8l2.1-2.1 M17.7 8.3l2.1-2.1',
     logout: 'M10 5H5v14h5 M14 8l4 4-4 4 M8 12h10',
@@ -790,6 +742,10 @@ function Sidebar({
           <span className="nav-text">Event Report</span>
           <span className="nav-count">{reportCount}</span>
         </button>
+        <button className={page === 'analytics' ? 'active' : ''} onClick={() => setPage('analytics')}>
+          <span className="nav-icon"><Icon name="chart" /></span>
+          <span className="nav-text">Analytics</span>
+        </button>
         <span className="nav-label">Recording</span>
         <details className="settings-menu">
           <summary>
@@ -1033,7 +989,7 @@ function TopBar({
       <div className="topbar-title-lockup">
         <h1 className="topbar-main-title">UBE 850 T-2</h1>
         <span className="topbar-machine-badge">Camera Monitor</span>
-        <span className="topbar-page-label">{page === 'live' ? 'Live View' : 'Event Report'}</span>
+        <span className="topbar-page-label">{page === 'live' ? 'Live View' : page === 'analytics' ? 'Analytics Dashboard' : 'Event Report'}</span>
       </div>
       <div className="topbar-actions">
         <span className={displayOnline ? 'topbar-cta' : 'topbar-cta off'}><i></i> {displayOnline ? 'Stream on' : 'Stream off'}</span>
@@ -1200,6 +1156,7 @@ function LivePage({
 }
 
 function SavedPage({
+  page: activeAppPage,
   settings,
   refreshToken,
   stats,
@@ -1207,6 +1164,7 @@ function SavedPage({
   onEditReason,
   userRole,
 }: {
+  page: Page;
   settings: CameraSettings;
   refreshToken: number;
   stats: RecordingStats;
@@ -1232,6 +1190,43 @@ function SavedPage({
   const [list, setList] = useState<RecordingList>({ total: 0, page: 1, page_size: PAGE_SIZE, records: [] });
   const [latest, setLatest] = useState<RecordingRecord | null>(null);
   const [selected, setSelected] = useState<RecordingRecord | null>(null);
+  const [dashboardRecords, setDashboardRecords] = useState<RecordingRecord[]>([]);
+
+  const activeBusinessRange = useMemo(
+    () => businessDateTimeRange(presetDateRange(appliedFilters.datePreset, appliedFilters.fromDate, appliedFilters.toDate)),
+    [appliedFilters.datePreset, appliedFilters.fromDate, appliedFilters.toDate],
+  );
+  const filtersDirty = (
+    appliedFilters.datePreset !== datePreset
+    || appliedFilters.fromDate !== fromDate
+    || appliedFilters.toDate !== toDate
+    || appliedFilters.category !== category
+    || appliedFilters.shift !== shift
+  );
+
+  useEffect(() => {
+    if (activeAppPage === 'analytics') {
+      const payload: any = {
+        storage_root: settings.storage_root,
+        start_at: activeBusinessRange?.startAt,
+        end_at: activeBusinessRange?.endAt,
+        page: 1,
+        page_size: 5000,
+      };
+      if (appliedFilters.category !== 'all') {
+        payload.event_type = appliedFilters.category;
+      }
+      if (appliedFilters.shift !== 'all') {
+        payload.shift = appliedFilters.shift;
+      }
+      setLoading(true);
+      postJson<RecordingList>('/recording-index/list', payload)
+        .then(res => setDashboardRecords(res.records || []))
+        .catch(err => setError(String(err)))
+        .finally(() => setLoading(false));
+    }
+  }, [activeAppPage, activeBusinessRange, appliedFilters, settings.storage_root]);
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [nowTick, setNowTick] = useState(Date.now());
@@ -1246,6 +1241,7 @@ function SavedPage({
   const [editingReasonRecord, setEditingReasonRecord] = useState<RecordingRecord | null>(null);
   const [editReasonText, setEditReasonText] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('');
+  const [selectedSubReason, setSelectedSubReason] = useState('');
   const [editNoteText, setEditNoteText] = useState('');
   const [editResponsibility, setEditResponsibility] = useState('Maintenance');
   const [editPerson, setEditPerson] = useState('');
@@ -1262,6 +1258,7 @@ function SavedPage({
     const reasonParts = (record.reason || '').split(' - ');
     setEditReasonText(reasonParts[0] || '');
     setSelectedCategory(reasonParts[1] || '');
+    setSelectedSubReason(reasonParts[2] || '');
 
     // Parse note fields
     let resp = 'Maintenance', person = '', date = '', actionNote = '';
@@ -1284,17 +1281,6 @@ function SavedPage({
     setEditManualTranscript(record.manual_transcript || '');
   }
   const [playbackState, setPlaybackState] = useState<PlaybackState>('idle');
-  const activeBusinessRange = useMemo(
-    () => businessDateTimeRange(presetDateRange(appliedFilters.datePreset, appliedFilters.fromDate, appliedFilters.toDate)),
-    [appliedFilters.datePreset, appliedFilters.fromDate, appliedFilters.toDate],
-  );
-  const filtersDirty = (
-    appliedFilters.datePreset !== datePreset
-    || appliedFilters.fromDate !== fromDate
-    || appliedFilters.toDate !== toDate
-    || appliedFilters.category !== category
-    || appliedFilters.shift !== shift
-  );
 
   function changeDatePreset(value: ReportDatePreset) {
     setDatePreset(value);
@@ -1497,7 +1483,7 @@ function SavedPage({
   async function saveEditedReason(record: RecordingRecord) {
     setSavingReason(true);
     try {
-      const parts = [editReasonText, selectedCategory].filter(Boolean);
+      const parts = [editReasonText, selectedCategory, selectedSubReason].filter(Boolean);
       let newReason = parts.join(' - ');
       const fullNote = [
         editResponsibility ? `Responsibility: ${editResponsibility}` : '',
@@ -1521,7 +1507,7 @@ function SavedPage({
         setSelected((current) => (current ? {
           ...current,
           reason: newReason.trim(),
-          reason_note: editNoteText.trim() || null,
+          reason_note: fullNote || null,
           reason_submitted_by: 'Operator (Correction)',
           reason_submitted_at: new Date().toISOString().substring(0, 19),
           manual_transcript: editManualTranscript.trim() || null,
@@ -1533,7 +1519,7 @@ function SavedPage({
         records: current.records.map((r) => (r.file_path === record.file_path ? {
           ...r,
           reason: newReason.trim(),
-          reason_note: editNoteText.trim() || null,
+          reason_note: fullNote || null,
           reason_submitted_by: 'Operator (Correction)',
           reason_submitted_at: new Date().toISOString().substring(0, 19),
           manual_transcript: editManualTranscript.trim() || null,
@@ -1590,18 +1576,22 @@ function SavedPage({
   return (
     <section className={selected ? 'workbench saved-workbench active-player' : 'workbench saved-workbench'}>
       <div className="library-column">
-        <KpiCards stats={reportStats} thresholdSeconds={settings.max_record_seconds} />
+        {activeAppPage !== 'analytics' && (
+          <>
+            <KpiCards stats={reportStats} thresholdSeconds={settings.max_record_seconds} />
 
-        <div className="library-header">
-          <div>
-            <h2>Event Report</h2>
-            <span>{list.total} events</span>
-          </div>
-          <div className="library-actions">
-            <a className="download-button report-download" href={exportUrl}><Icon name="storage" /> Download Report</a>
-            <button onClick={() => load(true)}>{loading ? 'Refreshing...' : 'Refresh'}</button>
-          </div>
-        </div>
+            <div className="library-header">
+              <div>
+                <h2>Event Report</h2>
+                <span>{list.total} events</span>
+              </div>
+              <div className="library-actions">
+                <a className="download-button report-download" href={exportUrl}><Icon name="storage" /> Download Report</a>
+                <button onClick={() => load(true)}>{loading ? 'Refreshing...' : 'Refresh'}</button>
+              </div>
+            </div>
+          </>
+        )}
 
         <div className="report-range-strip">
           <span>Date Range</span>
@@ -1656,7 +1646,11 @@ function SavedPage({
           </div>
         </div>
 
-        {error && <div className="error-banner">{error}</div>}
+        {activeAppPage === 'analytics' ? (
+          <Dashboard records={dashboardRecords} />
+        ) : (
+          <>
+            {error && <div className="error-banner">{error}</div>}
 
         {!loading && list.records.length === 0 && (
           <div className="empty-state">
@@ -1703,7 +1697,7 @@ function SavedPage({
 
                   if (hasReason) {
                     chipClass = 'reason-chip saved';
-                    chipText = 'Reason Saved';
+                    chipText = record.reason?.split(' - ')[0] || 'Reason Saved';
                     titleText = record.reason!;
                   } else if (record.transcript) {
                     chipClass = 'reason-chip processing';
@@ -1722,7 +1716,7 @@ function SavedPage({
                             editRecord(record, hasReason);
                           }
                         }}
-                        style={{ cursor: (readyForVideo || videoAvailable) ? 'pointer' : 'default', flex: 1, minWidth: '0' }}
+                        style={{ cursor: (readyForVideo || videoAvailable) ? 'pointer' : 'default', flex: 1, textAlign: 'left', wordBreak: 'break-word' }}
                       >
                         {chipText}
                       </button>
@@ -1806,6 +1800,8 @@ function SavedPage({
           <span>{page} / {totalPages}</span>
           <button disabled={page >= totalPages} onClick={() => setPage(page + 1)}>Next</button>
         </div>}
+          </>
+        )}
       </div>
 
       {selected && videoReady(selected) && (
@@ -1907,9 +1903,9 @@ function SavedPage({
           style={{
             position: 'fixed',
             top: 0, left: 0, right: 0, bottom: 0,
-            background: 'rgba(15, 23, 42, 0.75)',
-            backdropFilter: 'blur(8px)',
-            WebkitBackdropFilter: 'blur(8px)',
+            background: 'rgba(15, 23, 42, 0.85)',
+            backdropFilter: 'blur(12px)',
+            WebkitBackdropFilter: 'blur(12px)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -1921,17 +1917,23 @@ function SavedPage({
           <div 
             className="reason-modal-content"
             style={{
-              background: '#1e293b', 
-              padding: '32px', 
-              borderRadius: '16px', 
-              boxShadow: '0 10px 40px rgba(0,0,0,0.5)',
-              width: '100%',
-              maxWidth: '650px',
-              border: '1px solid rgba(255,255,255,0.1)'
+              background: '#0f172a', 
+              padding: '48px', 
+              borderRadius: '24px', 
+              boxShadow: '0 25px 50px -12px rgba(0,0,0,0.8), 0 0 0 1px rgba(255,255,255,0.1)',
+              width: '95vw',
+              maxWidth: '1400px',
+              height: '90vh',
+              overflowY: 'auto',
+              display: 'flex',
+              flexDirection: 'column'
             }}
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '12px' }}>
-              <h3 style={{ margin: 0, fontSize: '1.4rem', color: '#f8fafc' }}>Event Report Details</h3>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px', borderBottom: '2px solid rgba(255,255,255,0.1)', paddingBottom: '20px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                <div style={{ width: '8px', height: '32px', background: 'linear-gradient(to bottom, #3b82f6, #8b5cf6)', borderRadius: '4px' }}></div>
+                <h2 style={{ margin: 0, fontSize: '2.2rem', fontWeight: '700', color: '#f8fafc', letterSpacing: '1px', textTransform: 'uppercase' }}>EVENT REPORT DETAILS</h2>
+              </div>
               <button 
                 onClick={() => setEditingReasonRecord(null)}
                 style={{ background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer', fontSize: '1.2rem' }}
@@ -1939,121 +1941,90 @@ function SavedPage({
                 ✖
               </button>
             </div>
-            
-            <label className="edit-label">
+                        <label className="edit-label">
               <span style={{ fontSize: '1.05rem', color: '#e2e8f0', marginBottom: '16px', display: 'block', fontWeight: '500' }}>Declare Downtime | डाउनटाइम घोषित करें</span>
-              <div style={{ display: 'grid', gridTemplateColumns: editReasonText ? '1fr' : 'repeat(auto-fill, minmax(180px, 1fr))', gap: '12px' }}>
-                {DOWNTIME_TYPES.map(cat => {
-                  const isValidType = DOWNTIME_TYPES.includes(editReasonText);
-                  if (isValidType && editReasonText !== cat) return null; // HIDE if not selected
-                  
-                  return (
-                    <div key={cat} style={{ display: 'flex', width: '100%' }}>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEditReasonText(cat);
-                          setSelectedCategory('');
-                        }}
-                        disabled={savingReason}
-                        style={{
-                          flex: 1,
-                          padding: '12px 16px',
-                          background: editReasonText === cat ? 'linear-gradient(135deg, #3b82f6, #8b5cf6)' : 'rgba(255, 255, 255, 0.05)',
-                          border: editReasonText === cat ? '1px solid #8b5cf6' : '1px solid rgba(255, 255, 255, 0.15)',
-                          color: editReasonText === cat ? 'white' : '#cbd5e1',
-                          borderRadius: editReasonText === cat ? '8px 0 0 8px' : '8px',
-                          fontSize: '0.95rem',
-                          fontWeight: editReasonText === cat ? '600' : '500',
-                          cursor: 'pointer',
-                          transition: 'all 0.2s ease',
-                          textAlign: 'center',
-                          boxShadow: editReasonText === cat ? '0 4px 12px rgba(59, 130, 246, 0.3)' : 'none'
-                        }}
-                      >
-                        {cat}
-                      </button>
-                      {editReasonText === cat && !isViewMode && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setEditReasonText('');
-                            setSelectedCategory('');
-                          }}
-                          title="Change Type"
-                          disabled={savingReason}
-                          style={{
-                            padding: '12px 16px',
-                            background: 'rgba(239, 68, 68, 0.15)',
-                            border: '1px solid rgba(239, 68, 68, 0.4)',
-                            borderLeft: 'none',
-                            color: '#fca5a5',
-                            borderRadius: '0 8px 8px 0',
-                            cursor: 'pointer',
-                            fontWeight: 'bold',
-                            transition: 'background 0.2s'
-                          }}
-                        >
-                          ✖
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
+              <select 
+                className="edit-reason-input" 
+                disabled={savingReason || isViewMode}
+                value={editReasonText}
+                onChange={(e) => {
+                  setEditReasonText(e.target.value);
+                  setSelectedCategory('');
+                  setSelectedSubReason('');
+                }}
+                style={{ width: '100%', padding: '14px', fontSize: '1.05rem', borderRadius: '10px', background: 'rgba(15, 23, 42, 0.8)', border: '1px solid rgba(255,255,255,0.2)', color: 'white', outline: 'none', boxSizing: 'border-box' }}
+              >
+                <option value="">-- Select Downtime Type --</option>
+                {DOWNTIME_TYPES.map((type) => (
+                  <option key={type} value={type}>{type}</option>
+                ))}
+              </select>
             </label>
             
             {editReasonText && DOWNTIME_TYPES.includes(editReasonText) && (
+              
               <>
-                <label className="edit-label" style={{ marginTop: '20px' }}>
-                  <span style={{ fontSize: '0.95rem', color: '#cbd5e1', marginBottom: '8px', display: 'block' }}>Category:</span>
+                <label className="edit-label" style={{ marginTop: '28px' }}>
+                  <span style={{ fontSize: '1rem', color: '#cbd5e1', marginBottom: '10px', display: 'block', fontWeight: '500' }}>CATEGORY:</span>
                   <select 
                     className="edit-reason-input" 
                     disabled={savingReason || isViewMode}
                     value={selectedCategory}
                     onChange={(e) => setSelectedCategory(e.target.value)}
-                    style={{ width: '100%', padding: '12px', fontSize: '1rem', borderRadius: '8px', background: 'rgba(15, 23, 42, 0.8)', border: '1px solid rgba(255,255,255,0.2)', color: 'white', outline: 'none' }}
+                    style={{ width: '100%', padding: '14px', fontSize: '1.05rem', borderRadius: '10px', background: 'rgba(15, 23, 42, 0.8)', border: '1px solid rgba(255,255,255,0.2)', color: 'white', outline: 'none', boxSizing: 'border-box' }}
                   >
                     <option value="">-- Select Category --</option>
-                    {Object.keys(DUMMY_DOWNTIME_DATA[editReasonText] || {}).map(catName => (
+                    {Object.keys(ACTUAL_DOWNTIME_DATA[editReasonText] || {}).map(catName => (
                       <option key={catName} value={catName}>{catName}</option>
                     ))}
                   </select>
                 </label>
 
                 {selectedCategory && (
-                  <label className="edit-label" style={{ marginTop: '20px' }}>
-                    <span style={{ fontSize: '0.95rem', color: '#cbd5e1', marginBottom: '8px', display: 'block' }}>Sub-Reason:</span>
+                  <label className="edit-label" style={{ marginTop: '24px' }}>
+                    <span style={{ fontSize: '1rem', color: '#cbd5e1', marginBottom: '10px', display: 'block', fontWeight: '500' }}>SUB-REASON:</span>
                     <select 
                       className="edit-reason-input" 
                       disabled={savingReason || isViewMode}
-                      style={{ width: '100%', padding: '12px', fontSize: '1rem', borderRadius: '8px', background: 'rgba(15, 23, 42, 0.8)', border: '1px solid rgba(255,255,255,0.2)', color: 'white', outline: 'none' }}
+                      value={selectedSubReason}
+                      onChange={(e) => setSelectedSubReason(e.target.value)}
+                      style={{ width: '100%', padding: '14px', fontSize: '1.05rem', borderRadius: '10px', background: 'rgba(15, 23, 42, 0.8)', border: '1px solid rgba(255,255,255,0.2)', color: 'white', outline: 'none', boxSizing: 'border-box' }}
                     >
-                      {DUMMY_DOWNTIME_DATA[editReasonText]?.[selectedCategory]?.map(sub => (
+                      <option value="">-- Select Sub-Reason --</option>
+                      {ACTUAL_DOWNTIME_DATA[editReasonText]?.[selectedCategory]?.map(sub => (
                         <option key={sub} value={sub}>{sub}</option>
                       )) || <option>No sub-reasons found</option>}
                     </select>
                   </label>
                 )}
 
-                <div style={{ display: 'flex', gap: '12px', marginTop: '20px' }}>
+                <div style={{ display: 'flex', gap: '24px', marginTop: '28px' }}>
                   <label className="edit-label" style={{ flex: 1 }}>
-                    <span style={{ fontSize: '0.95rem', color: '#cbd5e1', marginBottom: '8px', display: 'block' }}>Responsibility:</span>
+                    <span style={{ fontSize: '1rem', color: '#cbd5e1', marginBottom: '10px', display: 'block', fontWeight: '500' }}>RESPONSIBILITY (DEPARTMENT):</span>
                     <select 
                       className="edit-reason-input" 
-                      disabled={savingReason || isViewMode}
+                      disabled={savingReason || isViewMode} 
                       value={editResponsibility}
-                      onChange={e => setEditResponsibility(e.target.value)}
-                      style={{ width: '100%', padding: '12px', fontSize: '0.95rem', borderRadius: '8px', background: 'rgba(15, 23, 42, 0.8)', border: '1px solid rgba(255,255,255,0.2)', color: 'white', outline: 'none' }}
+                      onChange={e => {
+                        const val = e.target.value;
+                        setEditResponsibility(val);
+                        if (val === 'M/c Maintenance') setEditPerson('Ashutosh Pandey');
+                        else if (val === 'Die-Maintenance') setEditPerson('S.A. Yadav');
+                        else if (val === 'Quality') setEditPerson('Sanjay Kaul');
+                        else if (val === 'Production') setEditPerson('Samsher Singh');
+                        else setEditPerson('');
+                      }}
+                      style={{ width: '100%', padding: '14px', fontSize: '1.05rem', borderRadius: '10px', background: 'rgba(15, 23, 42, 0.8)', border: '1px solid rgba(255,255,255,0.2)', color: 'white', outline: 'none', boxSizing: 'border-box' }}
                     >
                       <option value="">-- Select --</option>
-                      <option value="Maintenance">Maintenance</option>
-                      <option value="Production">Production</option>
+                      <option value="M/c Maintenance">M/c Maintenance</option>
+                      <option value="Die-Maintenance">Die-Maintenance</option>
                       <option value="Quality">Quality</option>
+                      <option value="Production">Production</option>
                     </select>
                   </label>
                   <label className="edit-label" style={{ flex: 1 }}>
-                    <span style={{ fontSize: '0.95rem', color: '#cbd5e1', marginBottom: '8px', display: 'block' }}>Person:</span>
+                    <span style={{ fontSize: '1rem', color: '#cbd5e1', marginBottom: '10px', display: 'block', fontWeight: '500' }}>PERSON (HOD):</span>
                     <input 
                       type="text" 
                       className="edit-reason-input" 
@@ -2061,26 +2032,26 @@ function SavedPage({
                       placeholder="e.g. Ramesh" 
                       value={editPerson}
                       onChange={e => setEditPerson(e.target.value)}
-                      style={{ width: '100%', padding: '12px', fontSize: '0.95rem', borderRadius: '8px', background: 'rgba(15, 23, 42, 0.8)', border: '1px solid rgba(255,255,255,0.2)', color: 'white', outline: 'none', boxSizing: 'border-box' }}
+                      style={{ width: '100%', padding: '14px', fontSize: '1.05rem', borderRadius: '10px', background: 'rgba(15, 23, 42, 0.8)', border: '1px solid rgba(255,255,255,0.2)', color: 'white', outline: 'none', boxSizing: 'border-box' }}
                     />
                   </label>
                   <label className="edit-label" style={{ flex: 1 }}>
-                    <span style={{ fontSize: '0.95rem', color: '#cbd5e1', marginBottom: '8px', display: 'block' }}>Target Date:</span>
+                    <span style={{ fontSize: '1rem', color: '#cbd5e1', marginBottom: '10px', display: 'block', fontWeight: '500' }}>TARGET DATE:</span>
                     <input 
                       type="date" 
                       className="edit-reason-input" 
                       disabled={savingReason || isViewMode} 
                       value={editTargetDate}
                       onChange={e => setEditTargetDate(e.target.value)}
-                      style={{ width: '100%', padding: '12px', fontSize: '0.95rem', borderRadius: '8px', background: 'rgba(15, 23, 42, 0.8)', border: '1px solid rgba(255,255,255,0.2)', color: 'white', outline: 'none', boxSizing: 'border-box' }}
+                      style={{ width: '100%', padding: '14px', fontSize: '1.05rem', borderRadius: '10px', background: 'rgba(15, 23, 42, 0.8)', border: '1px solid rgba(255,255,255,0.2)', color: 'white', outline: 'none', boxSizing: 'border-box' }}
                     />
                   </label>
                 </div>
-                <label className="edit-label" style={{ marginTop: '20px' }}>
-                  <span style={{ fontSize: '0.95rem', color: '#cbd5e1', marginBottom: '8px', display: 'block' }}>Action Taken:</span>
+                <label className="edit-label" style={{ marginTop: '28px' }}>
+                  <span style={{ fontSize: '1rem', color: '#cbd5e1', marginBottom: '10px', display: 'block', fontWeight: '500' }}>ACTION TAKEN:</span>
                   <textarea 
                     className="edit-note-input" 
-                    rows={2} 
+                    rows={4} 
                     disabled={savingReason || isViewMode} 
                     placeholder="Kya action liya gaya..."
                     value={editNoteText}
@@ -2089,10 +2060,10 @@ function SavedPage({
                       width: '100%',
                       background: 'rgba(15, 23, 42, 0.8)', 
                       border: '1px solid rgba(255,255,255,0.2)', 
-                      borderRadius: '8px', 
+                      borderRadius: '12px', 
                       color: 'white', 
-                      padding: '12px',
-                      fontSize: '0.95rem',
+                      padding: '16px',
+                      fontSize: '1.05rem',
                       fontFamily: 'inherit',
                       resize: 'none',
                       outline: 'none',
@@ -2103,15 +2074,15 @@ function SavedPage({
               </>
             )}
             
-            <label className="edit-label" style={{ marginTop: '20px', padding: '16px', background: 'rgba(59, 130, 246, 0.05)', borderRadius: '12px', border: '1px solid rgba(59, 130, 246, 0.2)' }}>
-              <span style={{ fontSize: '0.95rem', color: '#93c5fd', marginBottom: '8px', display: 'block', fontWeight: '600' }}>AI Voice Transcript (READ-ONLY):</span>
-              <div style={{ background: 'rgba(0,0,0,0.2)', padding: '12px', borderRadius: '8px', color: '#f1f5f9', fontStyle: editingReasonRecord?.transcript ? 'normal' : 'italic', fontSize: '0.95rem', marginBottom: '16px' }}>
+            <label className="edit-label" style={{ marginTop: '32px', padding: '24px', background: 'rgba(59, 130, 246, 0.05)', borderRadius: '16px', border: '1px solid rgba(59, 130, 246, 0.2)' }}>
+              <span style={{ fontSize: '1rem', color: '#93c5fd', marginBottom: '12px', display: 'block', fontWeight: '700', letterSpacing: '0.5px' }}>AI VOICE TRANSCRIPT (READ-ONLY):</span>
+              <div style={{ background: 'rgba(0,0,0,0.25)', padding: '16px', borderRadius: '12px', color: '#f1f5f9', fontStyle: editingReasonRecord?.transcript ? 'normal' : 'italic', fontSize: '1.1rem', marginBottom: '24px', lineHeight: '1.6' }}>
                 {editingReasonRecord?.transcript ? editingReasonRecord.transcript : 'No speech detected by AI.'}
               </div>
-              <span style={{ fontSize: '0.95rem', color: '#cbd5e1', marginBottom: '8px', display: 'block' }}>MANUAL CORRECTION (IF AI MADE A MISTAKE):</span>
+              <span style={{ fontSize: '1rem', color: '#cbd5e1', marginBottom: '12px', display: 'block', fontWeight: '600', letterSpacing: '0.5px' }}>MANUAL CORRECTION (IF AI MADE A MISTAKE):</span>
               <textarea 
                 className="edit-note-input" 
-                rows={2} 
+                rows={4} 
                 disabled={savingReason || isViewMode} 
                 placeholder="Write the actual sentence here to correct AI..."
                 value={editManualTranscript}
@@ -2120,10 +2091,11 @@ function SavedPage({
                   width: '100%',
                   background: 'rgba(15, 23, 42, 0.8)', 
                   border: '1px solid rgba(255,255,255,0.2)', 
-                  borderRadius: '8px', 
+                  borderRadius: '12px', 
                   color: 'white', 
-                  padding: '12px',
-                  fontSize: '0.95rem',
+                  padding: '16px',
+                  fontSize: '1.1rem',
+                  lineHeight: '1.6',
                   fontFamily: 'inherit',
                   resize: 'none',
                   outline: 'none',
@@ -2152,9 +2124,11 @@ function SavedPage({
                 </button>
               ) : (
                 (() => {
+                  const hasSubReasons = ACTUAL_DOWNTIME_DATA[editReasonText]?.[selectedCategory]?.length > 0;
                   const isValid = Boolean(
                     editReasonText.trim() &&
                     selectedCategory.trim() &&
+                    (!hasSubReasons || selectedSubReason.trim()) &&
                     editResponsibility.trim() &&
                     editPerson.trim() &&
                     editTargetDate.trim() &&
@@ -2564,6 +2538,7 @@ export function App() {
           />
         ) : (
           <SavedPage
+            page={page}
             settings={settings}
             refreshToken={refreshToken}
             stats={stats}

@@ -129,6 +129,7 @@ export type RecordingRecord = {
   transcript_error?: string | null;
   transcribed_at?: string | null;
   updated_at?: string | null;
+  manual_transcript?: string | null;
 };
 
 export type ReasonOption = {

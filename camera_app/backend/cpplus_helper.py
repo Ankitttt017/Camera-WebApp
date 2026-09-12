@@ -2145,9 +2145,14 @@ REPORT_COLUMNS = [
     'Video Duration',
     'Event Duration',
     'File Size',
-    'Category',
-    'Reason',
-    'Remark',
+    'Event Type',
+    'Downtime Type (L1)',
+    'Category (L2)',
+    'Sub-Reason (L3)',
+    'Responsibility (Department)',
+    'Person (HOD)',
+    'Target Date',
+    'Action / Remark',
     'Status',
     'Actions',
     'Video Link',
@@ -2174,6 +2179,22 @@ def recording_export_rows(request: RecordingIndexRequest) -> list[list[object]]:
     report_rows = []
     for index, row in enumerate(rows, start=1):
         event_duration = row.get('event_duration_seconds') or row.get('duration_seconds') or ''
+        
+        # Parse reason into L1, L2, L3
+        reason_str = row.get('reason') or ''
+        reason_parts = reason_str.split(' - ')
+        l1 = reason_parts[0] if len(reason_parts) > 0 else 'Pending reason'
+        l2 = reason_parts[1] if len(reason_parts) > 1 else ''
+        l3 = reason_parts[2] if len(reason_parts) > 2 else ''
+        
+        # Parse note into dictionary
+        note_str = row.get('reason_note') or ''
+        note_dict = {}
+        for part in note_str.split(' | '):
+            if ': ' in part:
+                k, v = part.split(': ', 1)
+                note_dict[k.strip()] = v.strip()
+                
         report_rows.append([
             index,
             format_report_datetime(row.get('started_at')),
@@ -2182,8 +2203,13 @@ def recording_export_rows(request: RecordingIndexRequest) -> list[list[object]]:
             format_report_duration(event_duration),
             format_report_size(row.get('file_size')),
             event_type_label(row.get('event_type') or 'minor_stoppage'),
-            row.get('reason') or 'Pending reason',
-            row.get('reason_note') or '',
+            l1,
+            l2,
+            l3,
+            note_dict.get('Responsibility', ''),
+            note_dict.get('Person', ''),
+            note_dict.get('Target Date', ''),
+            note_dict.get('Action', ''),
             report_status_label(row),
             report_action_label(row),
             'View Video' if report_video_url(row, request) else 'No video',
