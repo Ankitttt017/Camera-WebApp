@@ -116,6 +116,7 @@ def create_deck():
     p_l.font.color.rgb = text_color
     p_l.font.name = 'Arial'
     
+    
     p_l2 = tf_l.add_paragraph()
     p_l2.text = "Manual logging is inefficient and leads to information gaps, preventing continuous improvement teams from identifying the root cause of frequent machine failures."
     p_l2.font.size = Pt(14)
