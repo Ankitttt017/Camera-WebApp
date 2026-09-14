@@ -5,6 +5,10 @@ import io
 import json
 import mimetypes
 import os
+
+# Force OpenCV to use TCP for RTSP instead of UDP to prevent packet loss / firewall drops
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
+
 import secrets
 import shutil
 import socket
