@@ -1,313 +1,498 @@
 import React, { useMemo } from 'react';
 import { RecordingRecord } from './api';
-import { PieChart, Pie, Cell, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid, ResponsiveContainer, LineChart, Line, Legend } from 'recharts';
+import { 
+  PieChart, Pie, Cell, Tooltip as RechartsTooltip, BarChart, Bar, XAxis, YAxis, 
+  CartesianGrid, ResponsiveContainer, LineChart, Line, ComposedChart, Legend 
+} from 'recharts';
 
 interface DashboardProps {
   records: RecordingRecord[];
 }
 
 const COLORS = {
-  breakdown: '#ef4444', // Danger Red
-  minor: '#f59e0b', // Warning Orange
-  shiftA: '#8b5cf6',
-  shiftB: '#ec4899',
-  shiftC: '#14b8a6',
+  breakdown: '#ef4444', 
+  minor: '#f59e0b',
+  selfCapture: '#3b82f6',
   trend: '#0ea5e9',
+  documented: '#22c55e',
+  pending: '#f59e0b',
+  noRca: '#64748b',
+  pie1: '#ef4444',
+  pie2: '#f59e0b',
+  pie3: '#3b82f6',
+  donut1: '#8b5cf6',
+  donut2: '#10b981',
+  donut3: '#f43f5e'
 };
 
-function formatDuration(seconds: number) {
-  if (seconds >= 3600) return (seconds / 3600).toFixed(1) + ' hrs';
-  if (seconds >= 60) return (seconds / 60).toFixed(1) + ' min';
-  return seconds + ' sec';
+function formatDuration(seconds: number, format: 'short' | 'long' = 'long') {
+  if (isNaN(seconds) || seconds < 0) return format === 'long' ? '0 sec' : '0s';
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+
+  if (format === 'short') {
+    if (h > 0) return `${h}h ${m}m`;
+    if (m > 0) return `${m}m ${s}s`;
+    return `${s}s`;
+  }
+  
+  const parts = [];
+  if (h > 0) parts.push(`${h}h`);
+  if (m > 0) parts.push(`${m}m`);
+  if (s > 0 && h === 0) parts.push(`${s}s`);
+  return parts.length > 0 ? parts.join(' ') : '0s';
+}
+
+function formatDurationDigital(seconds: number) {
+  if (isNaN(seconds) || seconds < 0) return '0:00';
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  if (h > 0) {
+    return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  }
+  return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
 function eventDuration(record: RecordingRecord) {
   return record.event_duration_seconds || record.duration_seconds || 0;
 }
 
+function hasRca(record: RecordingRecord) {
+  const reason = (record.reason || record.manual_transcript || '').trim();
+  if (!reason || reason.toLowerCase() === 'pending reason') return false;
+  return true;
+}
+
 export const Dashboard: React.FC<DashboardProps> = ({ records }) => {
   const stats = useMemo(() => {
+    let breakdownSec = 0;
+    let minorSec = 0;
+    let selfCaptureSec = 0;
     let breakdownCount = 0;
     let minorCount = 0;
-    let totalDowntimeSec = 0;
-    let longestSec = 0;
+    let selfCaptureCount = 0;
     
-    // For Hour of Day
+    let documentedCount = 0;
+    let withVideoCount = 0;
+    
+    let firstEventTime = Infinity;
+    let lastEventTime = 0;
+
     const hourlyCounts = new Array(24).fill(0);
-    
-    // 1. Line Chart Data (Trend by Date)
     const dailyMap: Record<string, number> = {};
     
-    // 2. Shift Data (Bar Chart)
-    const shiftMap = { A: 0, B: 0, C: 0 };
+    // For RCA Status
+    let loggedNoRca = 0;
+    let pending = 0;
     
-    // 3. Time Loss by Category (Pie Chart)
-    let breakdownDuration = 0;
-    let minorDuration = 0;
+    const validRecords = records.filter(r => r.started_at);
 
-    records.forEach(r => {
-      const isBreakdown = r.event_type === 'breakdown';
-      if (isBreakdown) breakdownCount++;
-      else minorCount++;
-      
+    validRecords.forEach(r => {
       const duration = eventDuration(r);
-      totalDowntimeSec += duration;
-      if (duration > longestSec) longestSec = duration;
-
+      const isBreakdown = r.event_type === 'breakdown';
+      const isMinor = r.event_type === 'minor_stoppage';
+      
       if (isBreakdown) {
-        breakdownDuration += (duration / 60); // minutes
+        breakdownCount++;
+        breakdownSec += duration;
+      } else if (isMinor) {
+        minorCount++;
+        minorSec += duration;
       } else {
-        minorDuration += (duration / 60);
+        selfCaptureCount++;
+        selfCaptureSec += duration;
+      }
+
+      if (hasRca(r)) {
+        documentedCount++;
+      } else {
+        const reason = (r.reason || '').trim().toLowerCase();
+        if (reason === 'pending reason' || reason === '') pending++;
+        else loggedNoRca++;
       }
       
-      if (r.started_at) {
-        const d = new Date(r.started_at);
-        const hour = d.getHours();
-        hourlyCounts[hour]++;
-        
-        // Trend by date (MM-DD)
-        const dateStr = d.toISOString().split('T')[0];
-        if (!dailyMap[dateStr]) dailyMap[dateStr] = 0;
-        dailyMap[dateStr] += (duration / 60);
-        
-        // Shift check
-        const m = d.getMinutes();
-        const timeVal = hour + m / 60;
-        if (timeVal >= 6 && timeVal < 14.5) {
-          shiftMap.A++;
-        } else if (timeVal >= 14.5 && timeVal < 23) {
-          shiftMap.B++;
-        } else {
-          shiftMap.C++;
-        }
-      }
+      if (r.file_path) withVideoCount++;
+
+      const d = new Date(r.started_at as string);
+      const timeMs = d.getTime();
+      if (timeMs < firstEventTime) firstEventTime = timeMs;
+      if (timeMs > lastEventTime) lastEventTime = timeMs;
+
+      const hour = d.getHours();
+      hourlyCounts[hour]++;
+      
+      const dateStr = d.toLocaleDateString('en-GB'); // DD/MM/YYYY
+      if (!dailyMap[dateStr]) dailyMap[dateStr] = 0;
+      dailyMap[dateStr] += duration;
     });
 
+    const totalSec = breakdownSec + minorSec + selfCaptureSec;
+    const totalEvents = validRecords.length;
+    
+    // KPIs
+    const mttrSec = breakdownCount > 0 ? (breakdownSec / breakdownCount) : 0;
+    const mtbfSec = breakdownCount > 1 ? ((lastEventTime - firstEventTime) / 1000) / breakdownCount : 0;
+    const rcaPercent = totalEvents > 0 ? Math.round((documentedCount / totalEvents) * 100) : 0;
+    const videoPercent = totalEvents > 0 ? Math.round((withVideoCount / totalEvents) * 100) : 0;
+
+    // Charts Data
+    const categoryFreqData = [
+      { name: 'Breakdown', value: breakdownCount, fill: COLORS.breakdown },
+      { name: 'Minor Stoppage', value: minorCount, fill: COLORS.minor },
+      { name: 'Self Capture', value: selfCaptureCount, fill: COLORS.selfCapture },
+    ].filter(d => d.value > 0);
+
+    const categoryTimeData = [
+      { name: 'Breakdown', value: parseFloat((breakdownSec / 3600).toFixed(2)), fill: COLORS.breakdown },
+      { name: 'Minor Stoppage', value: parseFloat((minorSec / 3600).toFixed(2)), fill: COLORS.minor },
+      { name: 'Self Capture', value: parseFloat((selfCaptureSec / 3600).toFixed(2)), fill: COLORS.selfCapture },
+    ].filter(d => d.value > 0);
+
+    const dailyData = Object.keys(dailyMap).map(date => ({
+      date: date.substring(0, 5), // DD/MM
+      hours: parseFloat((dailyMap[date] / 3600).toFixed(2)),
+      fullDate: date,
+      rawSec: dailyMap[date]
+    })).sort((a, b) => a.fullDate.localeCompare(b.fullDate));
+
     const hourlyData = hourlyCounts.map((count, hour) => ({
-      name: `${hour}:00`,
+      name: `${hour}`,
       count
     }));
 
-    const trendData = Object.keys(dailyMap).sort().map(date => ({
-      date: date.substring(5), // MM-DD
-      minutes: Math.round(dailyMap[date])
-    }));
-
-    const shiftData = [
-      { name: 'Shift A', events: shiftMap.A },
-      { name: 'Shift B', events: shiftMap.B },
-      { name: 'Shift C', events: shiftMap.C },
-    ];
-    
-    const severityPieData = [
-      { name: 'Breakdown', value: Math.round(breakdownDuration) },
-      { name: 'Minor Stoppage', value: Math.round(minorDuration) },
+    const rcaData = [
+      { name: 'Documented', value: documentedCount, fill: COLORS.documented },
+      { name: 'Logged (No RCA)', value: loggedNoRca, fill: COLORS.noRca },
+      { name: 'Pending', value: pending, fill: COLORS.pending },
     ];
 
-    const pieData = [
-      { name: 'Breakdown', value: breakdownCount },
-      { name: 'Minor Stoppage', value: minorCount },
-    ];
+    // Pareto Analysis
+    const sortedRecords = [...validRecords].sort((a, b) => eventDuration(b) - eventDuration(a));
+    const paretoData = [];
+    let cumulativeSec = 0;
     
-    // Sort records by duration to get top 5
-    const topRecords = [...records]
-      .sort((a, b) => eventDuration(b) - eventDuration(a))
-      .slice(0, 5);
+    for (let i = 0; i < Math.min(15, sortedRecords.length); i++) {
+      const r = sortedRecords[i];
+      const dur = eventDuration(r);
+      cumulativeSec += dur;
+      const cumPercent = totalSec > 0 ? (cumulativeSec / totalSec) * 100 : 0;
+      paretoData.push({
+        id: `#${i+1}`,
+        durationMin: parseFloat((dur / 60).toFixed(1)),
+        cumulative: parseFloat(cumPercent.toFixed(1))
+      });
+    }
+    
+    // Automated Insights
+    let pareto80Count = 0;
+    for (const p of paretoData) {
+      pareto80Count++;
+      if (p.cumulative >= 80) break;
+    }
+    
+    let worstDay = { fullDate: '-', hours: 0 };
+    dailyData.forEach(d => { if (d.hours > worstDay.hours) worstDay = d; });
+    
+    const peakHourIndex = hourlyCounts.indexOf(Math.max(...hourlyCounts));
+    const peakHour = Math.max(...hourlyCounts) > 0 ? `${peakHourIndex}:00-${peakHourIndex+1}:00` : '-';
+    
+    const largestStoppage = sortedRecords.length > 0 ? sortedRecords[0] : null;
+    const largestPercent = largestStoppage && totalSec > 0 ? (eventDuration(largestStoppage) / totalSec * 100).toFixed(0) : '0';
 
     return {
-      totalEvents: records.length,
-      breakdownCount,
-      minorCount,
-      totalDowntimeSec,
-      avgDurationSec: records.length > 0 ? totalDowntimeSec / records.length : 0,
-      longestSec,
-      hourlyData,
-      pieData,
-      topRecords,
-      trendData,
-      shiftData,
-      severityPieData
+      totalEvents, totalSec, breakdownSec, minorSec, selfCaptureSec,
+      mttrSec, mtbfSec, rcaPercent, videoPercent,
+      categoryFreqData, categoryTimeData, dailyData, hourlyData, rcaData, paretoData,
+      topRecords: sortedRecords.slice(0, 10),
+      allRecords: sortedRecords,
+      insights: {
+        breakdownPercent: totalSec > 0 ? (breakdownSec / totalSec * 100).toFixed(0) : '0',
+        breakdownCount,
+        largestStoppage,
+        largestPercent,
+        pareto80Count,
+        missingRcaPercent: totalEvents > 0 ? (((pending + loggedNoRca) / totalEvents) * 100).toFixed(0) : '0',
+        missingRcaCount: pending + loggedNoRca,
+        peakHour,
+        worstDay
+      }
     };
   }, [records]);
 
+  if (stats.totalEvents === 0) {
+    return <div className="p-8 text-center text-gray-400">No records found for the selected period.</div>;
+  }
+
+  const renderCustomTooltip = ({ active, payload }: any) => {
+    if (active && payload && payload.length) {
+      return (
+        <div className="custom-tooltip">
+          <p className="label">{`${payload[0].name} : ${payload[0].value}`}</p>
+        </div>
+      );
+    }
+    return null;
+  };
+
   return (
-    <div className="analytics-dashboard">
-      <div className="analytics-header">
-        <h2>Key Performance Indicators</h2>
-        <p>Overview of downtime metrics for the selected period.</p>
+    <div className="tpm-dashboard">
+      <div className="tpm-header">
+        <h1>Machine Stoppage Analytics</h1>
+        <p>Live analysis of stoppage logs. Automated metrics active. All {stats.totalEvents} rows parsed successfully.</p>
       </div>
 
-      <div className="kpi-grid">
-        <div className="kpi-card">
-          <span className="kpi-value">{stats.totalEvents}</span>
-          <span className="kpi-label">Total Stoppage Events</span>
+      {/* Hero Header */}
+      <div className="tpm-hero-header">
+        <div className="hero-left">
+          <div className="hero-label">Total downtime logged</div>
+          <div className="hero-value">{formatDuration(stats.totalSec, 'short')}</div>
+          <div className="hero-sub">{stats.totalEvents} stoppage events logged</div>
         </div>
-        <div className="kpi-card">
-          <span className="kpi-value">{formatDuration(stats.totalDowntimeSec)}</span>
-          <span className="kpi-label">Total Downtime</span>
-        </div>
-        <div className="kpi-card">
-          <span className="kpi-value" style={{ color: COLORS.breakdown }}>{stats.breakdownCount}</span>
-          <span className="kpi-label">Breakdown Events</span>
-        </div>
-        <div className="kpi-card">
-          <span className="kpi-value" style={{ color: COLORS.minor }}>{stats.minorCount}</span>
-          <span className="kpi-label">Minor Stoppage Events</span>
-        </div>
-        <div className="kpi-card">
-          <span className="kpi-value">{formatDuration(stats.avgDurationSec)}</span>
-          <span className="kpi-label">Avg. Event Duration</span>
-        </div>
-        <div className="kpi-card">
-          <span className="kpi-value">{formatDuration(stats.longestSec)}</span>
-          <span className="kpi-label">Longest Single Stoppage</span>
-        </div>
-      </div>
-
-      <div className="charts-grid">
-        {/* NEW: Trend Line Chart */}
-        <div className="chart-card" style={{ gridColumn: '1 / -1' }}>
-          <h3>Downtime Trend Over Time</h3>
-          <p>Daily total downtime duration (in minutes)</p>
-          <div className="chart-container">
-            <ResponsiveContainer width="100%" height={300}>
-              <LineChart data={stats.trendData} margin={{ top: 20, right: 30, left: 0, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(255,255,255,0.1)" />
-                <XAxis dataKey="date" tick={{fontSize: 12, fill: '#9ca3af'}} axisLine={false} tickLine={false} />
-                <YAxis tick={{fontSize: 12, fill: '#9ca3af'}} axisLine={false} tickLine={false} />
-                <Tooltip 
-                  contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155' }}
-                  itemStyle={{ color: '#f8fafc' }}
-                />
-                <Line type="monotone" dataKey="minutes" stroke={COLORS.trend} strokeWidth={3} dot={{ r: 4, fill: COLORS.trend, strokeWidth: 0 }} activeDot={{ r: 6 }} />
-              </LineChart>
-            </ResponsiveContainer>
+        <div className="hero-right">
+          <div className="split-metric">
+            <span className="split-val" style={{color: COLORS.breakdown}}>{formatDurationDigital(stats.breakdownSec)}</span>
+            <span className="split-label">Breakdown ({stats.categoryFreqData.find(d=>d.name==='Breakdown')?.value||0})</span>
           </div>
-        </div>
-
-        {/* Existing: Frequency Donut */}
-        <div className="chart-card">
-          <h3>Events by Category (Frequency)</h3>
-          <p>Share of total stoppage events</p>
-          <div className="chart-container">
-            <ResponsiveContainer width="100%" height={300}>
-              <PieChart>
-                <Pie data={stats.pieData} dataKey="value" cx="50%" cy="50%" innerRadius={80} outerRadius={120} paddingAngle={2}>
-                  {stats.pieData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.name === 'Breakdown' ? COLORS.breakdown : COLORS.minor} />
-                  ))}
-                </Pie>
-                <Tooltip />
-              </PieChart>
-            </ResponsiveContainer>
+          <div className="split-metric">
+            <span className="split-val" style={{color: COLORS.minor}}>{formatDurationDigital(stats.minorSec)}</span>
+            <span className="split-label">Minor Stoppage ({stats.categoryFreqData.find(d=>d.name==='Minor Stoppage')?.value||0})</span>
           </div>
-          <div className="chart-legend">
-            <span className="legend-item"><i style={{background: COLORS.breakdown}}></i> Breakdown</span>
-            <span className="legend-item"><i style={{background: COLORS.minor}}></i> Minor Stoppage</span>
-          </div>
-        </div>
-
-        {/* NEW: Severity Solid Pie */}
-        <div className="chart-card">
-          <h3>Time Loss by Category (Severity)</h3>
-          <p>Share of total downtime duration (Minutes)</p>
-          <div className="chart-container">
-            <ResponsiveContainer width="100%" height={300}>
-              <PieChart>
-                <Pie data={stats.severityPieData} dataKey="value" cx="50%" cy="50%" outerRadius={120} paddingAngle={0}>
-                  {stats.severityPieData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.name === 'Breakdown' ? COLORS.breakdown : COLORS.minor} />
-                  ))}
-                </Pie>
-                <Tooltip />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-          <div className="chart-legend">
-            <span className="legend-item"><i style={{background: COLORS.breakdown}}></i> Breakdown</span>
-            <span className="legend-item"><i style={{background: COLORS.minor}}></i> Minor Stoppage</span>
-          </div>
-        </div>
-
-        {/* NEW: Shift Bar Chart */}
-        <div className="chart-card">
-          <h3>Stoppages by Shift</h3>
-          <p>Total number of events in each shift</p>
-          <div className="chart-container">
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={stats.shiftData} layout="vertical" margin={{ top: 20, right: 30, left: 20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="rgba(255,255,255,0.1)" />
-                <XAxis type="number" tick={{fontSize: 12, fill: '#9ca3af'}} axisLine={false} tickLine={false} />
-                <YAxis dataKey="name" type="category" tick={{fontSize: 12, fill: '#9ca3af'}} axisLine={false} tickLine={false} width={80} />
-                <Tooltip cursor={{fill: 'rgba(255,255,255,0.05)'}} />
-                <Bar dataKey="events" radius={[0, 4, 4, 0]}>
-                  {stats.shiftData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={index === 0 ? COLORS.shiftA : index === 1 ? COLORS.shiftB : COLORS.shiftC} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        {/* Existing: Hourly Bar Chart */}
-        <div className="chart-card">
-          <h3>Stoppage Pattern by Hour</h3>
-          <p>Number of stoppage events starting in each hour</p>
-          <div className="chart-container">
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={stats.hourlyData} margin={{ top: 20, right: 30, left: 0, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(255,255,255,0.1)" />
-                <XAxis dataKey="name" tick={{fontSize: 12, fill: '#9ca3af'}} axisLine={false} tickLine={false} />
-                <YAxis tick={{fontSize: 12, fill: '#9ca3af'}} axisLine={false} tickLine={false} />
-                <Tooltip cursor={{fill: 'rgba(255,255,255,0.05)'}} />
-                <Bar dataKey="count" fill="#3b82f6" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+          <div className="split-metric">
+            <span className="split-val" style={{color: COLORS.selfCapture}}>{formatDurationDigital(stats.selfCaptureSec)}</span>
+            <span className="split-label">Self Capture ({stats.categoryFreqData.find(d=>d.name==='Self Capture')?.value||0})</span>
           </div>
         </div>
       </div>
 
-      <div className="analytics-header mt-8">
-        <h2>Longest Stoppages</h2>
-        <p>Top events by duration — the longest single contributors to total downtime.</p>
+      {/* KPI Cards (Colorful) */}
+      <div className="tpm-kpi-grid">
+        <div className="kpi-card color-blue">
+          <div className="kpi-val">{stats.totalEvents}</div>
+          <div className="kpi-label">Total Stoppage Events</div>
+        </div>
+        <div className="kpi-card color-red">
+          <div className="kpi-val">{formatDuration(stats.totalSec, 'short')}</div>
+          <div className="kpi-label">Total Downtime</div>
+        </div>
+        <div className="kpi-card color-orange">
+          <div className="kpi-val">{formatDurationDigital(stats.mttrSec)}</div>
+          <div className="kpi-label">MTTR (Avg. Repair Time)</div>
+        </div>
+        <div className="kpi-card color-purple">
+          <div className="kpi-val">{stats.mtbfSec > 0 ? (stats.mtbfSec / 3600).toFixed(1) + 'h' : '-'}</div>
+          <div className="kpi-label">MTBF (Avg. Time Btw Breakdowns)</div>
+        </div>
+        <div className="kpi-card color-green">
+          <div className="kpi-val">{stats.rcaPercent}%</div>
+          <div className="kpi-label">Root-Cause Documented</div>
+        </div>
+        <div className="kpi-card color-teal">
+          <div className="kpi-val">{stats.videoPercent}%</div>
+          <div className="kpi-label">Events with Video Captured</div>
+        </div>
       </div>
 
-      <div className="top-events-table-wrapper">
-        <table className="top-events-table">
-          <thead>
-            <tr>
-              <th>Start Date & Time</th>
-              <th>Category</th>
-              <th>Duration</th>
-              <th>Reason</th>
-            </tr>
-          </thead>
-          <tbody>
-            {stats.topRecords.map((r, i) => {
-              const d = r.started_at ? new Date(r.started_at).toLocaleString() : '-';
-              const isBreakdown = r.event_type === 'breakdown';
-              return (
-                <tr key={r.file_path || i}>
-                  <td>{d}</td>
-                  <td>
-                    <span className={isBreakdown ? 'status-badge bad' : 'status-badge neutral'}>
-                      {isBreakdown ? 'Breakdown' : 'Minor Stoppage'}
-                    </span>
-                  </td>
-                  <td><strong>{formatDuration(eventDuration(r))}</strong></td>
-                  <td className="reason-cell">{r.reason || 'Pending reason'}</td>
-                </tr>
-              );
-            })}
-            {stats.topRecords.length === 0 && (
+      {/* Automated Insights */}
+      <div className="tpm-insights-panel">
+        <h3>Automated Insights</h3>
+        <ul>
+          <li>
+            <span style={{color: COLORS.breakdown, fontWeight: 'bold'}}>Breakdown</span> accounts for 
+            <strong> {stats.insights.breakdownPercent}%</strong> of total downtime ({formatDurationDigital(stats.breakdownSec)}) 
+            across {stats.insights.breakdownCount} events.
+          </li>
+          {stats.insights.largestStoppage && (
+            <li>
+              The single largest stoppage is <strong>{stats.insights.largestStoppage.started_at ? new Date(stats.insights.largestStoppage.started_at).toLocaleDateString('en-GB') : ''}</strong>, 
+              equal to <strong>{stats.insights.largestPercent}%</strong> of all logged downtime on its own.
+            </li>
+          )}
+          <li>
+            Just <strong>{stats.insights.pareto80Count} of {stats.totalEvents}</strong> events ({(stats.insights.pareto80Count/stats.totalEvents*100).toFixed(0)}%) 
+            account for 80% of total downtime — fixing these first gives the fastest payback.
+          </li>
+          <li>
+            <strong>{stats.insights.missingRcaPercent}%</strong> of events ({stats.insights.missingRcaCount} of {stats.totalEvents}) have 
+            <strong style={{color: COLORS.pending}}> no completed root-cause action</strong>.
+          </li>
+          <li>
+            Stoppages occur most around <strong>{stats.insights.peakHour}</strong> — worth checking operator shift-change or peak-load timing.
+          </li>
+          {stats.insights.worstDay.hours > 0 && (
+            <li>
+              <strong>{stats.insights.worstDay.fullDate}</strong> was the worst day logged, with {stats.insights.worstDay.hours}h of downtime.
+            </li>
+          )}
+        </ul>
+      </div>
+
+      {/* Charts Grid */}
+      <div className="tpm-charts-layout">
+        
+        <div className="chart-box">
+          <h4>Events by Category (Pie Chart)</h4>
+          <ResponsiveContainer width="100%" height={250}>
+            <PieChart>
+              <Pie
+                data={stats.categoryFreqData}
+                cx="50%"
+                cy="50%"
+                labelLine={false}
+                outerRadius={80}
+                fill="#8884d8"
+                dataKey="value"
+              >
+                {stats.categoryFreqData.map((entry, index) => (
+                  <Cell key={`cell-${index}`} fill={entry.fill} />
+                ))}
+              </Pie>
+              <RechartsTooltip content={renderCustomTooltip} />
+              <Legend verticalAlign="bottom" height={36} />
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
+
+        <div className="chart-box">
+          <h4>Downtime by Category (Donut Chart)</h4>
+          <ResponsiveContainer width="100%" height={250}>
+            <PieChart>
+              <Pie
+                data={stats.categoryTimeData}
+                cx="50%"
+                cy="50%"
+                innerRadius={60}
+                outerRadius={80}
+                fill="#82ca9d"
+                dataKey="value"
+                paddingAngle={5}
+              >
+                {stats.categoryTimeData.map((entry, index) => (
+                  <Cell key={`cell-${index}`} fill={entry.fill} />
+                ))}
+              </Pie>
+              <RechartsTooltip content={renderCustomTooltip} />
+              <Legend verticalAlign="bottom" height={36} />
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
+
+        <div className="chart-box full-width">
+          <h4>Downtime by date (Hours)</h4>
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={stats.dailyData}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#334155" />
+              <XAxis dataKey="date" tick={{fill: '#94a3b8', fontSize: 11}} axisLine={false} tickLine={false} />
+              <YAxis tick={{fill: '#94a3b8', fontSize: 11}} axisLine={false} tickLine={false} />
+              <RechartsTooltip cursor={{fill: '#1e293b'}} contentStyle={{background: '#0f172a', border: 'none'}} />
+              <Bar dataKey="hours" fill="#fbbf24" radius={[4,4,0,0]} maxBarSize={40} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+
+        <div className="chart-box">
+          <h4>Stoppages by hour of day</h4>
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={stats.hourlyData}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#334155" />
+              <XAxis dataKey="name" tick={{fill: '#94a3b8', fontSize: 11}} axisLine={false} tickLine={false} />
+              <YAxis tick={{fill: '#94a3b8', fontSize: 11}} axisLine={false} tickLine={false} />
+              <RechartsTooltip cursor={{fill: '#1e293b'}} contentStyle={{background: '#0f172a', border: 'none'}} />
+              <Bar dataKey="count" fill="#38bdf8" radius={[2,2,0,0]} maxBarSize={40} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+
+        <div className="chart-box">
+          <h4>Root-cause documentation status</h4>
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={stats.rcaData} layout="vertical">
+              <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#334155" />
+              <XAxis type="number" tick={{fill: '#94a3b8', fontSize: 11}} axisLine={false} tickLine={false} />
+              <YAxis dataKey="name" type="category" tick={{fill: '#94a3b8', fontSize: 11}} axisLine={false} tickLine={false} width={100} />
+              <RechartsTooltip cursor={{fill: '#1e293b'}} contentStyle={{background: '#0f172a', border: 'none'}} />
+              <Bar dataKey="value" radius={[0,4,4,0]} maxBarSize={24}>
+                {stats.rcaData.map((entry, index) => <Cell key={index} fill={entry.fill} />)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+
+        <div className="chart-box full-width">
+          <h4>Pareto — top downtime contributors</h4>
+          <ResponsiveContainer width="100%" height={300}>
+            <ComposedChart data={stats.paretoData}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#334155" />
+              <XAxis dataKey="id" tick={{fill: '#94a3b8', fontSize: 11}} axisLine={false} tickLine={false} />
+              <YAxis yAxisId="left" tick={{fill: '#94a3b8', fontSize: 11}} axisLine={false} tickLine={false} />
+              <YAxis yAxisId="right" orientation="right" tick={{fill: '#94a3b8', fontSize: 11}} axisLine={false} tickLine={false} domain={[0, 100]} />
+              <RechartsTooltip cursor={{fill: '#1e293b'}} contentStyle={{background: '#0f172a', border: 'none'}} />
+              <Bar yAxisId="left" dataKey="durationMin" fill="#ef4444" name="Duration (Min)" radius={[4,4,0,0]} maxBarSize={40} />
+              <Line yAxisId="right" type="monotone" dataKey="cumulative" stroke="#fbbf24" strokeWidth={3} dot={{r:4, fill:'#fbbf24', strokeWidth:0}} name="Cumulative %" />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* Top 10 Table */}
+      <div className="tpm-table-section">
+        <h4>Top 10 longest stoppages</h4>
+        <div className="table-responsive">
+          <table className="tpm-table">
+            <thead>
               <tr>
-                <td colSpan={4} className="text-center">No records found for selected period.</td>
+                <th>#</th>
+                <th>Start Date & Time</th>
+                <th>Category</th>
+                <th>Duration</th>
+                <th>Reason</th>
+                <th>Status</th>
               </tr>
-            )}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {stats.topRecords.map((r, i) => {
+                const d = r.started_at ? new Date(r.started_at).toLocaleString('en-GB') : '-';
+                const isBreakdown = r.event_type === 'breakdown';
+                const documented = hasRca(r);
+                return (
+                  <tr key={r.file_path || i}>
+                    <td>{i+1}</td>
+                    <td>{d}</td>
+                    <td>
+                      <span className={`tpm-badge ${isBreakdown ? 'danger' : 'warning'}`}>
+                        {isBreakdown ? 'Breakdown' : 'Minor Stoppage'}
+                      </span>
+                    </td>
+                    <td className="dur">{formatDurationDigital(eventDuration(r))}</td>
+                    <td className="reason-col">{r.reason || 'Pending reason'}</td>
+                    <td>
+                      <span className={`tpm-badge-outline ${documented ? 'success' : 'pending'}`}>
+                        {documented ? 'RCA Documented' : 'Pending RCA'}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
+      
+      {/* Methodology Section */}
+      <div className="tpm-methodology">
+        <details>
+          <summary>How these numbers are calculated</summary>
+          <div className="details-content">
+            <p><strong>Total downtime:</strong> Sum of all parsed event durations across the selected period.</p>
+            <p><strong>MTTR (Mean Time to Repair):</strong> Average duration of "Breakdown" category events only.</p>
+            <p><strong>Avg time between breakdowns:</strong> Rough proxy of MTBF calculated as timespan between first and last breakdown divided by breakdown count.</p>
+            <p><strong>Root-cause documented:</strong> Percentage of events where the Reason/Action text is filled vs empty or pending.</p>
+            <p><strong>Pareto analysis:</strong> Events sorted by duration, with cumulative percentage showing the impact of the top few events.</p>
+          </div>
+        </details>
+      </div>
+
     </div>
   );
 };
