@@ -2,7 +2,7 @@ import React, { useMemo } from 'react';
 import { RecordingRecord } from './api';
 import { 
   PieChart, Pie, Cell, Tooltip as RechartsTooltip, BarChart, Bar, XAxis, YAxis, 
-  CartesianGrid, ResponsiveContainer, LineChart, Line, ComposedChart, Legend, LabelList 
+  CartesianGrid, ResponsiveContainer, Line, ComposedChart, Legend, LabelList 
 } from 'recharts';
 
 interface DashboardProps {
@@ -24,6 +24,21 @@ const COLORS = {
   donut2: '#10b981',
   donut3: '#f43f5e'
 };
+
+// Color map for reason_category field values from the Event Report form
+const CATEGORY_COLORS_MAP: Record<string, string> = {
+  'Machine Breakdown':        '#ef4444',
+  'Die Breakdown':            '#f97316',
+  'Robot Breakdown':          '#a855f7',
+  'Process Loss':             '#3b82f6',
+  'Management Loss':          '#64748b',
+  'Planned Downtime':         '#22c55e',
+  'HPDC Machine Accessories': '#ec4899',
+};
+
+function getCategoryColor(name: string): string {
+  return CATEGORY_COLORS_MAP[name] || '#6366f1';
+}
 
 function formatDuration(seconds: number, format: 'short' | 'long' = 'long') {
   if (isNaN(seconds) || seconds < 0) return format === 'long' ? '0 sec' : '0s';
@@ -104,6 +119,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ records }) => {
       } else {
         selfCaptureCount++;
         selfCaptureSec += duration;
+        // Operator Triggered (previously 'Self Capture')
       }
 
       if (hasRca(r)) {
@@ -154,7 +170,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ records }) => {
     const categoryFreqData = [
       { name: 'Breakdown', value: breakdownCount, fill: COLORS.breakdown },
       { name: 'Minor Stoppage', value: minorCount, fill: COLORS.minor },
-      { name: 'Self Capture', value: selfCaptureCount, fill: COLORS.selfCapture },
+      { name: 'Operator Triggered', value: selfCaptureCount, fill: COLORS.selfCapture },
     ].filter(d => d.value > 0);
 
     const categoryTimeData = [
@@ -198,7 +214,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ records }) => {
 
     const paretoData = [];
     let cumulativeSec = 0;
-    const topReasons = sortedReasons.slice(0, 15);
+    const topReasons = sortedReasons.slice(0, 8); // TOP 8 for readability
     
     for (let i = 0; i < topReasons.length; i++) {
       cumulativeSec += topReasons[i].duration;
@@ -211,10 +227,27 @@ export const Dashboard: React.FC<DashboardProps> = ({ records }) => {
     }
 
     const shiftData = [
-      { name: 'Shift A', value: parseFloat(((shiftMap['A'] || 0) / 3600).toFixed(2)), fill: COLORS.donut1 },
-      { name: 'Shift B', value: parseFloat(((shiftMap['B'] || 0) / 3600).toFixed(2)), fill: COLORS.donut2 },
-      { name: 'Shift C', value: parseFloat(((shiftMap['C'] || 0) / 3600).toFixed(2)), fill: COLORS.donut3 }
+      { name: 'Shift A (6am–2:30pm)',  value: parseFloat(((shiftMap['A'] || 0) / 3600).toFixed(2)), fill: COLORS.donut1 },
+      { name: 'Shift B (2:30pm–11pm)', value: parseFloat(((shiftMap['B'] || 0) / 3600).toFixed(2)), fill: COLORS.donut2 },
+      { name: 'Shift C (11pm–6am)',    value: parseFloat(((shiftMap['C'] || 0) / 3600).toFixed(2)), fill: COLORS.donut3 }
     ].filter(d => d.value > 0);
+
+    // Reason Category data — grouped by reason_category field from Event Report form
+    const reasonCategoryMap: Record<string, number> = {};
+    validRecords.forEach(r => {
+      const cat = (r.reason_category || '').trim();
+      if (!cat) return;
+      reasonCategoryMap[cat] = (reasonCategoryMap[cat] || 0) + eventDuration(r);
+    });
+    const reasonCategoryData = Object.entries(reasonCategoryMap)
+      .map(([name, sec]) => ({
+        name: name.length > 22 ? name.substring(0, 22) + '…' : name,
+        fullName: name,
+        value: parseFloat((sec / 3600).toFixed(2)),
+        fill: getCategoryColor(name)
+      }))
+      .filter(d => d.value > 0)
+      .sort((a, b) => b.value - a.value);
     
     // Automated Insights
     let pareto80Count = 0;
@@ -236,7 +269,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ records }) => {
     return {
       totalEvents, totalSec, breakdownSec, minorSec, selfCaptureSec,
       avgBreakdownSec, maxStoppageSec, rcaPercent, videoPercent,
-      categoryFreqData, categoryTimeData, dailyData, hourlyData, rcaData, paretoData, shiftData,
+      categoryFreqData, dailyData, hourlyData, rcaData, paretoData, shiftData,
+      reasonCategoryData,
       topRecords: [...validRecords].sort((a, b) => eventDuration(b) - eventDuration(a)).slice(0, 10),
       allRecords: validRecords,
       insights: {
@@ -260,13 +294,23 @@ export const Dashboard: React.FC<DashboardProps> = ({ records }) => {
   const renderCustomTooltip = ({ active, payload }: any) => {
     if (active && payload && payload.length) {
       return (
-        <div className="custom-tooltip" style={{ background: '#0f172a', border: '1px solid #334155', padding: '8px', borderRadius: '4px' }}>
-          <p className="label" style={{ color: '#fff', margin: 0, fontSize: '12px' }}>{`${payload[0].name} : ${payload[0].value}`}</p>
+        <div style={{ background: '#0f172a', border: '1px solid #334155', padding: '10px 14px', borderRadius: '8px', minWidth: '130px' }}>
+          <p style={{ color: '#94a3b8', margin: 0, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{payload[0].name}</p>
+          <p style={{ color: payload[0].fill || '#fff', margin: '4px 0 0', fontSize: '15px', fontWeight: '700' }}>
+            {typeof payload[0].value === 'number' ? `${payload[0].value}h` : payload[0].value}
+          </p>
         </div>
       );
     }
     return null;
   };
+
+  const emptyChartPlaceholder = (msg: string, height = 240) => (
+    <div style={{ height, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#475569', fontSize: '0.88rem', textAlign: 'center', padding: '20px', gap: '8px' }}>
+      <span style={{ fontSize: '2rem' }}>📋</span>
+      <span style={{ whiteSpace: 'pre-line' }}>{msg}</span>
+    </div>
+  );
 
   const renderPieLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percent, index, name }: any) => {
     const radius = innerRadius + (outerRadius - innerRadius) + 20;
@@ -305,7 +349,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ records }) => {
           </div>
           <div className="split-metric">
             <span className="split-val" style={{color: COLORS.selfCapture}}>{formatDurationDigital(stats.selfCaptureSec)}</span>
-            <span className="split-label">Self Capture ({stats.categoryFreqData.find(d=>d.name==='Self Capture')?.value||0})</span>
+            <span className="split-label">Operator Triggered ({stats.categoryFreqData.find(d=>d.name==='Operator Triggered')?.value||0})</span>
           </div>
         </div>
       </div>
@@ -343,30 +387,34 @@ export const Dashboard: React.FC<DashboardProps> = ({ records }) => {
         <h3>Automated Insights</h3>
         <ul>
           <li>
-            <span style={{color: COLORS.breakdown, fontWeight: 'bold'}}>Breakdown</span> accounts for 
-            <strong> {stats.insights.breakdownPercent}%</strong> of total downtime ({formatDurationDigital(stats.breakdownSec)}) 
+            <span style={{color: COLORS.breakdown, fontWeight: 'bold'}}>Breakdown</span> accounts for&nbsp;
+            <strong>{stats.insights.breakdownPercent}%</strong> of total downtime ({formatDurationDigital(stats.breakdownSec)})
             across {stats.insights.breakdownCount} events.
           </li>
           {stats.insights.largestStoppage && (
             <li>
-              The single largest stoppage is <strong>{stats.insights.largestStoppage.started_at ? new Date(stats.insights.largestStoppage.started_at).toLocaleDateString('en-GB') : ''}</strong>, 
-              equal to <strong>{stats.insights.largestPercent}%</strong> of all logged downtime on its own.
+              Largest single stoppage was on&nbsp;
+              <strong>{stats.insights.largestStoppage.started_at ? new Date(stats.insights.largestStoppage.started_at).toLocaleDateString('en-GB') : ''}</strong>,
+              contributing <strong>{stats.insights.largestPercent}%</strong> of all logged downtime.
             </li>
           )}
           <li>
-            Just <strong>{stats.insights.pareto80Count} of {stats.totalEvents}</strong> events ({(stats.insights.pareto80Count/stats.totalEvents*100).toFixed(0)}%) 
-            account for 80% of total downtime — fixing these first gives the fastest payback.
+            Just <strong>{stats.insights.pareto80Count} of {stats.totalEvents}</strong> events&nbsp;
+            ({(stats.insights.pareto80Count / stats.totalEvents * 100).toFixed(0)}%) account for 80% of total downtime
+            — fixing these first gives the fastest payback.
           </li>
           <li>
-            <strong>{stats.insights.missingRcaPercent}%</strong> of events ({stats.insights.missingRcaCount} of {stats.totalEvents}) have 
+            <strong>{stats.insights.missingRcaPercent}%</strong> of events ({stats.insights.missingRcaCount} of {stats.totalEvents}) have
             <strong style={{color: COLORS.pending}}> no completed root-cause action</strong>.
           </li>
           <li>
-            Stoppages occur most around <strong>{stats.insights.peakHour}</strong> — worth checking operator shift-change or peak-load timing.
+            Peak stoppage hour: <strong>{stats.insights.peakHour}</strong> — check shift-change or load timing.
           </li>
           {stats.insights.worstDay.hours > 0 && (
             <li>
-              <strong>{stats.insights.worstDay.fullDate}</strong> was the worst day logged, with {stats.insights.worstDay.hours}h of downtime.
+              <strong style={{color: '#ef4444'}}>{stats.insights.worstDay.fullDate}</strong> had the most downtime
+              at <strong>{stats.insights.worstDay.hours}h</strong> —&nbsp;
+              <span style={{color: '#ef4444', fontWeight: '700'}}>highlighted in red</span> on the daily chart below.
             </li>
           )}
         </ul>
@@ -374,144 +422,186 @@ export const Dashboard: React.FC<DashboardProps> = ({ records }) => {
 
       {/* Charts Grid */}
       <div className="tpm-charts-layout">
-        
+
+        {/* CHART 1 — Downtime by Reason Type Pie */}
         <div className="chart-box">
-          <h4>Events by Category (Pie Chart)</h4>
-          <ResponsiveContainer width="100%" height={250}>
-            <PieChart>
-              <Pie isAnimationActive={false}
-                data={stats.categoryFreqData}
-                cx="50%"
-                cy="50%"
-                labelLine={true}
-                label={renderPieLabel}
-                outerRadius={70}
-                dataKey="value"
-              >
-                {stats.categoryFreqData.map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={entry.fill} />
-                ))}
-              </Pie>
-              <RechartsTooltip content={renderCustomTooltip} />
-              <Legend verticalAlign="bottom" height={36} />
-            </PieChart>
-          </ResponsiveContainer>
+          <h4>Downtime by Reason Type (Hours)</h4>
+          {stats.reasonCategoryData.length > 0 ? (
+            <ResponsiveContainer width="100%" height={260}>
+              <PieChart>
+                <Pie isAnimationActive={false}
+                  data={stats.reasonCategoryData}
+                  cx="50%" cy="50%"
+                  labelLine={true}
+                  label={renderPieLabel}
+                  outerRadius={78}
+                  dataKey="value"
+                >
+                  {stats.reasonCategoryData.map((entry, index) => (
+                    <Cell key={`rcat-${index}`} fill={entry.fill} />
+                  ))}
+                </Pie>
+                <RechartsTooltip
+                  contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: '8px' }}
+                  formatter={(value: any, name: any) => [`${value}h`, name]}
+                />
+                <Legend verticalAlign="bottom" height={42} wrapperStyle={{ fontSize: '11px', color: '#94a3b8' }} />
+              </PieChart>
+            </ResponsiveContainer>
+          ) : emptyChartPlaceholder('Fill "Downtime Type" in Event Report forms\nto see category-wise breakdown here.')}
         </div>
 
+        {/* CHART 2 — Downtime by Shift Donut */}
         <div className="chart-box">
-          <h4>Downtime by Category (Donut Chart)</h4>
-          <ResponsiveContainer width="100%" height={250}>
-            <PieChart>
-              <Pie isAnimationActive={false}
-                data={stats.categoryTimeData}
-                cx="50%"
-                cy="50%"
-                innerRadius={50}
-                outerRadius={70}
-                labelLine={true}
-                label={renderPieLabel}
-                dataKey="value"
-                paddingAngle={5}
-              >
-                {stats.categoryTimeData.map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={entry.fill} />
-                ))}
-              </Pie>
-              <RechartsTooltip content={renderCustomTooltip} />
-              <Legend verticalAlign="bottom" height={36} />
-            </PieChart>
-          </ResponsiveContainer>
+          <h4>Downtime by Shift (Hours)</h4>
+          {stats.shiftData.length > 0 ? (
+            <ResponsiveContainer width="100%" height={260}>
+              <PieChart>
+                <Pie isAnimationActive={false}
+                  data={stats.shiftData}
+                  cx="50%" cy="50%"
+                  innerRadius={55}
+                  outerRadius={80}
+                  labelLine={true}
+                  label={renderPieLabel}
+                  dataKey="value"
+                  paddingAngle={4}
+                >
+                  {stats.shiftData.map((entry, index) => (
+                    <Cell key={`shift-${index}`} fill={entry.fill} />
+                  ))}
+                </Pie>
+                <RechartsTooltip
+                  contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: '8px' }}
+                  formatter={(value: any, name: any) => [`${value}h`, name]}
+                />
+                <Legend verticalAlign="bottom" height={42} wrapperStyle={{ fontSize: '11px', color: '#94a3b8' }} />
+              </PieChart>
+            </ResponsiveContainer>
+          ) : emptyChartPlaceholder('No shift data available.')}
         </div>
 
+        {/* CHART 3 — Downtime by Date, worst day in RED */}
         <div className="chart-box full-width">
-          <h4>Downtime by date (Hours)</h4>
-          <ResponsiveContainer width="100%" height={200}>
+          <h4>
+            Downtime by Date (Hours)
+            {stats.insights.worstDay.hours > 0 && (
+              <span style={{ marginLeft: '12px', fontSize: '0.78rem', color: '#ef4444', fontWeight: '700', background: 'rgba(239,68,68,0.1)', padding: '3px 10px', borderRadius: '20px', border: '1px solid rgba(239,68,68,0.25)' }}>
+                ● Worst day: {stats.insights.worstDay.fullDate} ({stats.insights.worstDay.hours}h)
+              </span>
+            )}
+          </h4>
+          <ResponsiveContainer width="100%" height={220}>
             <BarChart data={stats.dailyData}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#334155" />
               <XAxis dataKey="date" tick={{fill: '#94a3b8', fontSize: 11}} axisLine={{stroke: '#334155'}} tickLine={false} />
               <YAxis tick={{fill: '#94a3b8', fontSize: 11}} axisLine={{stroke: '#334155'}} tickLine={false} label={{ value: 'Hours', angle: -90, position: 'insideLeft', fill: '#94a3b8', fontSize: 12, offset: 10 }} />
-              <RechartsTooltip cursor={{fill: '#1e293b'}} contentStyle={{background: '#0f172a', border: '1px solid #334155', borderRadius: '4px'}} />
-              <Bar isAnimationActive={false} dataKey="hours" fill="#fbbf24" radius={[4,4,0,0]} maxBarSize={40}>
-                <LabelList dataKey="hours" position="top" fill="#cbd5e1" fontSize={11} fontWeight="500" formatter={(v: unknown): string | number => (v as number) > 0 ? (v as number) : ''} />
+              <RechartsTooltip
+                cursor={{fill: 'rgba(255,255,255,0.03)'}}
+                contentStyle={{background: '#0f172a', border: '1px solid #334155', borderRadius: '8px'}}
+                formatter={(value: any) => [`${value}h`, 'Downtime']}
+              />
+              <Bar isAnimationActive={false} dataKey="hours" radius={[5,5,0,0]} maxBarSize={44}>
+                {stats.dailyData.map((entry, index) => (
+                  <Cell
+                    key={`day-${index}`}
+                    fill={entry.fullDate === stats.insights.worstDay.fullDate ? '#ef4444' : '#fbbf24'}
+                    opacity={entry.fullDate === stats.insights.worstDay.fullDate ? 1 : 0.85}
+                  />
+                ))}
+                <LabelList dataKey="hours" position="top" fill="#cbd5e1" fontSize={11} fontWeight="500"
+                  formatter={(v: unknown): string | number => (v as number) > 0 ? (v as number) : ''}
+                />
               </Bar>
             </BarChart>
           </ResponsiveContainer>
         </div>
 
+        {/* CHART 4 — Stoppages by Hour (Stacked) */}
         <div className="chart-box full-width">
-          <h4>Stoppages by hour of day (Breakdown vs Minor)</h4>
+          <h4>Stoppages by Hour of Day (Breakdown vs Minor Stoppage)</h4>
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={stats.hourlyData}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#334155" />
-              <XAxis dataKey="name" tick={{fill: '#94a3b8', fontSize: 11}} axisLine={{stroke: '#334155'}} tickLine={false} />
+              <XAxis dataKey="name" tick={{fill: '#94a3b8', fontSize: 10}} axisLine={{stroke: '#334155'}} tickLine={false} />
               <YAxis tick={{fill: '#94a3b8', fontSize: 11}} axisLine={{stroke: '#334155'}} tickLine={false} label={{ value: 'Event Count', angle: -90, position: 'insideLeft', fill: '#94a3b8', fontSize: 12, offset: 10 }} />
-              <RechartsTooltip cursor={{fill: '#1e293b'}} contentStyle={{background: '#0f172a', border: '1px solid #334155', borderRadius: '4px'}} />
+              <RechartsTooltip cursor={{fill: 'rgba(255,255,255,0.03)'}} contentStyle={{background: '#0f172a', border: '1px solid #334155', borderRadius: '8px'}} />
               <Legend verticalAlign="top" height={36} wrapperStyle={{fontSize: '12px', color: '#cbd5e1'}} />
-              <Bar isAnimationActive={false} dataKey="breakdown" name="Breakdown" stackId="a" fill={COLORS.breakdown} maxBarSize={40}>
-                <LabelList dataKey="breakdown" position="center" fill="#fff" fontSize={11} formatter={(v: unknown): string | number => (v as number) > 0 ? (v as number) : ''} />
+              <Bar isAnimationActive={false} dataKey="breakdown" name="Breakdown" stackId="a" fill={COLORS.breakdown} maxBarSize={44}>
+                <LabelList dataKey="breakdown" position="center" fill="#fff" fontSize={11}
+                  formatter={(v: unknown): string | number => (v as number) > 0 ? (v as number) : ''}
+                />
               </Bar>
-              <Bar isAnimationActive={false} dataKey="minor" name="Minor Stoppage" stackId="a" fill={COLORS.minor} radius={[4,4,0,0]} maxBarSize={40}>
-                <LabelList dataKey="minor" position="top" fill="#f59e0b" fontSize={11} fontWeight="bold" formatter={(v: unknown): string | number => (v as number) > 0 ? (v as number) : ''} />
+              <Bar isAnimationActive={false} dataKey="minor" name="Minor Stoppage" stackId="a" fill={COLORS.minor} radius={[4,4,0,0]} maxBarSize={44}>
+                <LabelList dataKey="minor" position="top" fill="#f59e0b" fontSize={11} fontWeight="bold"
+                  formatter={(v: unknown): string | number => (v as number) > 0 ? (v as number) : ''}
+                />
               </Bar>
             </BarChart>
           </ResponsiveContainer>
         </div>
 
+        {/* CHART 5 — RCA Documentation Status */}
         <div className="chart-box">
-          <h4>Root-cause documentation status</h4>
-          <ResponsiveContainer width="100%" height={200}>
+          <h4>Root-Cause Documentation Status</h4>
+          <ResponsiveContainer width="100%" height={220}>
             <BarChart data={stats.rcaData} layout="vertical">
               <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#334155" />
               <XAxis type="number" tick={{fill: '#94a3b8', fontSize: 11}} axisLine={{stroke: '#334155'}} tickLine={false} />
-              <YAxis dataKey="name" type="category" tick={{fill: '#94a3b8', fontSize: 11}} axisLine={{stroke: '#334155'}} tickLine={false} width={100} />
-              <RechartsTooltip cursor={{fill: '#1e293b'}} contentStyle={{background: '#0f172a', border: '1px solid #334155', borderRadius: '4px'}} />
-              <Bar isAnimationActive={false} dataKey="value" radius={[0,4,4,0]} maxBarSize={24}>
+              <YAxis dataKey="name" type="category" tick={{fill: '#94a3b8', fontSize: 12}} axisLine={{stroke: '#334155'}} tickLine={false} width={120} />
+              <RechartsTooltip cursor={{fill: 'rgba(255,255,255,0.03)'}} contentStyle={{background: '#0f172a', border: '1px solid #334155', borderRadius: '8px'}} />
+              <Bar isAnimationActive={false} dataKey="value" radius={[0,6,6,0]} maxBarSize={30}>
                 {stats.rcaData.map((entry, index) => <Cell key={index} fill={entry.fill} />)}
-                <LabelList dataKey="value" position="right" fill="#cbd5e1" fontSize={11} fontWeight="bold" formatter={(v: unknown): string | number => (v as number) > 0 ? (v as number) : ''} />
+                <LabelList dataKey="value" position="right" fill="#cbd5e1" fontSize={12} fontWeight="bold"
+                  formatter={(v: unknown): string | number => (v as number) > 0 ? (v as number) : ''}
+                />
               </Bar>
             </BarChart>
           </ResponsiveContainer>
         </div>
 
+        {/* CHART 6 — Top Breakdown Categories Horizontal Bar */}
         <div className="chart-box">
-          <h4>Downtime by Shift (Hours)</h4>
-          <ResponsiveContainer width="100%" height={250}>
-            <PieChart>
-              <Pie isAnimationActive={false}
-                data={stats.shiftData}
-                cx="50%"
-                cy="50%"
-                innerRadius={50}
-                outerRadius={70}
-                labelLine={true}
-                label={renderPieLabel}
-                dataKey="value"
-                paddingAngle={5}
-              >
-                {stats.shiftData.map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={entry.fill} />
-                ))}
-              </Pie>
-              <RechartsTooltip content={renderCustomTooltip} />
-              <Legend verticalAlign="bottom" height={36} />
-            </PieChart>
-          </ResponsiveContainer>
+          <h4>Top Breakdown Categories (Hours)</h4>
+          {stats.reasonCategoryData.length > 0 ? (
+            <ResponsiveContainer width="100%" height={220}>
+              <BarChart data={stats.reasonCategoryData.slice(0, 6)} layout="vertical">
+                <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#334155" />
+                <XAxis type="number" tick={{fill: '#94a3b8', fontSize: 11}} axisLine={{stroke: '#334155'}} tickLine={false} />
+                <YAxis dataKey="name" type="category" tick={{fill: '#94a3b8', fontSize: 11}} axisLine={{stroke: '#334155'}} tickLine={false} width={140} />
+                <RechartsTooltip
+                  cursor={{fill: 'rgba(255,255,255,0.03)'}}
+                  contentStyle={{background: '#0f172a', border: '1px solid #334155', borderRadius: '8px'}}
+                  formatter={(value: any) => [`${value}h`, 'Downtime']}
+                />
+                <Bar isAnimationActive={false} dataKey="value" radius={[0,6,6,0]} maxBarSize={30}>
+                  {stats.reasonCategoryData.slice(0, 6).map((entry, index) => (
+                    <Cell key={index} fill={entry.fill} />
+                  ))}
+                  <LabelList dataKey="value" position="right" fill="#cbd5e1" fontSize={12} fontWeight="bold"
+                    formatter={(v: unknown): string | number => (v as number) > 0 ? `${v}h` : ''}
+                  />
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          ) : emptyChartPlaceholder('Fill reason categories in Event Report\nto see this chart.')}
         </div>
 
+        {/* CHART 7 — Pareto Analysis TOP 8 */}
         <div className="chart-box full-width">
-          <h4>Pareto Analysis (Top Downtime Reasons)</h4>
-          <ResponsiveContainer width="100%" height={300}>
+          <h4>Pareto Analysis — Top 8 Downtime Reasons (80/20 Rule)</h4>
+          <ResponsiveContainer width="100%" height={320}>
             <ComposedChart data={stats.paretoData}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#334155" />
-              <XAxis dataKey="name" tick={{fill: '#94a3b8', fontSize: 11}} axisLine={{stroke: '#334155'}} tickLine={false} interval={0} angle={-25} textAnchor="end" height={60} />
+              <XAxis dataKey="name" tick={{fill: '#94a3b8', fontSize: 12}} axisLine={{stroke: '#334155'}} tickLine={false} interval={0} angle={-20} textAnchor="end" height={65} />
               <YAxis yAxisId="left" tick={{fill: '#94a3b8', fontSize: 11}} axisLine={{stroke: '#334155'}} tickLine={false} label={{ value: 'Hours', angle: -90, position: 'insideLeft', fill: '#94a3b8', fontSize: 12, offset: 10 }} />
               <YAxis yAxisId="right" orientation="right" tick={{fill: '#94a3b8', fontSize: 11}} axisLine={{stroke: '#334155'}} tickLine={false} domain={[0, 100]} label={{ value: 'Cumulative %', angle: 90, position: 'insideRight', fill: '#94a3b8', fontSize: 12, offset: 5 }} />
-              <RechartsTooltip cursor={{fill: '#1e293b'}} contentStyle={{background: '#0f172a', border: '1px solid #334155', borderRadius: '4px'}} />
+              <RechartsTooltip cursor={{fill: 'rgba(255,255,255,0.03)'}} contentStyle={{background: '#0f172a', border: '1px solid #334155', borderRadius: '8px'}} />
               <Legend verticalAlign="top" height={36} wrapperStyle={{fontSize: '12px', color: '#cbd5e1'}} />
-              <Bar isAnimationActive={false} yAxisId="left" dataKey="durationHours" fill="#ef4444" name="Duration (Hours)" radius={[4,4,0,0]} maxBarSize={40}>
+              <Bar isAnimationActive={false} yAxisId="left" dataKey="durationHours" fill="#ef4444" name="Duration (Hours)" radius={[5,5,0,0]} maxBarSize={52}>
                 <LabelList dataKey="durationHours" position="top" fill="#cbd5e1" fontSize={11} />
               </Bar>
-              <Line isAnimationActive={false} yAxisId="right" type="monotone" dataKey="cumulative" stroke="#fbbf24" strokeWidth={3} dot={{r:4, fill:'#fbbf24', strokeWidth:0}} name="Cumulative %" />
+              <Line isAnimationActive={false} yAxisId="right" type="monotone" dataKey="cumulative" stroke="#fbbf24" strokeWidth={3} dot={{r:5, fill:'#fbbf24', strokeWidth:0}} name="Cumulative %" />
             </ComposedChart>
           </ResponsiveContainer>
         </div>
@@ -519,7 +609,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ records }) => {
 
       {/* Top 10 Table */}
       <div className="tpm-table-section">
-        <h4>Top 10 longest stoppages</h4>
+        <h4>Top 10 Longest Stoppages</h4>
         <div className="table-responsive">
           <table className="tpm-table">
             <thead>
@@ -550,7 +640,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ records }) => {
                     <td className="reason-col">{r.reason || 'Pending reason'}</td>
                     <td>
                       <span className={`tpm-badge-outline ${documented ? 'success' : 'pending'}`}>
-                        {documented ? 'RCA Documented' : 'Pending RCA'}
+                        {documented ? '✓ RCA Done' : '⏳ Pending RCA'}
                       </span>
                     </td>
                   </tr>
@@ -572,7 +662,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ records }) => {
                 <th>Total Events</th>
                 <th>Breakdowns</th>
                 <th>Minor Stoppages</th>
-                <th>Other (Self Capture)</th>
+                <th>Operator Triggered</th>
               </tr>
             </thead>
             <tbody>
@@ -603,11 +693,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ records }) => {
         <details>
           <summary>How these numbers are calculated</summary>
           <div className="details-content">
-            <p><strong>Total downtime:</strong> Sum of all parsed event durations across the selected period.</p>
-            <p><strong>Avg Breakdown Duration:</strong> Average duration of "Breakdown" category events only.</p>
-            <p><strong>Longest Stoppage:</strong> The single stoppage event with the maximum duration.</p>
-            <p><strong>Root-cause documented:</strong> Percentage of events where the Reason/Action text is filled vs empty or pending.</p>
-            <p><strong>Pareto analysis:</strong> Groups all downtime events by their documented reason/category, sorting them from longest total duration to shortest. The cumulative line shows how fixing the top few reasons can eliminate the majority of downtime.</p>
+            <p><strong>Total downtime:</strong> Sum of all event durations in the selected date/category filter.</p>
+            <p><strong>Avg Breakdown Duration:</strong> Average duration of "Breakdown" type events only.</p>
+            <p><strong>Longest Stoppage:</strong> The single event with the highest duration in the filtered set.</p>
+            <p><strong>Root-cause documented:</strong> % of events where Reason/Action field is filled (not blank or "Pending reason").</p>
+            <p><strong>Pareto (Top 8):</strong> Groups events by their documented reason, sorted highest-to-lowest. Cumulative % line shows which reasons to fix first for maximum impact.</p>
+            <p><strong>Worst Day:</strong> The date with the highest total downtime — highlighted in red on the daily bar chart.</p>
+            <p><strong>Shift timings:</strong> Shift A = 6:00am–2:30pm &nbsp;|&nbsp; Shift B = 2:30pm–11:00pm &nbsp;|&nbsp; Shift C = 11:00pm–6:00am</p>
           </div>
         </details>
       </div>
