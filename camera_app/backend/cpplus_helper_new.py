@@ -3,10 +3,8 @@ import csv
 import hashlib
 import io
 import json
-import contextlib
 import mimetypes
 import os
-import re
 
 # Force OpenCV to use TCP for RTSP instead of UDP to prevent packet loss / firewall drops
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
@@ -17,12 +15,10 @@ import socket
 import sqlite3
 import pyodbc
 import os
-import re
 from dotenv import load_dotenv
 
 load_dotenv()
 
-@contextlib.contextmanager
 def get_db_connection():
     env = os.environ.get("ENVIRONMENT", "development")
     server = os.environ.get("DB_SERVER", "192.168.100.46")
@@ -33,94 +29,7 @@ def get_db_connection():
     driver = drivers[-1] if drivers else "ODBC Driver 17 for SQL Server"
     conn_str = f"DRIVER={{{driver}}};SERVER={server};DATABASE={db};UID={uid};PWD={pwd};TrustServerCertificate=yes;"
     conn = pyodbc.connect(conn_str)
-    try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
-
-
-class PrefixCursor:
-    def __init__(self, cursor):
-        self.cursor = cursor
-        env = os.environ.get('ENVIRONMENT', 'development')
-        self.prefix = os.environ.get('DB_TABLE_PREFIX_DEV', 'dev_') if env == 'development' else ''
-        
-    def _rewrite_and_bind(self, query, args):
-        q = query
-        if self.prefix:
-            q = re.sub(r'\brecordings\b', self.prefix + 'recordings', q)
-            q = re.sub(r'\breason_options\b', self.prefix + 'reason_options', q)
-            q = re.sub(r'\bidx_recordings_', 'idx_' + self.prefix + 'recordings_', q)
-            
-        q = re.sub(r'LIMIT\s+:limit\s+OFFSET\s+:offset', 'OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY', q, flags=re.IGNORECASE)
-        q = re.sub(r'LIMIT\s+(\?)\s+OFFSET\s+(\?)', r'OFFSET \2 ROWS FETCH NEXT \1 ROWS ONLY', q, flags=re.IGNORECASE)
-        q = re.sub(r'LIMIT\s+(\d+)\b', r'OFFSET 0 ROWS FETCH NEXT \1 ROWS ONLY', q, flags=re.IGNORECASE)
-        
-        if args and isinstance(args[0], dict):
-            params = args[0]
-            param_names = []
-            def repl(m):
-                param_names.append(m.group(1))
-                return '?'
-            q = re.sub(r':([a-zA-Z_0-9]+)', repl, q)
-            new_args = tuple(params[name] for name in param_names)
-            return q, new_args
-        return q, args[0] if args else ()
-        
-    class RowAdapter:
-        def __init__(self, description, row):
-            self._row = row
-            self._cols = [c[0] for c in description]
-            self._dict = dict(zip(self._cols, row))
-        def __getitem__(self, key):
-            if isinstance(key, int): return self._row[key]
-            return self._dict[key]
-        def keys(self):
-            return self._dict.keys()
-        def __iter__(self):
-            return iter(self._row)
-        def get(self, key, default=None):
-            return self._dict.get(key, default)
-
-    def _wrap(self, row):
-        if not row: return row
-        if type(row).__name__ == 'RowAdapter': return row
-        return self.RowAdapter(self.cursor.description, row)
-
-    def execute(self, query, *args, **kwargs):
-        q, new_args = self._rewrite_and_bind(query, args)
-        if new_args:
-            self.cursor.execute(q, new_args)
-        else:
-            self.cursor.execute(q)
-        return self
-        
-    def executemany(self, query, *args, **kwargs):
-        q, new_args = self._rewrite_and_bind(query, args)
-        if new_args:
-             self.cursor.executemany(q, new_args)
-        else:
-             self.cursor.executemany(q)
-        return self
-
-    @property
-    def rowcount(self):
-        return self.cursor.rowcount
-
-    def fetchall(self):
-        rows = self.cursor.fetchall()
-        return [self._wrap(r) for r in rows]
-        
-    def fetchone(self):
-        return self._wrap(self.cursor.fetchone())
-        
-    @property
-    def description(self):
-        return self.cursor.description
+    return conn
 
 def get_table_name(base_name):
     env = os.environ.get("ENVIRONMENT", "development")
@@ -154,25 +63,7 @@ from pydantic import BaseModel
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-from contextlib import asynccontextmanager
-
-@asynccontextmanager
-async def _lifespan(app):
-    settings = load_helper_settings()
-    plc_monitor_state['enabled'] = bool(settings.plc_enabled)
-
-    def _start_background():
-        try:
-            ensure_shared_camera_worker(settings.ip, settings.rtsp_port, settings.username, settings.password, settings.channel, settings.rtsp_path)
-            if settings.plc_enabled:
-                ensure_auto_plc_monitor_running()
-        except Exception as exc:
-            plc_monitor_state['last_error'] = f'Background startup failed: {exc}'
-
-    threading.Thread(target=_start_background, daemon=True).start()
-    yield
-
-app = FastAPI(title='CP Plus Camera Helper', lifespan=_lifespan)
+app = FastAPI(title='CP Plus Camera Helper')
 app.add_middleware(
     CORSMiddleware,
     allow_origins=['*'],
@@ -219,7 +110,7 @@ RECORDING_START_RETRY_SECONDS = 1.0
 RECORDING_START_STALE_SECONDS = 4.0
 RTSP_RECORD_OPEN_TIMEOUT_MS = 5000
 GATE_CLOSE_START_COOLDOWN_SECONDS = 2.0
-PLC_FAILOVER_PORTS = [1026, 1027]
+PLC_FAILOVER_PORTS = [5003]
 TRANSCRIPTION_ENABLED = os.getenv('TRANSCRIPTION_ENABLED', '1').strip().lower() not in {'0', 'false', 'no', 'off'}
 TRANSCRIPTION_MODEL = os.getenv('TRANSCRIPTION_MODEL', 'base')
 TRANSCRIPTION_LANGUAGE = os.getenv('TRANSCRIPTION_LANGUAGE', 'hi').strip() or 'hi'
@@ -306,7 +197,7 @@ class RecordingRequest(CameraRequest):
 
 class PlcMonitorRequest(RecordingRequest):
     plc_host: str = '192.168.117.201'
-    plc_port: int = 1026
+    plc_port: int = 5003
     plc_device: str = 'M'
     gate_open_addresses: list[int | str] = ['810']
     gate_close_addresses: list[int | str] = ['810']
@@ -330,7 +221,7 @@ class HelperSettings(BaseModel):
     capture_breakdown_video: bool = True
     plc_enabled: bool = True
     plc_host: str = '192.168.117.201'
-    plc_port: int = 1026
+    plc_port: int = 5003
     plc_device: str = 'M'
     plc_address: str = '810'
     max_record_seconds: int = MAX_GATE_RECORD_SECONDS
@@ -363,8 +254,6 @@ class RecordingReasonRequest(BaseModel):
     reason: str
     note: str | None = None
     submitted_by: str | None = 'Admin'
-    status: str | None = None
-    manual_transcript: str | None = None
 
 
 DEFAULT_REASON_OPTIONS = {
@@ -1185,7 +1074,7 @@ def normalized_helper_settings(settings: HelperSettings) -> HelperSettings:
     data['http_port'] = max(int(data.get('http_port') or 80), 1)
     data['rtsp_port'] = max(int(data.get('rtsp_port') or 554), 1)
     data['channel'] = max(int(data.get('channel') or 1), 1)
-    data['plc_port'] = max(int(data.get('plc_port') or 1026), 1)
+    data['plc_port'] = max(int(data.get('plc_port') or 5003), 1)
     data['max_record_seconds'] = max(int(data.get('max_record_seconds') or MAX_GATE_RECORD_SECONDS), 1)
     return HelperSettings(**data)
 
@@ -1317,62 +1206,60 @@ def index_db_path(storage_root: str | Path) -> Path:
 def init_recording_index(storage_root: str | Path) -> Path:
     db_path = index_db_path(storage_root)
     with get_db_connection() as connection:
-        cursor = PrefixCursor(connection.cursor())
+        cursor = connection.cursor()
         cursor.execute(
             """
-            IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='recordings' and xtype='U')
-              CREATE TABLE recordings (
-                id INT PRIMARY KEY IDENTITY(1,1),
-                file_path NVARCHAR(450) NOT NULL UNIQUE,
-                file_name NVARCHAR(MAX) NOT NULL,
-                metadata_path NVARCHAR(MAX),
-                storage_root NVARCHAR(MAX) NOT NULL,
-                camera_ip NVARCHAR(255),
-                channel INT,
-                started_at NVARCHAR(255),
-                ended_at NVARCHAR(MAX),
-                duration_seconds FLOAT,
-                frames INT,
-                file_size BIGINT,
-                status NVARCHAR(MAX),
-                error NVARCHAR(MAX),
-                source_url NVARCHAR(MAX),
-                recording_engine NVARCHAR(MAX),
-                audio NVARCHAR(MAX),
-                event_type NVARCHAR(255),
-                event_started_at NVARCHAR(255),
-                event_ended_at NVARCHAR(MAX),
-                event_duration_seconds FLOAT,
-                reason_category NVARCHAR(255),
-                reason NVARCHAR(255),
-                reason_note NVARCHAR(MAX),
-                reason_submitted_by NVARCHAR(MAX),
-                reason_submitted_at NVARCHAR(MAX),
-                transcript NVARCHAR(MAX),
-                transcript_status NVARCHAR(MAX),
-                transcript_error NVARCHAR(MAX),
-                transcribed_at NVARCHAR(MAX),
-                created_at NVARCHAR(MAX) NOT NULL,
-                updated_at NVARCHAR(MAX) NOT NULL,
-                manual_transcript NVARCHAR(MAX)
+            CREATE TABLE recordings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_path TEXT NOT NULL UNIQUE,
+                file_name TEXT NOT NULL,
+                metadata_path TEXT,
+                storage_root TEXT NOT NULL,
+                camera_ip TEXT,
+                channel INTEGER,
+                started_at TEXT,
+                ended_at TEXT,
+                duration_seconds REAL,
+                frames INTEGER,
+                file_size INTEGER,
+                status TEXT,
+                error TEXT,
+                source_url TEXT,
+                recording_engine TEXT,
+                audio TEXT,
+                event_type TEXT,
+                event_started_at TEXT,
+                event_ended_at TEXT,
+                event_duration_seconds REAL,
+                reason_category TEXT,
+                reason TEXT,
+                reason_note TEXT,
+                reason_submitted_by TEXT,
+                reason_submitted_at TEXT,
+                transcript TEXT,
+                transcript_status TEXT,
+                transcript_error TEXT,
+                transcribed_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
             )
             """
         )
-        existing_columns = {row[0] for row in cursor.execute("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'recordings'").fetchall()}
+        existing_columns = {row[1] for row in cursor.execute("PRAGMA table_info(recordings)").fetchall()}
         for column_name, column_type in {
-            'event_type': 'NVARCHAR(MAX)',
-            'event_started_at': 'NVARCHAR(MAX)',
-            'event_ended_at': 'NVARCHAR(MAX)',
-            'event_duration_seconds': 'FLOAT',
-            'reason_category': 'NVARCHAR(MAX)',
-            'reason': 'NVARCHAR(MAX)',
-            'reason_note': 'NVARCHAR(MAX)',
-            'reason_submitted_by': 'NVARCHAR(MAX)',
-            'reason_submitted_at': 'NVARCHAR(MAX)',
-            'transcript': 'NVARCHAR(MAX)',
-            'transcript_status': 'NVARCHAR(MAX)',
-            'transcript_error': 'NVARCHAR(MAX)',
-            'transcribed_at': 'NVARCHAR(MAX)',
+            'event_type': 'TEXT',
+            'event_started_at': 'TEXT',
+            'event_ended_at': 'TEXT',
+            'event_duration_seconds': 'REAL',
+            'reason_category': 'TEXT',
+            'reason': 'TEXT',
+            'reason_note': 'TEXT',
+            'reason_submitted_by': 'TEXT',
+            'reason_submitted_at': 'TEXT',
+            'transcript': 'TEXT',
+            'transcript_status': 'TEXT',
+            'transcript_error': 'TEXT',
+            'transcribed_at': 'TEXT',
         }.items():
             if column_name not in existing_columns:
                 try:
@@ -1382,15 +1269,13 @@ def init_recording_index(storage_root: str | Path) -> Path:
                         raise
         cursor.execute(
             """
-            IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='reason_options' and xtype='U')
-              CREATE TABLE reason_options (
-                id INT PRIMARY KEY IDENTITY(1,1),
-                category NVARCHAR(255) NOT NULL,
-                reason NVARCHAR(255) NOT NULL,
-                active INT NOT NULL DEFAULT 1,
-                created_at NVARCHAR(MAX) NOT NULL,
-                updated_at NVARCHAR(MAX) NOT NULL,
-                manual_transcript NVARCHAR(MAX),
+            CREATE TABLE IF NOT EXISTS reason_options (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
                 UNIQUE(category, reason)
             )
             """
@@ -1400,15 +1285,15 @@ def init_recording_index(storage_root: str | Path) -> Path:
             for reason in reasons:
                 cursor.execute(
                     """
-                    IF NOT EXISTS (SELECT 1 FROM reason_options WHERE category = ? AND reason = ?) INSERT INTO reason_options (category, reason, active, created_at, updated_at)
+                    INSERT OR IGNORE INTO reason_options (category, reason, active, created_at, updated_at)
                     VALUES (?, ?, 1, ?, ?)
                     """,
-                    (category, reason, category, reason, now_text, now_text),
+                    (category, reason, now_text, now_text),
                 )
-        cursor.execute("IF NOT EXISTS (SELECT name FROM sys.indexes WHERE name = 'idx_recordings_started_at') CREATE INDEX idx_recordings_started_at ON recordings(started_at)")
-        cursor.execute("IF NOT EXISTS (SELECT name FROM sys.indexes WHERE name = 'idx_recordings_camera') CREATE INDEX idx_recordings_camera ON recordings(camera_ip, channel)")
-        cursor.execute("IF NOT EXISTS (SELECT name FROM sys.indexes WHERE name = 'idx_recordings_event_type') CREATE INDEX idx_recordings_event_type ON recordings(event_type)")
-        cursor.execute("IF NOT EXISTS (SELECT name FROM sys.indexes WHERE name = 'idx_recordings_reason') CREATE INDEX idx_recordings_reason ON recordings(reason_category, reason)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_recordings_started_at ON recordings(started_at)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_recordings_camera ON recordings(camera_ip, channel)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_recordings_event_type ON recordings(event_type)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_recordings_reason ON recordings(reason_category, reason)")
         cursor.execute(
             """
             UPDATE recordings
@@ -1477,7 +1362,7 @@ def index_event_only_record(
     }
     db_path = init_recording_index(storage_root)
     with get_db_connection() as connection:
-        cursor = PrefixCursor(connection.cursor())
+        cursor = connection.cursor()
         cursor.execute(
             """
             INSERT INTO recordings (
@@ -1529,114 +1414,105 @@ def load_sidecar_metadata(video_path: Path) -> dict:
         return {}
 
 
-def index_recording_file(storage_root: str, file_path: str, record: dict) -> None:
-    """Inserts or updates a recording index record in the database."""
+def index_recording_file(storage_root: str | Path, video_path: Path, metadata: dict | None = None) -> dict:
+    storage_root = recording_folder(storage_root)
+    video_path = Path(video_path)
+    metadata = metadata or load_sidecar_metadata(video_path)
+    file_stat = video_path.stat()
+    now_text = datetime.now().isoformat(timespec='seconds')
+    started_at = metadata.get('started_at') or datetime.fromtimestamp(file_stat.st_mtime).isoformat(timespec='seconds')
+    event_type = metadata.get('event_type') or 'minor_stoppage'
+    open_auto_breakdown = event_type == 'breakdown' and bool(metadata.get('auto_stopped')) and not metadata.get('event_ended_at')
+    record = {
+        'file_path': str(video_path),
+        'file_name': video_path.name,
+        'metadata_path': str(metadata_path_for(video_path)) if metadata_path_for(video_path).exists() else None,
+        'storage_root': str(storage_root),
+        'camera_ip': metadata.get('camera_ip'),
+        'channel': metadata.get('channel'),
+        'started_at': started_at,
+        'ended_at': metadata.get('ended_at'),
+        'duration_seconds': metadata.get('duration_seconds'),
+        'frames': metadata.get('frames'),
+        'file_size': file_stat.st_size,
+        'status': metadata.get('status') or 'completed',
+        'error': metadata.get('error'),
+        'source_url': metadata.get('source_url'),
+        'recording_engine': metadata.get('recording_engine'),
+        'audio': metadata.get('audio'),
+        'event_type': event_type,
+        'event_started_at': metadata.get('event_started_at') or started_at,
+        'event_ended_at': metadata.get('event_ended_at') or (None if open_auto_breakdown else metadata.get('ended_at')),
+        'event_duration_seconds': metadata.get('event_duration_seconds') or (None if open_auto_breakdown else metadata.get('duration_seconds')),
+        'reason_category': metadata.get('reason_category'),
+        'reason': metadata.get('reason'),
+        'reason_note': metadata.get('reason_note'),
+        'reason_submitted_by': metadata.get('reason_submitted_by'),
+        'reason_submitted_at': metadata.get('reason_submitted_at'),
+        'transcript': metadata.get('transcript'),
+        'transcript_status': metadata.get('transcript_status'),
+        'transcript_error': metadata.get('transcript_error'),
+        'transcribed_at': metadata.get('transcribed_at'),
+        'created_at': now_text,
+        'updated_at': now_text,
+    }
     db_path = init_recording_index(storage_root)
     with get_db_connection() as connection:
-        cursor = PrefixCursor(connection.cursor())
-        record_dict = {
-            'file_name': None,
-            'metadata_path': None,
-            'camera_ip': None,
-            'channel': None,
-            'started_at': None,
-            'ended_at': None,
-            'duration_seconds': None,
-            'frames': None,
-            'file_size': None,
-            'status': None,
-            'event_type': None,
-            'event_started_at': None,
-            'event_ended_at': None,
-            'event_duration_seconds': None,
-            'reason_category': None,
-            'reason': None,
-            'reason_note': None,
-            'reason_submitted_by': None,
-            'reason_submitted_at': None,
-            'transcript': None,
-            'transcript_status': None,
-            'transcript_error': None,
-            'transcribed_at': None,
-            'error': None,
-            'source_url': None,
-            'recording_engine': None,
-            'audio': None,
-            'created_at': datetime.now().isoformat(timespec='seconds'),
-            'updated_at': datetime.now().isoformat(timespec='seconds'),
-        }
-        record_dict.update(record)
-        record_dict['file_path'] = str(file_path)
-        record_dict['storage_root'] = storage_root
-        if not record_dict.get('metadata_path'):
-            record_dict['metadata_path'] = str(metadata_path_for(Path(file_path)))
-
-        # Check if exists
-        cursor = cursor.execute("SELECT 1 FROM recordings WHERE file_path = :file_path", {'file_path': str(file_path)})
-        exists = cursor.fetchone()
-
-        if exists:
-            # UPDATE
-            cursor = cursor.execute(
-                """
-                UPDATE recordings SET
-                    file_name = :file_name,
-                    ended_at = :ended_at,
-                    status = :status,
-                    event_type = :event_type,
-                    event_ended_at = :event_ended_at,
-                    event_duration_seconds = :event_duration_seconds,
-                    reason_category = COALESCE(recordings.reason_category, :reason_category),
-                    reason = COALESCE(recordings.reason, :reason),
-                    reason_note = COALESCE(recordings.reason_note, :reason_note),
-                    reason_submitted_by = COALESCE(recordings.reason_submitted_by, :reason_submitted_by),
-                    reason_submitted_at = COALESCE(recordings.reason_submitted_at, :reason_submitted_at),
-                    status = COALESCE(recordings.status, :status),
-                    transcript = COALESCE(recordings.transcript, :transcript),
-                    transcript_status = COALESCE(recordings.transcript_status, :transcript_status),
-                    transcript_error = COALESCE(recordings.transcript_error, :transcript_error),
-                    transcribed_at = COALESCE(recordings.transcribed_at, :transcribed_at),
-                    updated_at = :updated_at,
-                    metadata_path = :metadata_path,
-                    storage_root = :storage_root,
-                    camera_ip = :camera_ip,
-                    channel = :channel,
-                    started_at = :started_at,
-                    duration_seconds = :duration_seconds,
-                    frames = :frames,
-                    file_size = :file_size,
-                    error = :error,
-                    source_url = :source_url,
-                    recording_engine = :recording_engine,
-                    audio = :audio
-                WHERE file_path = :file_path
-                """,
-                record_dict,
+        cursor = connection.cursor()
+        cursor.execute(
+            """
+            INSERT INTO recordings (
+                file_path, file_name, metadata_path, storage_root, camera_ip, channel,
+                started_at, ended_at, duration_seconds, frames, file_size, status,
+                error, source_url, recording_engine, audio, event_type, event_started_at,
+                event_ended_at, event_duration_seconds, reason_category, reason, reason_note,
+                reason_submitted_by, reason_submitted_at, transcript, transcript_status,
+                transcript_error, transcribed_at, created_at, updated_at
             )
-        else:
-            # INSERT
-            cursor = cursor.execute(
-                """
-                INSERT INTO recordings (
-                    file_path, file_name, metadata_path, storage_root, camera_ip, channel,
-                    started_at, ended_at, duration_seconds, frames, file_size, status,
-                    error, source_url, recording_engine, audio, event_type, event_started_at,
-                    event_ended_at, event_duration_seconds, reason_category, reason, reason_note,
-                    reason_submitted_by, reason_submitted_at, transcript, transcript_status,
-                    transcript_error, transcribed_at, created_at, updated_at
-                ) VALUES (
-                    :file_path, :file_name, :metadata_path, :storage_root, :camera_ip, :channel,
-                    :started_at, :ended_at, :duration_seconds, :frames, :file_size, :status,
-                    :error, :source_url, :recording_engine, :audio, :event_type, :event_started_at,
-                    :event_ended_at, :event_duration_seconds, :reason_category, :reason, :reason_note,
-                    :reason_submitted_by, :reason_submitted_at, :transcript, :transcript_status,
-                    :transcript_error, :transcribed_at, :created_at, :updated_at
-                )
-                """,
-                record_dict,
+            VALUES (
+                :file_path, :file_name, :metadata_path, :storage_root, :camera_ip, :channel,
+                :started_at, :ended_at, :duration_seconds, :frames, :file_size, :status,
+                :error, :source_url, :recording_engine, :audio, :event_type, :event_started_at,
+                :event_ended_at, :event_duration_seconds, :reason_category, :reason, :reason_note,
+                :reason_submitted_by, :reason_submitted_at, :transcript, :transcript_status,
+                :transcript_error, :transcribed_at, :created_at, :updated_at
             )
+            ON CONFLICT(file_path) DO UPDATE SET
+                file_name = excluded.file_name,
+                metadata_path = excluded.metadata_path,
+                storage_root = excluded.storage_root,
+                camera_ip = excluded.camera_ip,
+                channel = excluded.channel,
+                started_at = excluded.started_at,
+                ended_at = excluded.ended_at,
+                duration_seconds = excluded.duration_seconds,
+                frames = excluded.frames,
+                file_size = excluded.file_size,
+                status = excluded.status,
+                error = excluded.error,
+                source_url = excluded.source_url,
+                recording_engine = excluded.recording_engine,
+                audio = excluded.audio,
+                event_type = excluded.event_type,
+                event_started_at = excluded.event_started_at,
+                event_ended_at = excluded.event_ended_at,
+                event_duration_seconds = excluded.event_duration_seconds,
+                reason_category = COALESCE(excluded.reason_category, recordings.reason_category),
+                reason = COALESCE(excluded.reason, recordings.reason),
+                reason_note = COALESCE(excluded.reason_note, recordings.reason_note),
+                reason_submitted_by = COALESCE(excluded.reason_submitted_by, recordings.reason_submitted_by),
+                reason_submitted_at = COALESCE(excluded.reason_submitted_at, recordings.reason_submitted_at),
+                transcript = COALESCE(excluded.transcript, recordings.transcript),
+                transcript_status = COALESCE(excluded.transcript_status, recordings.transcript_status),
+                transcript_error = excluded.transcript_error,
+                transcribed_at = COALESCE(excluded.transcribed_at, recordings.transcribed_at),
+                updated_at = excluded.updated_at
+            """,
+            record,
+        )
+    return record
 
-        print(f"[SQL Server] Indexed: {file_path}")
+
 def normalize_reason_category(category: str | None) -> str:
     value = str(category or '').strip().lower()
     if value in {'breakdown', 'minor_stoppage'}:
@@ -1648,7 +1524,7 @@ def list_reason_options(storage_root: str | Path) -> dict:
     db_path = init_recording_index(storage_root)
     result = {category: [] for category in DEFAULT_REASON_OPTIONS}
     with get_db_connection() as connection:
-        cursor = PrefixCursor(connection.cursor())
+        cursor = connection.cursor()
         rows = cursor.execute(
             """
             SELECT id, category, reason, active
@@ -1671,26 +1547,15 @@ def add_reason_option(request: ReasonRequest) -> dict:
     now_text = datetime.now().isoformat(timespec='seconds')
     db_path = init_recording_index(request.storage_root)
     with get_db_connection() as connection:
-        cursor = PrefixCursor(connection.cursor())
-        
-        # Check if exists
-        cursor = cursor.execute(
-            "SELECT 1 FROM reason_options WHERE category = ? AND reason = ?",
-            (category, reason)
+        cursor = connection.cursor()
+        cursor.execute(
+            """
+            INSERT INTO reason_options (category, reason, active, created_at, updated_at)
+            VALUES (?, ?, 1, ?, ?)
+            ON CONFLICT(category, reason) DO UPDATE SET active = 1, updated_at = excluded.updated_at
+            """,
+            (category, reason, now_text, now_text),
         )
-        exists = cursor.fetchone()
-        
-        if exists:
-            cursor.execute(
-                "UPDATE reason_options SET active = 1, updated_at = ? WHERE category = ? AND reason = ?",
-                (now_text, category, reason)
-            )
-        else:
-            cursor.execute(
-                "INSERT INTO reason_options (category, reason, active, created_at, updated_at) VALUES (?, ?, 1, ?, ?)",
-                (category, reason, now_text, now_text)
-            )
-            
     return {'category': category, 'reason': reason}
 
 
@@ -1932,10 +1797,6 @@ def update_recording_reason(request: RecordingReasonRequest) -> dict:
         'reason_submitted_by': str(request.submitted_by or 'Admin').strip() or 'Admin',
         'reason_submitted_at': now_text,
     }
-    if request.status is not None:
-        reason_data['status'] = request.status
-    if request.manual_transcript is not None:
-        reason_data['transcript'] = request.manual_transcript
     add_reason_option(ReasonRequest(storage_root=request.storage_root, category=category, reason=reason))
 
     target_path = str(request.file_path or '').strip()
@@ -1949,7 +1810,7 @@ def update_recording_reason(request: RecordingReasonRequest) -> dict:
     db_path = init_recording_index(request.storage_root)
     updated = 0
     with get_db_connection() as connection:
-        cursor = PrefixCursor(connection.cursor())
+        cursor = connection.cursor()
         if target_path:
             cursor = cursor.execute(
                 """
@@ -1959,12 +1820,10 @@ def update_recording_reason(request: RecordingReasonRequest) -> dict:
                     reason_note = :reason_note,
                     reason_submitted_by = :reason_submitted_by,
                     reason_submitted_at = :reason_submitted_at,
-                    status = COALESCE(:status, status),
-                    transcript = COALESCE(:transcript, transcript),
                     updated_at = :updated_at
                 WHERE file_path = :file_path
                 """,
-                {**{'status': None, 'transcript': None}, **reason_data, 'updated_at': now_text, 'file_path': target_path},
+                {**reason_data, 'updated_at': now_text, 'file_path': target_path},
             )
             updated = cursor.rowcount
         if not updated and request.event_started_at:
@@ -1976,18 +1835,16 @@ def update_recording_reason(request: RecordingReasonRequest) -> dict:
                     reason_note = :reason_note,
                     reason_submitted_by = :reason_submitted_by,
                     reason_submitted_at = :reason_submitted_at,
-                    status = COALESCE(:status, status),
-                    transcript = COALESCE(:transcript, transcript),
                     updated_at = :updated_at
                 WHERE event_started_at = :event_started_at
                   AND event_type = :event_type
                 """,
-                {**{'status': None, 'transcript': None}, **reason_data, 'updated_at': now_text, 'event_started_at': request.event_started_at, 'event_type': category},
+                {**reason_data, 'updated_at': now_text, 'event_started_at': request.event_started_at, 'event_type': category},
             )
             updated = cursor.rowcount
             if updated and not target_path:
                 row = cursor.execute(
-                    "SELECT TOP 1 file_path FROM recordings WHERE event_started_at = ? AND event_type = ? ORDER BY updated_at DESC",
+                    "SELECT file_path FROM recordings WHERE event_started_at = ? AND event_type = ? ORDER BY updated_at DESC LIMIT 1",
                     (request.event_started_at, category),
                 ).fetchone()
                 target_path = row[0] if row else ''
@@ -2014,7 +1871,7 @@ def prune_missing_recordings(storage_root: str | Path) -> int:
     db_path = init_recording_index(storage_root)
     missing_paths = []
     with get_db_connection() as connection:
-        cursor = PrefixCursor(connection.cursor())
+        cursor = connection.cursor()
         rows = cursor.execute("SELECT file_path FROM recordings").fetchall()
         for row in rows:
             file_path = row[0]
@@ -2180,7 +2037,7 @@ def recording_index_where(request: RecordingIndexRequest) -> tuple[str, dict[str
         if request.event_type != 'self_capture':
             params['event_type'] = request.event_type
     shift = (request.shift or '').upper()
-    event_time_expr = "SUBSTRING(COALESCE(event_started_at, started_at), 12, 8)"
+    event_time_expr = "substr(COALESCE(event_started_at, started_at), 12, 8)"
     if shift == 'A':
         where += f" AND {event_time_expr} >= '06:00:00' AND {event_time_expr} <= '14:29:59'"
     elif shift == 'B':
@@ -2208,11 +2065,9 @@ def list_recording_index(request: RecordingIndexRequest) -> dict:
 
     query = f"SELECT * FROM recordings{where} ORDER BY started_at DESC, updated_at DESC LIMIT :limit OFFSET :offset"
     with get_db_connection() as connection:
-        cursor = PrefixCursor(connection.cursor())
+        cursor = connection.cursor()
         total = int(cursor.execute(f"SELECT COUNT(*) FROM recordings{where}", params).fetchone()[0])
-        cursor.execute(query, page_params)
-        columns = [column[0] for column in cursor.description]
-        records = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        records = [dict(row) for row in cursor.execute(query, page_params).fetchall()]
     active_row = active_recording_index_row(request.storage_root)
     if active_row and row_matches_index_request(active_row, request):
         duplicate = any(str(record.get('file_path')) == str(active_row.get('file_path')) for record in records)
@@ -2234,7 +2089,7 @@ def recording_stats(request: RecordingIndexRequest) -> dict:
         return value or 0
 
     with get_db_connection() as connection:
-        cursor = PrefixCursor(connection.cursor())
+        cursor = connection.cursor()
         today_total = scalar(connection, f"SELECT COUNT(*) FROM recordings{where}", params)
         today_minor = scalar(connection, f"SELECT COUNT(*) FROM recordings{where} AND (event_type = 'minor_stoppage' OR event_type IS NULL)", params)
         today_breakdown = scalar(connection, f"SELECT COUNT(*) FROM recordings{where} AND event_type = 'breakdown'", params)
@@ -2247,16 +2102,16 @@ def recording_stats(request: RecordingIndexRequest) -> dict:
         avg_breakdown = scalar(connection, f"SELECT AVG(COALESCE(event_duration_seconds, duration_seconds, 0)) FROM recordings{where} AND event_type = 'breakdown'", params)
         longest_breakdown = scalar(connection, f"SELECT MAX(COALESCE(event_duration_seconds, duration_seconds, 0)) FROM recordings{where} AND event_type = 'breakdown'", params)
         latest_row = cursor.execute(
-            f"SELECT TOP 1 * FROM recordings{where} ORDER BY started_at DESC, updated_at DESC",
+            f"SELECT * FROM recordings{where} ORDER BY started_at DESC, updated_at DESC LIMIT 1",
             params,
         ).fetchone()
         machines = [row[0] for row in cursor.execute("SELECT DISTINCT camera_ip FROM recordings WHERE camera_ip IS NOT NULL ORDER BY camera_ip").fetchall()]
         trend_rows = cursor.execute(
             """
-            SELECT SUBSTRING(started_at, 1, 10) AS day, COUNT(*) AS video_count, SUM(COALESCE(file_size, 0)) AS storage_used
+            SELECT substr(started_at, 1, 10) AS day, COUNT(*) AS video_count, SUM(COALESCE(file_size, 0)) AS storage_used
             FROM recordings
-            GROUP BY SUBSTRING(started_at, 1, 10)
-            ORDER BY SUBSTRING(started_at, 1, 10) DESC
+            GROUP BY day
+            ORDER BY day DESC
             LIMIT 14
             """
         ).fetchall()
@@ -2812,7 +2667,7 @@ def record_camera_ffmpeg_worker(request: RecordingRequest) -> bool:
             time.sleep(0.25)
         if recording_stop_event.is_set() and recording_process.poll() is None:
             try:
-                recording_process.communicate(input=b'q', timeout=2)
+                recording_process.communicate(input=b'q', timeout=20)
             except subprocess.TimeoutExpired:
                 recording_process.terminate()
                 try:
@@ -3665,8 +3520,7 @@ def start_recording(request: RecordingRequest, x_auth_token: str | None = Header
 def stop_recording_internal():
     recording_stop_event.set()
     if recording_thread and recording_thread.is_alive():
-        recording_thread.join(timeout=2)
-    recording_state['running'] = False
+        recording_thread.join(timeout=5)
     return recording_state
 
 
@@ -4206,6 +4060,21 @@ def ensure_auto_plc_monitor_running():
         plc_monitor_state['last_error'] = f'PLC monitor auto-start failed: {exc}'
 
 
+@app.on_event('startup')
+def auto_start_plc_monitor():
+    settings = load_helper_settings()
+    plc_monitor_state['enabled'] = bool(settings.plc_enabled)
+
+    def start_background_services():
+        try:
+            ensure_shared_camera_worker(settings.ip, settings.rtsp_port, settings.username, settings.password, settings.channel, settings.rtsp_path)
+            if settings.plc_enabled:
+                ensure_auto_plc_monitor_running()
+        except Exception as exc:
+            plc_monitor_state['last_error'] = f'Background startup failed: {exc}'
+
+    threading.Thread(target=start_background_services, daemon=True).start()
+
 
 @app.post('/recording-index/scan')
 def recording_index_scan(request: RecordingIndexRequest):
@@ -4253,7 +4122,7 @@ def recording_index_export(
             machine=machine,
             public_helper_url=public_helper_url,
             page=1,
-            page_size=999999,
+            page_size=100,
         )
         content = recording_export_csv(request).encode('utf-8-sig')
         filename = f'machine_stoppage_report_{datetime.now():%Y%m%d_%H%M%S}.csv'
@@ -4288,7 +4157,7 @@ def recording_index_export_excel(
             machine=machine,
             public_helper_url=public_helper_url,
             page=1,
-            page_size=999999,
+            page_size=100,
         )
         content = recording_export_xlsx(request)
         filename = f'machine_stoppage_report_{datetime.now():%Y%m%d_%H%M%S}.xlsx'

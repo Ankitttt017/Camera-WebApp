@@ -97,12 +97,22 @@ $LanIp = Get-LanIp
 $localHelperUrl = "http://$LanIp:8010"
 $env:VITE_HELPER_URL = $localHelperUrl
 $env:BROWSER = 'none'
-$ffmpegExe = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.1.2-full_build\bin\ffmpeg.exe'
-if (Test-Path $ffmpegExe) {
-    $env:FFMPEG_PATH = $ffmpegExe
-    Write-MonitorLog "FFmpeg configured at $ffmpegExe"
+$ffmpegBase = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe'
+$ffmpegFound = $null
+if (Test-Path $ffmpegBase) {
+    $ffmpegFound = Get-ChildItem -Path $ffmpegBase -Filter 'ffmpeg.exe' -Recurse -ErrorAction SilentlyContinue |
+        Where-Object { $_.DirectoryName -like '*\bin' } |
+        Select-Object -First 1 -ExpandProperty FullName
+}
+if (-not $ffmpegFound) {
+    $cmd = Get-Command ffmpeg.exe -ErrorAction SilentlyContinue
+    if ($cmd) { $ffmpegFound = $cmd.Source }
+}
+if ($ffmpegFound) {
+    $env:FFMPEG_PATH = $ffmpegFound
+    Write-MonitorLog "FFmpeg configured from PATH at $ffmpegFound"
 } else {
-    Write-MonitorLog 'FFmpeg not found in WinGet package path; backend will use PATH fallback.'
+    Write-MonitorLog 'FFmpeg not found; backend will attempt its own discovery.'
 }
 Write-MonitorLog "Startup check. Helper URL=$env:VITE_HELPER_URL"
 
