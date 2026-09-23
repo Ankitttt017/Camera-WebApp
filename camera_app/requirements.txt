@@ -9,3 +9,4 @@ requests==2.34.0
 websocket-client==1.6.4
 pydantic==2.13.4
 faster-whisper==1.2.1
+pyodbc==5.3.0
