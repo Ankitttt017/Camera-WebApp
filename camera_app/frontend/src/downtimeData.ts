@@ -7,6 +7,7 @@ export const ACTUAL_DOWNTIME_DATA: Record<string, Record<string, string[]>> = {
   
   
   "Machine Breakdown": {
+    "No Reason": ["No Reason"],
     "Holding Furnace B/D": [
       "Metal temperature voltage not reach",
       "Metal temperature Low/High",
@@ -380,6 +381,7 @@ export const ACTUAL_DOWNTIME_DATA: Record<string, Record<string, string[]>> = {
     ]
   },
   "Management Loss": {
+    "No Reason": ["No Reason"],
     "No BOP": [
       "BOP Not Available"
     ],
@@ -422,6 +424,7 @@ export const ACTUAL_DOWNTIME_DATA: Record<string, Record<string, string[]>> = {
     ]
   },
   "Die Breakdown": {
+    "No Reason": ["No Reason"],
     "Vaccum Jam": [
       "No Reason",
       "Fix",
@@ -539,6 +542,7 @@ export const ACTUAL_DOWNTIME_DATA: Record<string, Record<string, string[]>> = {
     ]
   },
   "Robot Breakdown": {
+    "No Reason": ["No Reason"],
     "Spray Robot": [
       "No Reason",
       "Axis-1 Reducer Problem",
@@ -905,6 +909,7 @@ export const ACTUAL_DOWNTIME_DATA: Record<string, Record<string, string[]>> = {
     ]
   },
   "Planned Downtime": {
+    "No Reason": ["No Reason"],
     "PM Plan": [
       "No Reason",
       "Machine Planned Maintenance",
@@ -927,6 +932,7 @@ export const ACTUAL_DOWNTIME_DATA: Record<string, Record<string, string[]>> = {
     ]
   },
   "Process Loss": {
+    "No Reason": ["No Reason"],
     "Plunger": [
       "No Reason",
       "Plunger Jam",
@@ -1068,6 +1074,7 @@ export const ACTUAL_DOWNTIME_DATA: Record<string, Record<string, string[]>> = {
     ]
   },
   "HPDC Machine Accessories": {
+    "No Reason": ["No Reason"],
     "Holding Furnace": [
       "No Reason",
       "Holding Furnace Temperature Low",

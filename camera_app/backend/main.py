@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -16,7 +17,15 @@ from .recorder import save_recording_frame
 from .detector import MotionDetector
 from .stream import CameraStream
 
-app = FastAPI(title='CP Plus Camera Integration', version='1.0')
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    Base.metadata.create_all(bind=config.engine)
+    task = asyncio.get_event_loop().create_task(connection_health_check())
+    yield
+    task.cancel()
+
+app = FastAPI(title='CP Plus Camera Integration', version='1.0', lifespan=_lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=['*'],
@@ -35,13 +44,6 @@ status_cache: Dict[str, Optional[object]] = {
 
 camera_stream = CameraStream()
 motion_detector = MotionDetector()
-
-
-@app.on_event('startup')
-async def startup_event():
-    Base.metadata.create_all(bind=config.engine)
-    loop = asyncio.get_event_loop()
-    loop.create_task(connection_health_check())
 
 
 async def connection_health_check():

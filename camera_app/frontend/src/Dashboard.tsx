@@ -2,7 +2,7 @@ import React, { useMemo } from 'react';
 import { RecordingRecord } from './api';
 import { 
   PieChart, Pie, Cell, Tooltip as RechartsTooltip, BarChart, Bar, XAxis, YAxis, 
-  CartesianGrid, ResponsiveContainer, LineChart, Line, ComposedChart, Legend 
+  CartesianGrid, ResponsiveContainer, LineChart, Line, ComposedChart, Legend, LabelList 
 } from 'recharts';
 
 interface DashboardProps {
@@ -80,8 +80,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ records }) => {
     let firstEventTime = Infinity;
     let lastEventTime = 0;
 
-    const hourlyCounts = new Array(24).fill(0);
+    const hourlyCounts = Array.from({length: 24}, () => ({ breakdown: 0, minor: 0, other: 0 }));
     const dailyMap: Record<string, number> = {};
+    const shiftMap: Record<string, number> = { A: 0, B: 0, C: 0 };
     
     // For RCA Status
     let loggedNoRca = 0;
@@ -116,12 +117,24 @@ export const Dashboard: React.FC<DashboardProps> = ({ records }) => {
       if (r.file_path) withVideoCount++;
 
       const d = new Date(r.started_at as string);
+      if (isNaN(d.getTime())) return;
+
       const timeMs = d.getTime();
       if (timeMs < firstEventTime) firstEventTime = timeMs;
       if (timeMs > lastEventTime) lastEventTime = timeMs;
 
       const hour = d.getHours();
-      hourlyCounts[hour]++;
+      const min = d.getMinutes();
+      const timeNum = hour + min / 60;
+      let shift = 'C';
+      if (timeNum >= 6 && timeNum < 14.5) shift = 'A';
+      else if (timeNum >= 14.5 && timeNum < 23) shift = 'B';
+      
+      shiftMap[shift] = (shiftMap[shift] || 0) + duration;
+
+      if (isBreakdown) hourlyCounts[hour].breakdown++;
+      else if (isMinor) hourlyCounts[hour].minor++;
+      else hourlyCounts[hour].other++;
       
       const dateStr = d.toLocaleDateString('en-GB'); // DD/MM/YYYY
       if (!dailyMap[dateStr]) dailyMap[dateStr] = 0;
@@ -132,8 +145,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ records }) => {
     const totalEvents = validRecords.length;
     
     // KPIs
-    const mttrSec = breakdownCount > 0 ? (breakdownSec / breakdownCount) : 0;
-    const mtbfSec = breakdownCount > 1 ? ((lastEventTime - firstEventTime) / 1000) / breakdownCount : 0;
+    const avgBreakdownSec = breakdownCount > 0 ? (breakdownSec / breakdownCount) : 0;
+    const maxStoppageSec = validRecords.reduce((max, r) => Math.max(max, eventDuration(r)), 0);
     const rcaPercent = totalEvents > 0 ? Math.round((documentedCount / totalEvents) * 100) : 0;
     const videoPercent = totalEvents > 0 ? Math.round((withVideoCount / totalEvents) * 100) : 0;
 
@@ -157,9 +170,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ records }) => {
       rawSec: dailyMap[date]
     })).sort((a, b) => a.fullDate.localeCompare(b.fullDate));
 
-    const hourlyData = hourlyCounts.map((count, hour) => ({
-      name: `${hour}`,
-      count
+    const hourlyData = hourlyCounts.map((data, hour) => ({
+      name: `${hour}:00`,
+      breakdown: data.breakdown,
+      minor: data.minor,
+      other: data.other,
+      total: data.breakdown + data.minor + data.other
     }));
 
     const rcaData = [
@@ -168,22 +184,37 @@ export const Dashboard: React.FC<DashboardProps> = ({ records }) => {
       { name: 'Pending', value: pending, fill: COLORS.pending },
     ];
 
-    // Pareto Analysis
-    const sortedRecords = [...validRecords].sort((a, b) => eventDuration(b) - eventDuration(a));
+    // Pareto Analysis - Aggregated by Reason
+    const reasonMap: Record<string, number> = {};
+    validRecords.forEach(r => {
+      const reason = (r.reason || 'Unknown').trim();
+      reasonMap[reason] = (reasonMap[reason] || 0) + eventDuration(r);
+    });
+    
+    const sortedReasons = Object.keys(reasonMap).map(k => ({
+      name: k.length > 15 ? k.substring(0, 15) + '...' : k,
+      duration: reasonMap[k]
+    })).sort((a, b) => b.duration - a.duration);
+
     const paretoData = [];
     let cumulativeSec = 0;
+    const topReasons = sortedReasons.slice(0, 15);
     
-    for (let i = 0; i < Math.min(15, sortedRecords.length); i++) {
-      const r = sortedRecords[i];
-      const dur = eventDuration(r);
-      cumulativeSec += dur;
+    for (let i = 0; i < topReasons.length; i++) {
+      cumulativeSec += topReasons[i].duration;
       const cumPercent = totalSec > 0 ? (cumulativeSec / totalSec) * 100 : 0;
       paretoData.push({
-        id: `#${i+1}`,
-        durationMin: parseFloat((dur / 60).toFixed(1)),
+        name: topReasons[i].name,
+        durationHours: parseFloat((topReasons[i].duration / 3600).toFixed(2)),
         cumulative: parseFloat(cumPercent.toFixed(1))
       });
     }
+
+    const shiftData = [
+      { name: 'Shift A', value: parseFloat(((shiftMap['A'] || 0) / 3600).toFixed(2)), fill: COLORS.donut1 },
+      { name: 'Shift B', value: parseFloat(((shiftMap['B'] || 0) / 3600).toFixed(2)), fill: COLORS.donut2 },
+      { name: 'Shift C', value: parseFloat(((shiftMap['C'] || 0) / 3600).toFixed(2)), fill: COLORS.donut3 }
+    ].filter(d => d.value > 0);
     
     // Automated Insights
     let pareto80Count = 0;
@@ -195,18 +226,19 @@ export const Dashboard: React.FC<DashboardProps> = ({ records }) => {
     let worstDay = { fullDate: '-', hours: 0 };
     dailyData.forEach(d => { if (d.hours > worstDay.hours) worstDay = d; });
     
-    const peakHourIndex = hourlyCounts.indexOf(Math.max(...hourlyCounts));
-    const peakHour = Math.max(...hourlyCounts) > 0 ? `${peakHourIndex}:00-${peakHourIndex+1}:00` : '-';
+    const maxTotal = Math.max(...hourlyData.map(d => d.total));
+    const peakHourIndex = hourlyData.findIndex(d => d.total === maxTotal);
+    const peakHour = maxTotal > 0 ? `${peakHourIndex}:00-${peakHourIndex+1}:00` : '-';
     
-    const largestStoppage = sortedRecords.length > 0 ? sortedRecords[0] : null;
+    const largestStoppage = validRecords.length > 0 ? [...validRecords].sort((a, b) => eventDuration(b) - eventDuration(a))[0] : null;
     const largestPercent = largestStoppage && totalSec > 0 ? (eventDuration(largestStoppage) / totalSec * 100).toFixed(0) : '0';
 
     return {
       totalEvents, totalSec, breakdownSec, minorSec, selfCaptureSec,
-      mttrSec, mtbfSec, rcaPercent, videoPercent,
-      categoryFreqData, categoryTimeData, dailyData, hourlyData, rcaData, paretoData,
-      topRecords: sortedRecords.slice(0, 10),
-      allRecords: sortedRecords,
+      avgBreakdownSec, maxStoppageSec, rcaPercent, videoPercent,
+      categoryFreqData, categoryTimeData, dailyData, hourlyData, rcaData, paretoData, shiftData,
+      topRecords: [...validRecords].sort((a, b) => eventDuration(b) - eventDuration(a)).slice(0, 10),
+      allRecords: validRecords,
       insights: {
         breakdownPercent: totalSec > 0 ? (breakdownSec / totalSec * 100).toFixed(0) : '0',
         breakdownCount,
@@ -228,12 +260,24 @@ export const Dashboard: React.FC<DashboardProps> = ({ records }) => {
   const renderCustomTooltip = ({ active, payload }: any) => {
     if (active && payload && payload.length) {
       return (
-        <div className="custom-tooltip">
-          <p className="label">{`${payload[0].name} : ${payload[0].value}`}</p>
+        <div className="custom-tooltip" style={{ background: '#0f172a', border: '1px solid #334155', padding: '8px', borderRadius: '4px' }}>
+          <p className="label" style={{ color: '#fff', margin: 0, fontSize: '12px' }}>{`${payload[0].name} : ${payload[0].value}`}</p>
         </div>
       );
     }
     return null;
+  };
+
+  const renderPieLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percent, index, name }: any) => {
+    const radius = innerRadius + (outerRadius - innerRadius) + 20;
+    const x = cx + radius * Math.cos(-midAngle * (Math.PI / 180));
+    const y = cy + radius * Math.sin(-midAngle * (Math.PI / 180));
+    if (percent < 0.05) return null; // Don't show label for very small slices
+    return (
+      <text x={x} y={y} fill="#cbd5e1" textAnchor={x > cx ? 'start' : 'end'} dominantBaseline="central" fontSize={11}>
+        {`${(percent * 100).toFixed(0)}%`}
+      </text>
+    );
   };
 
   return (
@@ -277,12 +321,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ records }) => {
           <div className="kpi-label">Total Downtime</div>
         </div>
         <div className="kpi-card color-orange">
-          <div className="kpi-val">{formatDurationDigital(stats.mttrSec)}</div>
-          <div className="kpi-label">MTTR (Avg. Repair Time)</div>
+          <div className="kpi-val">{formatDurationDigital(stats.avgBreakdownSec)}</div>
+          <div className="kpi-label">Avg Breakdown Duration</div>
         </div>
         <div className="kpi-card color-purple">
-          <div className="kpi-val">{stats.mtbfSec > 0 ? (stats.mtbfSec / 3600).toFixed(1) + 'h' : '-'}</div>
-          <div className="kpi-label">MTBF (Avg. Time Btw Breakdowns)</div>
+          <div className="kpi-val">{formatDuration(stats.maxStoppageSec, 'short')}</div>
+          <div className="kpi-label">Longest Stoppage</div>
         </div>
         <div className="kpi-card color-green">
           <div className="kpi-val">{stats.rcaPercent}%</div>
@@ -335,13 +379,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ records }) => {
           <h4>Events by Category (Pie Chart)</h4>
           <ResponsiveContainer width="100%" height={250}>
             <PieChart>
-              <Pie
+              <Pie isAnimationActive={false}
                 data={stats.categoryFreqData}
                 cx="50%"
                 cy="50%"
-                labelLine={false}
-                outerRadius={80}
-                fill="#8884d8"
+                labelLine={true}
+                label={renderPieLabel}
+                outerRadius={70}
                 dataKey="value"
               >
                 {stats.categoryFreqData.map((entry, index) => (
@@ -358,13 +402,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ records }) => {
           <h4>Downtime by Category (Donut Chart)</h4>
           <ResponsiveContainer width="100%" height={250}>
             <PieChart>
-              <Pie
+              <Pie isAnimationActive={false}
                 data={stats.categoryTimeData}
                 cx="50%"
                 cy="50%"
-                innerRadius={60}
-                outerRadius={80}
-                fill="#82ca9d"
+                innerRadius={50}
+                outerRadius={70}
+                labelLine={true}
+                label={renderPieLabel}
                 dataKey="value"
                 paddingAngle={5}
               >
@@ -383,23 +428,31 @@ export const Dashboard: React.FC<DashboardProps> = ({ records }) => {
           <ResponsiveContainer width="100%" height={200}>
             <BarChart data={stats.dailyData}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#334155" />
-              <XAxis dataKey="date" tick={{fill: '#94a3b8', fontSize: 11}} axisLine={false} tickLine={false} />
-              <YAxis tick={{fill: '#94a3b8', fontSize: 11}} axisLine={false} tickLine={false} />
-              <RechartsTooltip cursor={{fill: '#1e293b'}} contentStyle={{background: '#0f172a', border: 'none'}} />
-              <Bar dataKey="hours" fill="#fbbf24" radius={[4,4,0,0]} maxBarSize={40} />
+              <XAxis dataKey="date" tick={{fill: '#94a3b8', fontSize: 11}} axisLine={{stroke: '#334155'}} tickLine={false} />
+              <YAxis tick={{fill: '#94a3b8', fontSize: 11}} axisLine={{stroke: '#334155'}} tickLine={false} label={{ value: 'Hours', angle: -90, position: 'insideLeft', fill: '#94a3b8', fontSize: 12, offset: 10 }} />
+              <RechartsTooltip cursor={{fill: '#1e293b'}} contentStyle={{background: '#0f172a', border: '1px solid #334155', borderRadius: '4px'}} />
+              <Bar isAnimationActive={false} dataKey="hours" fill="#fbbf24" radius={[4,4,0,0]} maxBarSize={40}>
+                <LabelList dataKey="hours" position="top" fill="#cbd5e1" fontSize={11} fontWeight="500" formatter={(v: unknown): string | number => (v as number) > 0 ? (v as number) : ''} />
+              </Bar>
             </BarChart>
           </ResponsiveContainer>
         </div>
 
-        <div className="chart-box">
-          <h4>Stoppages by hour of day</h4>
-          <ResponsiveContainer width="100%" height={200}>
+        <div className="chart-box full-width">
+          <h4>Stoppages by hour of day (Breakdown vs Minor)</h4>
+          <ResponsiveContainer width="100%" height={250}>
             <BarChart data={stats.hourlyData}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#334155" />
-              <XAxis dataKey="name" tick={{fill: '#94a3b8', fontSize: 11}} axisLine={false} tickLine={false} />
-              <YAxis tick={{fill: '#94a3b8', fontSize: 11}} axisLine={false} tickLine={false} />
-              <RechartsTooltip cursor={{fill: '#1e293b'}} contentStyle={{background: '#0f172a', border: 'none'}} />
-              <Bar dataKey="count" fill="#38bdf8" radius={[2,2,0,0]} maxBarSize={40} />
+              <XAxis dataKey="name" tick={{fill: '#94a3b8', fontSize: 11}} axisLine={{stroke: '#334155'}} tickLine={false} />
+              <YAxis tick={{fill: '#94a3b8', fontSize: 11}} axisLine={{stroke: '#334155'}} tickLine={false} label={{ value: 'Event Count', angle: -90, position: 'insideLeft', fill: '#94a3b8', fontSize: 12, offset: 10 }} />
+              <RechartsTooltip cursor={{fill: '#1e293b'}} contentStyle={{background: '#0f172a', border: '1px solid #334155', borderRadius: '4px'}} />
+              <Legend verticalAlign="top" height={36} wrapperStyle={{fontSize: '12px', color: '#cbd5e1'}} />
+              <Bar isAnimationActive={false} dataKey="breakdown" name="Breakdown" stackId="a" fill={COLORS.breakdown} maxBarSize={40}>
+                <LabelList dataKey="breakdown" position="center" fill="#fff" fontSize={11} formatter={(v: unknown): string | number => (v as number) > 0 ? (v as number) : ''} />
+              </Bar>
+              <Bar isAnimationActive={false} dataKey="minor" name="Minor Stoppage" stackId="a" fill={COLORS.minor} radius={[4,4,0,0]} maxBarSize={40}>
+                <LabelList dataKey="minor" position="top" fill="#f59e0b" fontSize={11} fontWeight="bold" formatter={(v: unknown): string | number => (v as number) > 0 ? (v as number) : ''} />
+              </Bar>
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -409,27 +462,56 @@ export const Dashboard: React.FC<DashboardProps> = ({ records }) => {
           <ResponsiveContainer width="100%" height={200}>
             <BarChart data={stats.rcaData} layout="vertical">
               <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#334155" />
-              <XAxis type="number" tick={{fill: '#94a3b8', fontSize: 11}} axisLine={false} tickLine={false} />
-              <YAxis dataKey="name" type="category" tick={{fill: '#94a3b8', fontSize: 11}} axisLine={false} tickLine={false} width={100} />
-              <RechartsTooltip cursor={{fill: '#1e293b'}} contentStyle={{background: '#0f172a', border: 'none'}} />
-              <Bar dataKey="value" radius={[0,4,4,0]} maxBarSize={24}>
+              <XAxis type="number" tick={{fill: '#94a3b8', fontSize: 11}} axisLine={{stroke: '#334155'}} tickLine={false} />
+              <YAxis dataKey="name" type="category" tick={{fill: '#94a3b8', fontSize: 11}} axisLine={{stroke: '#334155'}} tickLine={false} width={100} />
+              <RechartsTooltip cursor={{fill: '#1e293b'}} contentStyle={{background: '#0f172a', border: '1px solid #334155', borderRadius: '4px'}} />
+              <Bar isAnimationActive={false} dataKey="value" radius={[0,4,4,0]} maxBarSize={24}>
                 {stats.rcaData.map((entry, index) => <Cell key={index} fill={entry.fill} />)}
+                <LabelList dataKey="value" position="right" fill="#cbd5e1" fontSize={11} fontWeight="bold" formatter={(v: unknown): string | number => (v as number) > 0 ? (v as number) : ''} />
               </Bar>
             </BarChart>
           </ResponsiveContainer>
         </div>
 
+        <div className="chart-box">
+          <h4>Downtime by Shift (Hours)</h4>
+          <ResponsiveContainer width="100%" height={250}>
+            <PieChart>
+              <Pie isAnimationActive={false}
+                data={stats.shiftData}
+                cx="50%"
+                cy="50%"
+                innerRadius={50}
+                outerRadius={70}
+                labelLine={true}
+                label={renderPieLabel}
+                dataKey="value"
+                paddingAngle={5}
+              >
+                {stats.shiftData.map((entry, index) => (
+                  <Cell key={`cell-${index}`} fill={entry.fill} />
+                ))}
+              </Pie>
+              <RechartsTooltip content={renderCustomTooltip} />
+              <Legend verticalAlign="bottom" height={36} />
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
+
         <div className="chart-box full-width">
-          <h4>Pareto — top downtime contributors</h4>
+          <h4>Pareto Analysis (Top Downtime Reasons)</h4>
           <ResponsiveContainer width="100%" height={300}>
             <ComposedChart data={stats.paretoData}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#334155" />
-              <XAxis dataKey="id" tick={{fill: '#94a3b8', fontSize: 11}} axisLine={false} tickLine={false} />
-              <YAxis yAxisId="left" tick={{fill: '#94a3b8', fontSize: 11}} axisLine={false} tickLine={false} />
-              <YAxis yAxisId="right" orientation="right" tick={{fill: '#94a3b8', fontSize: 11}} axisLine={false} tickLine={false} domain={[0, 100]} />
-              <RechartsTooltip cursor={{fill: '#1e293b'}} contentStyle={{background: '#0f172a', border: 'none'}} />
-              <Bar yAxisId="left" dataKey="durationMin" fill="#ef4444" name="Duration (Min)" radius={[4,4,0,0]} maxBarSize={40} />
-              <Line yAxisId="right" type="monotone" dataKey="cumulative" stroke="#fbbf24" strokeWidth={3} dot={{r:4, fill:'#fbbf24', strokeWidth:0}} name="Cumulative %" />
+              <XAxis dataKey="name" tick={{fill: '#94a3b8', fontSize: 11}} axisLine={{stroke: '#334155'}} tickLine={false} interval={0} angle={-25} textAnchor="end" height={60} />
+              <YAxis yAxisId="left" tick={{fill: '#94a3b8', fontSize: 11}} axisLine={{stroke: '#334155'}} tickLine={false} label={{ value: 'Hours', angle: -90, position: 'insideLeft', fill: '#94a3b8', fontSize: 12, offset: 10 }} />
+              <YAxis yAxisId="right" orientation="right" tick={{fill: '#94a3b8', fontSize: 11}} axisLine={{stroke: '#334155'}} tickLine={false} domain={[0, 100]} label={{ value: 'Cumulative %', angle: 90, position: 'insideRight', fill: '#94a3b8', fontSize: 12, offset: 5 }} />
+              <RechartsTooltip cursor={{fill: '#1e293b'}} contentStyle={{background: '#0f172a', border: '1px solid #334155', borderRadius: '4px'}} />
+              <Legend verticalAlign="top" height={36} wrapperStyle={{fontSize: '12px', color: '#cbd5e1'}} />
+              <Bar isAnimationActive={false} yAxisId="left" dataKey="durationHours" fill="#ef4444" name="Duration (Hours)" radius={[4,4,0,0]} maxBarSize={40}>
+                <LabelList dataKey="durationHours" position="top" fill="#cbd5e1" fontSize={11} />
+              </Bar>
+              <Line isAnimationActive={false} yAxisId="right" type="monotone" dataKey="cumulative" stroke="#fbbf24" strokeWidth={3} dot={{r:4, fill:'#fbbf24', strokeWidth:0}} name="Cumulative %" />
             </ComposedChart>
           </ResponsiveContainer>
         </div>
@@ -478,6 +560,43 @@ export const Dashboard: React.FC<DashboardProps> = ({ records }) => {
           </table>
         </div>
       </div>
+
+      {/* Hourly Breakdown Table */}
+      <div className="tpm-table-section mt-8">
+        <h4>Hourly Stoppage Summary (Time of Day)</h4>
+        <div className="table-responsive">
+          <table className="tpm-table">
+            <thead>
+              <tr>
+                <th>Hour of Day</th>
+                <th>Total Events</th>
+                <th>Breakdowns</th>
+                <th>Minor Stoppages</th>
+                <th>Other (Self Capture)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {stats.hourlyData.filter(d => d.total > 0).map((d) => (
+                <tr key={d.name}>
+                  <td style={{ fontWeight: 'bold' }}>{d.name}</td>
+                  <td>{d.total}</td>
+                  <td>
+                    {d.breakdown > 0 ? (
+                      <span className="tpm-badge danger" style={{ background: COLORS.breakdown, color: '#fff' }}>{d.breakdown}</span>
+                    ) : '-'}
+                  </td>
+                  <td>
+                    {d.minor > 0 ? (
+                      <span className="tpm-badge warning" style={{ background: COLORS.minor, color: '#fff' }}>{d.minor}</span>
+                    ) : '-'}
+                  </td>
+                  <td>{d.other > 0 ? d.other : '-'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
       
       {/* Methodology Section */}
       <div className="tpm-methodology">
@@ -485,10 +604,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ records }) => {
           <summary>How these numbers are calculated</summary>
           <div className="details-content">
             <p><strong>Total downtime:</strong> Sum of all parsed event durations across the selected period.</p>
-            <p><strong>MTTR (Mean Time to Repair):</strong> Average duration of "Breakdown" category events only.</p>
-            <p><strong>Avg time between breakdowns:</strong> Rough proxy of MTBF calculated as timespan between first and last breakdown divided by breakdown count.</p>
+            <p><strong>Avg Breakdown Duration:</strong> Average duration of "Breakdown" category events only.</p>
+            <p><strong>Longest Stoppage:</strong> The single stoppage event with the maximum duration.</p>
             <p><strong>Root-cause documented:</strong> Percentage of events where the Reason/Action text is filled vs empty or pending.</p>
-            <p><strong>Pareto analysis:</strong> Events sorted by duration, with cumulative percentage showing the impact of the top few events.</p>
+            <p><strong>Pareto analysis:</strong> Groups all downtime events by their documented reason/category, sorting them from longest total duration to shortest. The cumulative line shows how fixing the top few reasons can eliminate the majority of downtime.</p>
           </div>
         </details>
       </div>
