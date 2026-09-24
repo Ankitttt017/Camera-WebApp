@@ -206,6 +206,7 @@ export function buildCameraPayload(settings: CameraSettings) {
 }
 
 export function buildPlcPayload(settings: CameraSettings) {
+  const isXDevice = (settings.plc_device.trim() || 'M').toUpperCase() === 'X';
   return {
     ...buildCameraPayload(settings),
     plc_host: settings.plc_host.trim(),
@@ -213,8 +214,8 @@ export function buildPlcPayload(settings: CameraSettings) {
     plc_device: settings.plc_device.trim() || 'M',
     gate_open_addresses: [settings.plc_address.trim() || '810'],
     gate_close_addresses: [settings.plc_address.trim() || '810'],
-    gate_open_when: settings.plc_device.trim().toUpperCase() === 'X' ? false : true,
-    gate_close_when: settings.plc_device.trim().toUpperCase() === 'X' ? true : false,
+    gate_open_when: isXDevice ? false : true,
+    gate_close_when: isXDevice ? true : false,
     poll_seconds: 1,
     max_record_seconds: Math.max(1, Number(settings.max_record_seconds || 30)),
     admin_password: 'Pass-RicoAuto123',

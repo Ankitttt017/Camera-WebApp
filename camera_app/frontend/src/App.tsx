@@ -401,9 +401,9 @@ function reportCategoryLabel(value: string, thresholdSeconds: number) {
 }
 
 function reportShiftLabel(value: ReportShift) {
-  if (value === 'A') return 'Shift A: 06:00 to 14:29';
-  if (value === 'B') return 'Shift B: 14:30 to 22:59';
-  if (value === 'C') return 'Shift C: 23:00 to 05:59';
+  if (value === 'A') return 'Shift A: 06:00 to 14:00';
+  if (value === 'B') return 'Shift B: 14:00 to 22:00';
+  if (value === 'C') return 'Shift C: 22:00 to 06:00';
   return 'All Shifts';
 }
 
@@ -1589,7 +1589,7 @@ function SavedPage({
                 <span>{list.total} events</span>
               </div>
               <div className="library-actions">
-                <a className="download-button report-download" href={exportUrl}><Icon name="storage" /> Download Report</a>
+                <a className="download-button report-download" href={exportUrl} download><Icon name="storage" /> Download Report</a>
                 <button onClick={() => load(true)}>{loading ? 'Refreshing...' : 'Refresh'}</button>
               </div>
             </div>
@@ -1634,9 +1634,9 @@ function SavedPage({
             Shift
             <select value={shift} onChange={(event) => setShift(event.target.value as ReportShift)}>
               <option value="all">All Shifts</option>
-              <option value="A">Shift A (06:00-14:29)</option>
-              <option value="B">Shift B (14:30-22:59)</option>
-              <option value="C">Shift C (23:00-05:59)</option>
+              <option value="A">Shift A (06:00-14:00)</option>
+              <option value="B">Shift B (14:00-22:00)</option>
+              <option value="C">Shift C (22:00-06:00)</option>
             </select>
           </label>
           <div className="filter-apply">

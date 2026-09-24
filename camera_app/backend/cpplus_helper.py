@@ -18,21 +18,37 @@ import sqlite3
 import pyodbc
 import os
 import re
+from pathlib import Path
 from dotenv import load_dotenv
 
+APP_BASE_DIR = Path(__file__).resolve().parents[1]
+load_dotenv(APP_BASE_DIR / '.env')
 load_dotenv()
 
 @contextlib.contextmanager
 def get_db_connection():
     env = os.environ.get("ENVIRONMENT", "development")
     server = os.environ.get("DB_SERVER", "192.168.100.46")
+    port = os.environ.get("DB_PORT", "1433")
     db = os.environ.get("DB_NAME_PROD", "RICO_IOT") if env == "production" else os.environ.get("DB_NAME_DEV", "RICO_IOT")
     uid = os.environ.get("DB_USER", "automation")
     pwd = os.environ.get("DB_PASSWORD", "Autoiot@3869")
     drivers = [d for d in pyodbc.drivers() if "SQL Server" in d]
     driver = drivers[-1] if drivers else "ODBC Driver 17 for SQL Server"
-    conn_str = f"DRIVER={{{driver}}};SERVER={server};DATABASE={db};UID={uid};PWD={pwd};TrustServerCertificate=yes;"
-    conn = pyodbc.connect(conn_str)
+    server_target = server if server.startswith("tcp:") else f"tcp:{server}"
+    if "," not in server_target and port:
+        server_target = f"{server_target},{port}"
+    conn_str = f"DRIVER={{{driver}}};SERVER={server_target};DATABASE={db};UID={uid};PWD={pwd};TrustServerCertificate=yes;Encrypt=optional;Connection Timeout=10;"
+    conn = None
+    for attempt in range(3):
+        try:
+            conn = pyodbc.connect(conn_str, timeout=10)
+            break
+        except Exception:
+            if attempt == 2:
+                raise
+            import time
+            time.sleep(0.5)
     try:
         yield conn
         conn.commit()
@@ -40,7 +56,8 @@ def get_db_connection():
         conn.rollback()
         raise
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 
 class PrefixCursor:
@@ -197,7 +214,7 @@ RECORDING_TARGET_FPS = float(os.getenv('RECORDING_TARGET_FPS', os.getenv('RECORD
 RECORDING_CRF = int(os.getenv('RECORDING_CRF', '24'))
 RECORDING_AUDIO_FILTER = os.getenv(
     'RECORDING_AUDIO_FILTER',
-    'highpass=f=250,lowpass=f=3200,afftdn=nf=-45:nt=w,anlmdn=s=0.00003:p=0.002:r=0.01,agate=threshold=0.03:ratio=12:attack=15:release=250,dynaudnorm=f=200:g=10:p=0.85,volume=8.0,alimiter=limit=0.90',
+    'highpass=f=180,lowpass=f=3700,afftdn=nf=-30:nt=w,equalizer=f=300:t=q:w=1.5:g=-5,equalizer=f=2400:t=q:w=1.2:g=8,dynaudnorm=f=120:g=25:m=40.0:p=0.9,volume=6.0,alimiter=limit=0.92',
 ).strip()
 LIVE_PREVIEW_MAX_WIDTH = int(os.getenv('LIVE_PREVIEW_MAX_WIDTH', '1280'))
 LIVE_PREVIEW_TARGET_FPS = float(os.getenv('LIVE_PREVIEW_TARGET_FPS', '15'))
@@ -212,14 +229,14 @@ LIVE_VIDEO_BUFSIZE = os.getenv('LIVE_VIDEO_BUFSIZE', '1000k').strip()
 LIVE_RTSP_TRANSPORT = os.getenv('LIVE_RTSP_TRANSPORT', 'udp').strip().lower() or 'udp'
 LIVE_AUDIO_FILTER = os.getenv(
     'LIVE_AUDIO_FILTER',
-    'highpass=f=250,lowpass=f=3200,afftdn=nf=-45:nt=w,anlmdn=s=0.00003:p=0.002:r=0.01,agate=threshold=0.03:ratio=12:attack=15:release=250,dynaudnorm=f=200:g=10:p=0.85,volume=8.0,alimiter=limit=0.90',
+    'highpass=f=180,lowpass=f=3700,afftdn=nf=-30:nt=w,equalizer=f=300:t=q:w=1.5:g=-5,equalizer=f=2400:t=q:w=1.2:g=8,dynaudnorm=f=120:g=25:m=40.0:p=0.9,volume=6.0,alimiter=limit=0.92',
 ).strip()
 USE_FFMPEG_RECORDING = True
 RECORDING_START_RETRY_SECONDS = 1.0
 RECORDING_START_STALE_SECONDS = 4.0
 RTSP_RECORD_OPEN_TIMEOUT_MS = 5000
 GATE_CLOSE_START_COOLDOWN_SECONDS = 2.0
-PLC_FAILOVER_PORTS = [1026, 1027]
+PLC_FAILOVER_PORTS = [5000, 5001, 1026, 1027, 5002, 5003]
 TRANSCRIPTION_ENABLED = os.getenv('TRANSCRIPTION_ENABLED', '1').strip().lower() not in {'0', 'false', 'no', 'off'}
 TRANSCRIPTION_MODEL = os.getenv('TRANSCRIPTION_MODEL', 'base')
 TRANSCRIPTION_LANGUAGE = os.getenv('TRANSCRIPTION_LANGUAGE', 'hi').strip() or 'hi'
@@ -230,7 +247,7 @@ TRANSCRIPTION_MODEL_CACHE = Path(os.getenv('TRANSCRIPTION_MODEL_CACHE', APP_BASE
 TRANSCRIPTION_VAD_FILTER = os.getenv('TRANSCRIPTION_VAD_FILTER', '0').strip().lower() not in {'0', 'false', 'no', 'off'}
 TRANSCRIPTION_AUDIO_FILTER = os.getenv(
     'TRANSCRIPTION_AUDIO_FILTER',
-    'highpass=f=250,lowpass=f=3200,afftdn=nf=-45:nt=w,anlmdn=s=0.00003:p=0.002:r=0.01,agate=threshold=0.03:ratio=12:attack=15:release=250,dynaudnorm=f=200:g=10:p=0.85,volume=8.0,alimiter=limit=0.90',
+    'highpass=f=180,lowpass=f=3700,afftdn=nf=-30:nt=w,equalizer=f=300:t=q:w=1.5:g=-5,equalizer=f=2400:t=q:w=1.2:g=8,dynaudnorm=f=120:g=25:m=40.0:p=0.9,volume=6.0,alimiter=limit=0.92',
 ).strip()
 TRANSCRIPTION_BEAM_SIZE = int(os.getenv('TRANSCRIPTION_BEAM_SIZE', '5'))
 TRANSCRIPTION_NO_SPEECH_THRESHOLD = float(os.getenv('TRANSCRIPTION_NO_SPEECH_THRESHOLD', '0.95'))
@@ -991,7 +1008,7 @@ def snapshot_urls(ip: str, port: int, channel_no: int) -> list[str]:
     return urls
 
 
-def slmp_read_m_bit(host: str, port: int, device: str, address: int | str, timeout: float = 4.0) -> bool:
+def slmp_read_m_bit(host: str, port: int, device: str, address: int | str, timeout: float = 3.0) -> bool:
     device_codes = {
         'M': 0x90,
         'X': 0x9C,
@@ -1026,10 +1043,39 @@ def slmp_read_m_bit(host: str, port: int, device: str, address: int | str, timeo
         + len(payload).to_bytes(2, 'little')
         + payload
     )
-    with socket.create_connection((host, int(port)), timeout=timeout) as sock:
-        sock.settimeout(timeout)
-        sock.sendall(frame)
-        response = sock.recv(1024)
+
+    response = None
+    last_err = None
+    port_int = int(port)
+
+    # 1. Try UDP first if port is in standard UDP SLMP port range (5000-5003)
+    if port_int in {5000, 5001, 5002, 5003, 5004}:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                sock.settimeout(timeout)
+                sock.sendto(frame, (host, port_int))
+                response, _ = sock.recvfrom(1024)
+        except Exception as udp_err:
+            last_err = udp_err
+            response = None
+
+    # 2. Try TCP
+    if response is None:
+        try:
+            with socket.create_connection((host, port_int), timeout=timeout) as sock:
+                sock.settimeout(timeout)
+                sock.sendall(frame)
+                response = sock.recv(1024)
+        except Exception as tcp_err:
+            last_err = tcp_err
+            # 3. Fallback to UDP if TCP fails
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                    sock.settimeout(timeout)
+                    sock.sendto(frame, (host, port_int))
+                    response, _ = sock.recvfrom(1024)
+            except Exception:
+                raise last_err
 
     if len(response) < 11:
         raise RuntimeError(f'SLMP short response for {device}{address}: {response.hex(" ")}')
@@ -1039,7 +1085,12 @@ def slmp_read_m_bit(host: str, port: int, device: str, address: int | str, timeo
     data = response[11:]
     if not data:
         raise RuntimeError(f'SLMP no data for {device}{address}')
-    return data[0] != 0x00
+    # SLMP 3E binary (0401/0001): 1-point bit read response.
+    # The requested bit (point 1) is returned in the UPPER nibble (bits 4-7).
+    # The lower nibble (bits 0-3) is 0-padded for odd/1-point reads.
+    # Bit ON: data[0] == 0x10 -> ((0x10 >> 4) & 0x0F) == 1 -> True
+    # Bit OFF: data[0] == 0x00 -> ((0x00 >> 4) & 0x0F) == 0 -> False
+    return bool((data[0] >> 4) & 0x0F)
 
 
 def plc_candidate_ports(primary_port: int | str | None) -> list[int]:
@@ -1092,9 +1143,30 @@ def read_plc_failover(request: PlcMonitorRequest) -> tuple[dict[str, bool], dict
 
 
 def tcp_reachable(host: str, port: int, timeout: float = 1.5) -> bool:
+    port_int = int(port)
+    if port_int in {5000, 5001, 5002, 5003, 5004}:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.settimeout(timeout)
+                test_frame = b'\x50\x00\x00\xff\xff\x03\x00\x0c\x00\x10\x00\x01\x04\x01\x00\x4a\x00\x00\x9c\x01\x00'
+                s.sendto(test_frame, (host, port_int))
+                resp, _ = s.recvfrom(64)
+                if len(resp) >= 11:
+                    return True
+        except OSError:
+            pass
     try:
-        with socket.create_connection((host, int(port)), timeout=timeout):
+        with socket.create_connection((host, port_int), timeout=timeout):
             return True
+    except OSError:
+        pass
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.settimeout(timeout)
+            test_frame = b'\x50\x00\x00\xff\xff\x03\x00\x0c\x00\x10\x00\x01\x04\x01\x00\x4a\x00\x00\x9c\x01\x00'
+            s.sendto(test_frame, (host, port_int))
+            resp, _ = s.recvfrom(64)
+            return len(resp) >= 11
     except OSError:
         return False
 
@@ -1207,7 +1279,11 @@ def save_helper_settings(settings: HelperSettings) -> HelperSettings:
 
 
 def settings_to_plc_request(settings: HelperSettings) -> PlcMonitorRequest:
-    is_x_device = settings.plc_device.upper() == 'X'
+    # For UBE 850 T-2 (sensor X4A):
+    # Safety gate limit switch is Normally Closed (fail-safe NC contact):
+    # - Gate CLOSED: interlock switch closed -> X4A = True (1 / ON / 24V)
+    # - Gate OPEN: interlock switch broken/open -> X4A = False (0 / OFF / 0V)
+    is_x_device = str(settings.plc_device).strip().upper() == 'X'
     gate_open_val = False if is_x_device else True
     gate_close_val = True if is_x_device else False
 
@@ -1845,7 +1921,8 @@ def transcribe_with_faster_whisper(audio_path: Path) -> str | None:
     model_size = TRANSCRIPTION_MODEL or 'base'
     device = os.getenv('TRANSCRIPTION_DEVICE', 'cpu')
     compute_type = os.getenv('TRANSCRIPTION_COMPUTE_TYPE', 'int8')
-    model = WhisperModel(model_size, device=device, compute_type=compute_type)
+    download_root = str(TRANSCRIPTION_MODEL_CACHE / 'hf_hub') if (TRANSCRIPTION_MODEL_CACHE / 'hf_hub').exists() else None
+    model = WhisperModel(model_size, device=device, compute_type=compute_type, download_root=download_root)
     segments, _ = model.transcribe(
         str(audio_path),
         language=TRANSCRIPTION_LANGUAGE,
@@ -2113,11 +2190,11 @@ def row_matches_index_request(row: dict, request: RecordingIndexRequest) -> bool
             return False
     if request.shift and request.shift != 'all' and row_start:
         row_time = row_start.time()
-        if request.shift == 'A' and not (datetime_time(6, 0, 0) <= row_time <= datetime_time(14, 29, 59)):
+        if request.shift == 'A' and not (datetime_time(6, 0, 0) <= row_time <= datetime_time(13, 59, 59)):
             return False
-        if request.shift == 'B' and not (datetime_time(14, 30, 0) <= row_time <= datetime_time(22, 59, 59)):
+        if request.shift == 'B' and not (datetime_time(14, 0, 0) <= row_time <= datetime_time(21, 59, 59)):
             return False
-        if request.shift == 'C' and not (row_time >= datetime_time(23, 0, 0) or row_time <= datetime_time(5, 59, 59)):
+        if request.shift == 'C' and not (row_time >= datetime_time(22, 0, 0) or row_time <= datetime_time(5, 59, 59)):
             return False
     if request.duration_filter in {'under_5', 'over_5'}:
         duration = float(row.get('event_duration_seconds') or row.get('duration_seconds') or 0)
@@ -2181,11 +2258,11 @@ def recording_index_where(request: RecordingIndexRequest) -> tuple[str, dict[str
     shift = (request.shift or '').upper()
     event_time_expr = "SUBSTRING(COALESCE(event_started_at, started_at), 12, 8)"
     if shift == 'A':
-        where += f" AND {event_time_expr} >= '06:00:00' AND {event_time_expr} <= '14:29:59'"
+        where += f" AND {event_time_expr} >= '06:00:00' AND {event_time_expr} < '14:00:00'"
     elif shift == 'B':
-        where += f" AND {event_time_expr} >= '14:30:00' AND {event_time_expr} <= '22:59:59'"
+        where += f" AND {event_time_expr} >= '14:00:00' AND {event_time_expr} < '22:00:00'"
     elif shift == 'C':
-        where += f" AND ({event_time_expr} >= '23:00:00' OR {event_time_expr} <= '05:59:59')"
+        where += f" AND ({event_time_expr} >= '22:00:00' OR {event_time_expr} < '06:00:00')"
     if request.duration_filter == 'under_5':
         where += " AND COALESCE(event_duration_seconds, duration_seconds, 0) <= 300"
     elif request.duration_filter == 'over_5':
@@ -2197,11 +2274,12 @@ def recording_index_where(request: RecordingIndexRequest) -> tuple[str, dict[str
 
 
 def list_recording_index(request: RecordingIndexRequest) -> dict:
-    db_path = init_recording_index(request.storage_root)
-    prune_missing_recordings(request.storage_root)
-    where, params = recording_index_where(request)
-    page_size = min(max(int(request.page_size or 50), 1), 100)
     page = max(int(request.page or 1), 1)
+    if page == 1:
+        init_recording_index(request.storage_root)
+        prune_missing_recordings(request.storage_root)
+    where, params = recording_index_where(request)
+    page_size = min(max(int(request.page_size or 50), 1), 2000)
     offset = (page - 1) * page_size
     page_params = {**params, 'limit': page_size, 'offset': offset}
 
@@ -2337,22 +2415,25 @@ REPORT_COLUMNS = [
 
 
 def recording_export_records(request: RecordingIndexRequest) -> list[dict]:
-    export_request = request.model_copy(update={'page': 1, 'page_size': 100})
+    export_request = request.model_copy(update={'page': 1, 'page_size': 2000})
     rows = []
     total = 0
     page = 1
     while True:
-        page_result = list_recording_index(export_request.model_copy(update={'page': page, 'page_size': 100}))
-        total = int(page_result['total'])
-        rows.extend(page_result['records'])
+        page_result = list_recording_index(export_request.model_copy(update={'page': page, 'page_size': 2000}))
+        total = int(page_result.get('total') or 0)
+        records = page_result.get('records', [])
+        if not records:
+            break
+        rows.extend(records)
         if len(rows) >= total:
             break
         page += 1
     return sorted(rows, key=lambda row: str(row.get('started_at') or ''))
 
 
-def recording_export_rows(request: RecordingIndexRequest) -> list[list[object]]:
-    rows = recording_export_records(request)
+def recording_export_rows(request: RecordingIndexRequest, records: list[dict] | None = None) -> list[list[object]]:
+    rows = records if records is not None else recording_export_records(request)
     report_rows = []
     for index, row in enumerate(rows, start=1):
         event_duration = row.get('event_duration_seconds') or row.get('duration_seconds') or ''
@@ -2433,22 +2514,24 @@ def recording_export_summary_rows(request: RecordingIndexRequest) -> list[list[o
 
 
 def recording_export_csv(request: RecordingIndexRequest) -> str:
+    records = recording_export_records(request)
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(REPORT_COLUMNS)
-    writer.writerows(recording_export_rows(request))
+    writer.writerows(recording_export_rows(request, records=records))
     return output.getvalue()
 
 
 def recording_export_xlsx(request: RecordingIndexRequest) -> bytes:
-    export_rows = recording_export_rows(request)
+    records = recording_export_records(request)
+    export_rows = recording_export_rows(request, records=records)
     header_row = 1
     rows = [REPORT_COLUMNS, *export_rows]
-    hyperlinks = recording_export_hyperlinks(request, start_row=header_row + 1)
+    hyperlinks = recording_export_hyperlinks(request, start_row=header_row + 1, records=records)
     row_styles = {}
-    category_col_index = REPORT_COLUMNS.index('Category')
+    category_col_index = REPORT_COLUMNS.index('Event Type') if 'Event Type' in REPORT_COLUMNS else (REPORT_COLUMNS.index('Category') if 'Category' in REPORT_COLUMNS else -1)
     for offset, row in enumerate(export_rows, start=header_row + 1):
-        if len(row) > category_col_index and row[category_col_index] == 'Breakdown':
+        if category_col_index >= 0 and len(row) > category_col_index and row[category_col_index] == 'Breakdown':
             row_styles[offset] = 4
     sheet_xml = build_xlsx_sheet(rows, hyperlinks, header_row=header_row, row_styles=row_styles)
     sheet_rels_xml = build_xlsx_sheet_rels(hyperlinks)
@@ -2591,11 +2674,15 @@ def report_video_url(row: dict, request: RecordingIndexRequest) -> str:
     return f'{base_url}/recording-file?storage_root={storage_root}&file_path={file_path}'
 
 
-def recording_export_hyperlinks(request: RecordingIndexRequest, start_row: int = 2) -> dict[str, str]:
+def recording_export_hyperlinks(request: RecordingIndexRequest, start_row: int = 2, records: list[dict] | None = None) -> dict[str, str]:
     links: dict[str, str] = {}
     row_index = start_row
-    link_column = xlsx_column_name(REPORT_COLUMNS.index('Video Link') + 1)
-    for row in recording_export_records(request):
+    link_col_idx = REPORT_COLUMNS.index('Video Link') if 'Video Link' in REPORT_COLUMNS else -1
+    if link_col_idx == -1:
+        return links
+    link_column = xlsx_column_name(link_col_idx + 1)
+    record_list = records if records is not None else recording_export_records(request)
+    for row in record_list:
         url = report_video_url(row, request)
         if url:
             links[f'{link_column}{row_index}'] = url
@@ -4035,6 +4122,9 @@ def update_settings(settings: HelperSettings, x_auth_token: str | None = Header(
 
 def start_plc_monitor_internal(request: PlcMonitorRequest):
     global plc_monitor_thread
+    if str(request.plc_device).strip().upper() == 'X':
+        request.gate_open_when = False
+        request.gate_close_when = True
     save_helper_settings(
         HelperSettings(
             ip=request.ip,

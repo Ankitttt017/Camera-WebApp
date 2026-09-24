@@ -2297,14 +2297,15 @@ def recording_export_csv(request: RecordingIndexRequest) -> str:
 
 
 def recording_export_xlsx(request: RecordingIndexRequest) -> bytes:
+    records = recording_export_records(request)
     export_rows = recording_export_rows(request)
     header_row = 1
     rows = [REPORT_COLUMNS, *export_rows]
     hyperlinks = recording_export_hyperlinks(request, start_row=header_row + 1)
     row_styles = {}
-    category_col_index = REPORT_COLUMNS.index('Category')
+    category_col_index = REPORT_COLUMNS.index('Event Type') if 'Event Type' in REPORT_COLUMNS else (REPORT_COLUMNS.index('Category') if 'Category' in REPORT_COLUMNS else -1)
     for offset, row in enumerate(export_rows, start=header_row + 1):
-        if len(row) > category_col_index and row[category_col_index] == 'Breakdown':
+        if category_col_index >= 0 and len(row) > category_col_index and row[category_col_index] == 'Breakdown':
             row_styles[offset] = 4
     sheet_xml = build_xlsx_sheet(rows, hyperlinks, header_row=header_row, row_styles=row_styles)
     sheet_rels_xml = build_xlsx_sheet_rels(hyperlinks)

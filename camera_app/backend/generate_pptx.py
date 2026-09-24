@@ -373,7 +373,9 @@ def create_deck():
         run2.font.color.rgb = text_color
 
     # Save presentation
-    output_path = r"c:\Users\Admin\OneDrive - ricoauto.in\Desktop\Live_Project\Camera-WebApp\PROJECT_PRESENTATION.pptx"
+    import os
+    project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    output_path = os.path.join(project_dir, "PROJECT_PRESENTATION.pptx")
     prs.save(output_path)
     print(f"Presentation saved successfully to {output_path}")
 
