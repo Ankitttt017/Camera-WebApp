@@ -401,9 +401,9 @@ function reportCategoryLabel(value: string, thresholdSeconds: number) {
 }
 
 function reportShiftLabel(value: ReportShift) {
-  if (value === 'A') return 'Shift A: 06:00 to 14:29';
-  if (value === 'B') return 'Shift B: 14:30 to 22:59';
-  if (value === 'C') return 'Shift C: 23:00 to 05:59';
+  if (value === 'A') return 'Shift A: 06:00 to 14:00';
+  if (value === 'B') return 'Shift B: 14:00 to 22:00';
+  if (value === 'C') return 'Shift C: 22:00 to 06:00';
   return 'All Shifts';
 }
 
@@ -1589,7 +1589,7 @@ function SavedPage({
                 <span>{list.total} events</span>
               </div>
               <div className="library-actions">
-                <a className="download-button report-download" href={exportUrl}><Icon name="storage" /> Download Report</a>
+                <a className="download-button report-download" href={exportUrl} download><Icon name="storage" /> Download Report</a>
                 <button onClick={() => load(true)}>{loading ? 'Refreshing...' : 'Refresh'}</button>
               </div>
             </div>
@@ -1634,9 +1634,9 @@ function SavedPage({
             Shift
             <select value={shift} onChange={(event) => setShift(event.target.value as ReportShift)}>
               <option value="all">All Shifts</option>
-              <option value="A">Shift A (06:00-14:29)</option>
-              <option value="B">Shift B (14:30-22:59)</option>
-              <option value="C">Shift C (23:00-05:59)</option>
+              <option value="A">Shift A (06:00-14:00)</option>
+              <option value="B">Shift B (14:00-22:00)</option>
+              <option value="C">Shift C (22:00-06:00)</option>
             </select>
           </label>
           <div className="filter-apply">
@@ -1913,56 +1913,56 @@ function SavedPage({
           }}
         >
           {/* ── STICKY TOP BAR ── */}
-          <div style={{ position: 'sticky', top: 0, zIndex: 10, background: '#0a0f1e', borderBottom: '1px solid rgba(255,255,255,0.08)', padding: '18px 48px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
+          <div style={{ position: 'sticky', top: 0, zIndex: 10, background: '#0a0f1e', borderBottom: '1px solid rgba(255,255,255,0.08)', padding: '20px 48px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
               <div>
-                <div style={{ fontSize: '0.75rem', color: '#475569', fontWeight: '700', letterSpacing: '2.5px', textTransform: 'uppercase', marginBottom: '2px' }}>Downtime Event</div>
-                <h2 style={{ margin: 0, fontSize: '1.8rem', fontWeight: '800', color: '#f1f5f9', letterSpacing: '0.3px' }}>EVENT REPORT DETAILS</h2>
+                <div style={{ fontSize: '0.85rem', color: '#94a3b8', fontWeight: '700', letterSpacing: '2.5px', textTransform: 'uppercase', marginBottom: '4px' }}>Downtime Event</div>
+                <h2 style={{ margin: 0, fontSize: '2rem', fontWeight: '800', color: '#f8fafc', letterSpacing: '0.3px' }}>EVENT REPORT DETAILS</h2>
               </div>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
               {editingReasonRecord?.event_started_at && (
-                <span style={{ fontSize: '0.9rem', color: '#64748b', background: 'rgba(255,255,255,0.03)', padding: '8px 14px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.06)' }}>
+                <span style={{ fontSize: '1rem', color: '#94a3b8', background: 'rgba(255,255,255,0.04)', padding: '10px 16px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.08)', fontWeight: '600' }}>
                   📅 {new Date(editingReasonRecord.event_started_at).toLocaleString()}
                 </span>
               )}
               <button onClick={() => setEditingReasonRecord(null)}
-                style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', color: '#f87171', cursor: 'pointer', padding: '8px 20px', borderRadius: '8px', fontWeight: '600', fontSize: '0.9rem', transition: 'all 0.2s' }}
-                onMouseOver={(e) => { e.currentTarget.style.background = 'rgba(239,68,68,0.18)'; }}
-                onMouseOut={(e) => { e.currentTarget.style.background = 'rgba(239,68,68,0.08)'; }}
+                style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: '#f87171', cursor: 'pointer', padding: '10px 24px', borderRadius: '8px', fontWeight: '700', fontSize: '1rem', transition: 'all 0.2s' }}
+                onMouseOver={(e) => { e.currentTarget.style.background = 'rgba(239,68,68,0.2)'; }}
+                onMouseOut={(e) => { e.currentTarget.style.background = 'rgba(239,68,68,0.1)'; }}
               >✕ Close</button>
             </div>
           </div>
 
           {/* ── BODY ── */}
-          <div style={{ flex: 1, padding: '32px 48px 64px', display: 'flex', flexDirection: 'column', gap: '16px', maxWidth: '1300px', width: '100%', margin: '0 auto', boxSizing: 'border-box' }}>
+          <div style={{ flex: 1, padding: '32px 48px 64px', display: 'flex', flexDirection: 'column', gap: '18px', maxWidth: '1300px', width: '100%', margin: '0 auto', boxSizing: 'border-box' }}>
 
             {/* ─ AI CONTEXT SECTION ─ */}
-            <div style={{ border: '1px solid rgba(59,130,246,0.2)', borderRadius: '14px', overflow: 'hidden', background: 'rgba(59,130,246,0.03)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '18px 24px' }}>
+            <div style={{ border: '1px solid rgba(59,130,246,0.25)', borderRadius: '14px', overflow: 'hidden', background: 'rgba(59,130,246,0.04)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '20px 26px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                  <span style={{ fontSize: '0.65rem', fontWeight: '800', letterSpacing: '2px', textTransform: 'uppercase', color: '#3b82f6', background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.2)', borderRadius: '5px', padding: '3px 8px' }}>AI</span>
-                  <span style={{ fontSize: '1rem', fontWeight: '600', color: '#e2e8f0' }}>Event Context & AI Transcript</span>
+                  <span style={{ fontSize: '0.75rem', fontWeight: '800', letterSpacing: '2px', textTransform: 'uppercase', color: '#3b82f6', background: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.25)', borderRadius: '6px', padding: '4px 10px' }}>AI</span>
+                  <span style={{ fontSize: '1.2rem', fontWeight: '700', color: '#f1f5f9' }}>Event Context & AI Transcript</span>
                 </div>
               </div>
-              <div style={{ padding: '0 24px 20px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <span style={{ fontSize: '0.72rem', color: '#475569', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '1.5px' }}>AI Voice Transcript</span>
-                  <div style={{ background: 'rgba(255,255,255,0.02)', padding: '14px', borderRadius: '8px', color: editingReasonRecord?.transcript ? '#cbd5e1' : '#374151', fontStyle: editingReasonRecord?.transcript ? 'normal' : 'italic', fontSize: '0.95rem', border: '1px solid rgba(255,255,255,0.05)', lineHeight: '1.6', minHeight: '80px' }}>
+              <div style={{ padding: '0 26px 24px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <span style={{ fontSize: '0.85rem', color: '#94a3b8', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '1.5px' }}>AI Voice Transcript</span>
+                  <div style={{ background: 'rgba(255,255,255,0.03)', padding: '16px', borderRadius: '10px', color: editingReasonRecord?.transcript ? '#f1f5f9' : '#64748b', fontStyle: editingReasonRecord?.transcript ? 'normal' : 'italic', fontSize: '1.05rem', border: '1px solid rgba(255,255,255,0.08)', lineHeight: '1.6', minHeight: '90px' }}>
                     {editingReasonRecord?.transcript || 'No speech detected during this event.'}
                   </div>
                 </div>
-                <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <span style={{ fontSize: '0.72rem', color: '#475569', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '1.5px' }}>Manual Correction (if AI is wrong)</span>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <span style={{ fontSize: '0.85rem', color: '#94a3b8', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '1.5px' }}>Manual Correction (if AI is wrong)</span>
                   <div style={{ position: 'relative', flex: 1, display: 'flex' }}>
                     <textarea disabled={savingReason || isViewMode} placeholder="Type corrected transcript here..."
                       value={editManualTranscript} onChange={e => setEditManualTranscript(e.target.value)}
-                      style={{ flex: 1, minHeight: '80px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: '8px', color: 'white', padding: '14px', fontSize: '0.95rem', resize: 'vertical', outline: 'none', boxSizing: 'border-box', lineHeight: '1.6', transition: 'border-color 0.2s', fontFamily: 'inherit' }}
+                      style={{ flex: 1, minHeight: '90px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.09)', borderRadius: '10px', color: 'white', padding: '16px', fontSize: '1.05rem', resize: 'vertical', outline: 'none', boxSizing: 'border-box', lineHeight: '1.6', transition: 'border-color 0.2s', fontFamily: 'inherit' }}
                       onFocus={(e) => { e.target.style.borderColor = '#3b82f6'; }}
-                      onBlur={(e) => { e.target.style.borderColor = 'rgba(255,255,255,0.07)'; }}
+                      onBlur={(e) => { e.target.style.borderColor = 'rgba(255,255,255,0.09)'; }}
                     />
-                    <div style={{ position: 'absolute', bottom: '12px', right: '12px', pointerEvents: 'none', color: '#64748b', opacity: 0.8 }}>
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                    <div style={{ position: 'absolute', bottom: '14px', right: '14px', pointerEvents: 'none', color: '#64748b', opacity: 0.8 }}>
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
                     </div>
                   </div>
                 </label>
@@ -2104,50 +2104,50 @@ function SavedPage({
             {editResponsibility && (
               <div style={{ border: '1px solid rgba(59,130,246,0.2)', borderRadius: '14px', overflow: 'hidden', background: 'rgba(59,130,246,0.02)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '18px 24px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                  <span style={{ fontSize: '0.65rem', fontWeight: '800', letterSpacing: '2px', textTransform: 'uppercase', color: '#3b82f6', background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.2)', borderRadius: '5px', padding: '3px 8px' }}>5</span>
-                  <span style={{ fontSize: '1rem', fontWeight: '600', color: '#e2e8f0' }}>Additional Details</span>
+                  <span style={{ fontSize: '0.75rem', fontWeight: '800', letterSpacing: '2px', textTransform: 'uppercase', color: '#3b82f6', background: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.25)', borderRadius: '6px', padding: '4px 10px' }}>5</span>
+                  <span style={{ fontSize: '1.2rem', fontWeight: '700', color: '#f1f5f9' }}>Additional Details</span>
                 </div>
                 <div style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
                   <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '16px' }}>
-                    <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      <span style={{ fontSize: '0.72rem', color: '#475569', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '1.5px' }}>HOD / Person Name</span>
+                    <label style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      <span style={{ fontSize: '0.9rem', color: '#94a3b8', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '1.5px' }}>HOD / Person Name</span>
                       <input type="text" disabled={savingReason || isViewMode} placeholder="e.g. Ashutosh Pandey" value={editPerson} onChange={e => setEditPerson(e.target.value)}
-                        style={{ height: '46px', padding: '0 14px', fontSize: '1.05rem', borderRadius: '8px', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.09)', color: 'white', outline: 'none', boxSizing: 'border-box', transition: 'border-color 0.2s', fontFamily: 'inherit' }}
+                        style={{ height: '52px', padding: '0 16px', fontSize: '1.1rem', borderRadius: '10px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', outline: 'none', boxSizing: 'border-box', transition: 'border-color 0.2s', fontFamily: 'inherit' }}
                         onFocus={(e) => { e.target.style.borderColor = '#3b82f6'; }}
-                        onBlur={(e) => { e.target.style.borderColor = 'rgba(255,255,255,0.09)'; }}
+                        onBlur={(e) => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; }}
                       />
                     </label>
-                    <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      <span style={{ fontSize: '0.72rem', color: '#475569', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '1.5px' }}>Status</span>
+                    <label style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      <span style={{ fontSize: '0.9rem', color: '#94a3b8', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '1.5px' }}>Status</span>
                       <select disabled={savingReason || isViewMode} value={editStatus} onChange={e => setEditStatus(e.target.value)}
-                        style={{ height: '46px', padding: '0 14px', fontSize: '1.05rem', borderRadius: '8px', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.09)', color: editStatus === 'Completed' ? '#34d399' : '#fbbf24', outline: 'none', boxSizing: 'border-box', transition: 'border-color 0.2s', fontFamily: 'inherit', fontWeight: '600', cursor: (savingReason || isViewMode) ? 'not-allowed' : 'pointer' }}
+                        style={{ height: '52px', padding: '0 16px', fontSize: '1.1rem', borderRadius: '10px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: editStatus === 'Completed' ? '#34d399' : '#fbbf24', outline: 'none', boxSizing: 'border-box', transition: 'border-color 0.2s', fontFamily: 'inherit', fontWeight: '700', cursor: (savingReason || isViewMode) ? 'not-allowed' : 'pointer' }}
                         onFocus={(e) => { e.target.style.borderColor = editStatus === 'Completed' ? '#10b981' : '#f59e0b'; }}
-                        onBlur={(e) => { e.target.style.borderColor = 'rgba(255,255,255,0.09)'; }}
+                        onBlur={(e) => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; }}
                       >
                         <option value="Pending" style={{ color: '#fbbf24', background: '#0f172a' }}>Pending</option>
                         <option value="Completed" style={{ color: '#34d399', background: '#0f172a' }}>Completed</option>
                       </select>
                     </label>
-                    <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      <span style={{ fontSize: '0.72rem', color: '#475569', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '1.5px' }}>Target Date</span>
+                    <label style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      <span style={{ fontSize: '0.9rem', color: '#94a3b8', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '1.5px' }}>Target Date</span>
                       <input type="date" disabled={savingReason || isViewMode} value={editTargetDate} onChange={e => setEditTargetDate(e.target.value)}
-                        style={{ height: '46px', padding: '0 14px', fontSize: '1.05rem', borderRadius: '8px', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.09)', color: 'white', outline: 'none', boxSizing: 'border-box', colorScheme: 'dark', transition: 'border-color 0.2s' }}
+                        style={{ height: '52px', padding: '0 16px', fontSize: '1.1rem', borderRadius: '10px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', outline: 'none', boxSizing: 'border-box', colorScheme: 'dark', transition: 'border-color 0.2s' }}
                         onFocus={(e) => { e.target.style.borderColor = '#3b82f6'; }}
-                        onBlur={(e) => { e.target.style.borderColor = 'rgba(255,255,255,0.09)'; }}
+                        onBlur={(e) => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; }}
                       />
                     </label>
                   </div>
-                  <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <span style={{ fontSize: '0.72rem', color: '#f59e0b', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '1.5px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: '#f59e0b', flexShrink: 0 }}></span>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <span style={{ fontSize: '0.9rem', color: '#f59e0b', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '1.5px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#f59e0b', flexShrink: 0 }}></span>
                       Action Taken
                     </span>
                     <textarea disabled={savingReason || isViewMode}
                       placeholder="Describe the corrective action taken to resolve this downtime issue..."
                       value={editNoteText} onChange={e => setEditNoteText(e.target.value)}
-                      style={{ minHeight: '100px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: '8px', color: 'white', padding: '14px', fontSize: '1.05rem', resize: 'vertical', outline: 'none', boxSizing: 'border-box', lineHeight: '1.6', transition: 'border-color 0.2s', fontFamily: 'inherit' }}
+                      style={{ minHeight: '110px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(245,158,11,0.25)', borderRadius: '10px', color: 'white', padding: '16px', fontSize: '1.1rem', resize: 'vertical', outline: 'none', boxSizing: 'border-box', lineHeight: '1.6', transition: 'border-color 0.2s', fontFamily: 'inherit' }}
                       onFocus={(e) => { e.target.style.borderColor = '#f59e0b'; }}
-                      onBlur={(e) => { e.target.style.borderColor = 'rgba(245,158,11,0.2)'; }}
+                      onBlur={(e) => { e.target.style.borderColor = 'rgba(245,158,11,0.25)'; }}
                     />
                   </label>
                 </div>
@@ -2208,14 +2208,14 @@ function AccordionSection({ step, title, color, selected, isOpen, onToggle, disa
         style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 24px', background: 'transparent', border: 'none', cursor: disabled ? 'not-allowed' : 'pointer', textAlign: 'left' }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-          <span style={{ fontSize: '0.65rem', fontWeight: '800', letterSpacing: '2px', textTransform: 'uppercase', color: color, background: color + '18', border: `1px solid ${color}35`, borderRadius: '5px', padding: '3px 8px', flexShrink: 0 }}>{step}</span>
-          <span style={{ fontSize: '1rem', fontWeight: '600', color: '#e2e8f0' }}>{title}</span>
+          <span style={{ fontSize: '0.75rem', fontWeight: '800', letterSpacing: '2px', textTransform: 'uppercase', color: color, background: color + '18', border: `1px solid ${color}35`, borderRadius: '6px', padding: '4px 10px', flexShrink: 0 }}>{step}</span>
+          <span style={{ fontSize: '1.2rem', fontWeight: '700', color: '#f1f5f9' }}>{title}</span>
           {selected && !isOpen && (
-            <span style={{ fontSize: '0.82rem', color: color, background: color + '15', border: `1px solid ${color}30`, borderRadius: '20px', padding: '3px 12px', fontWeight: '600' }}>✓ {selected}</span>
+            <span style={{ fontSize: '0.9rem', color: color, background: color + '15', border: `1px solid ${color}30`, borderRadius: '20px', padding: '4px 14px', fontWeight: '700' }}>✓ {selected}</span>
           )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-          {!selected && !isOpen && <span style={{ fontSize: '0.78rem', color: '#475569' }}>Not selected</span>}
+          {!selected && !isOpen && <span style={{ fontSize: '0.9rem', color: '#64748b', fontWeight: '500' }}>Not selected</span>}
           <div style={{ width: '26px', height: '26px', borderRadius: '50%', border: `1px solid ${isOpen ? color + '50' : 'rgba(255,255,255,0.08)'}`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: isOpen ? color : '#64748b', fontSize: '0.7rem', transition: 'all 0.25s', transform: isOpen ? 'rotate(180deg)' : 'none' }}>▼</div>
         </div>
       </button>
@@ -2234,7 +2234,7 @@ function AccordionSection({ step, title, color, selected, isOpen, onToggle, disa
                 value={search}
                 onChange={e => setSearch(e.target.value)}
                 onClick={e => e.stopPropagation()}
-                style={{ width: '100%', height: '40px', padding: '0 40px 0 42px', fontSize: '0.9rem', borderRadius: '8px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', outline: 'none', boxSizing: 'border-box', fontFamily: 'inherit', transition: 'border-color 0.2s' }}
+                style={{ width: '100%', height: '46px', padding: '0 40px 0 46px', fontSize: '1rem', borderRadius: '10px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', outline: 'none', boxSizing: 'border-box', fontFamily: 'inherit', transition: 'border-color 0.2s' }}
                 onFocus={e => { e.target.style.borderColor = color; }}
                 onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; }}
               />
