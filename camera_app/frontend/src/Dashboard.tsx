@@ -90,6 +90,8 @@ function hasRca(record: RecordingRecord) {
 export const Dashboard: React.FC<DashboardProps> = ({ records }) => {
   const [fullscreenChart, setFullscreenChart] = useState<string | null>(null);
   const [reasonSort, setReasonSort] = useState<'duration' | 'frequency'>('duration');
+  const [longestViewMode, setLongestViewMode] = useState<'visual' | 'table'>('visual');
+  const [hourlyViewMode, setHourlyViewMode] = useState<'visual' | 'table'>('visual');
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -113,7 +115,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ records }) => {
     let firstEventTime = Infinity;
     let lastEventTime = 0;
 
-    const hourlyCounts = Array.from({length: 24}, () => ({ breakdown: 0, minor: 0, other: 0 }));
+    const hourlyCounts = Array.from({length: 24}, () => ({ 
+      breakdown: 0, 
+      minor: 0, 
+      other: 0, 
+      durationSec: 0, 
+      breakdownSec: 0, 
+      minorSec: 0 
+    }));
     const dailyMap: Record<string, number> = {};
     const shiftMap: Record<string, number> = { A: 0, B: 0, C: 0 };
     
@@ -172,9 +181,16 @@ export const Dashboard: React.FC<DashboardProps> = ({ records }) => {
       
       shiftMap[shift] = (shiftMap[shift] || 0) + duration;
 
-      if (isBreakdown) hourlyCounts[hour].breakdown++;
-      else if (isMinor) hourlyCounts[hour].minor++;
-      else hourlyCounts[hour].other++;
+      hourlyCounts[hour].durationSec = (hourlyCounts[hour].durationSec || 0) + duration;
+      if (isBreakdown) {
+        hourlyCounts[hour].breakdown++;
+        hourlyCounts[hour].breakdownSec = (hourlyCounts[hour].breakdownSec || 0) + duration;
+      } else if (isMinor) {
+        hourlyCounts[hour].minor++;
+        hourlyCounts[hour].minorSec = (hourlyCounts[hour].minorSec || 0) + duration;
+      } else {
+        hourlyCounts[hour].other++;
+      }
       
       // Production Day: Runs from 06:00 AM to 06:00 AM next day
       // Any stoppage before 06:00 AM belongs to the previous calendar day's production day
@@ -222,15 +238,23 @@ export const Dashboard: React.FC<DashboardProps> = ({ records }) => {
 
     // Hourly — all 24h of the production day in shift sequence (Shift A: 6-14, Shift B: 14-22, Shift C: 22-6)
     const factoryHourSequence = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 0, 1, 2, 3, 4, 5];
-    const factoryHourlyData = factoryHourSequence.map(hour => ({
-      name: `${hour.toString().padStart(2, '0')}:00`,
-      hour,
-      shift: hour >= 6 && hour < 14 ? 'Shift A' : hour >= 14 && hour < 22 ? 'Shift B' : 'Shift C',
-      breakdown: hourlyCounts[hour].breakdown,
-      minor: hourlyCounts[hour].minor,
-      other: hourlyCounts[hour].other,
-      total: hourlyCounts[hour].breakdown + hourlyCounts[hour].minor + hourlyCounts[hour].other
-    }));
+    const factoryHourlyData = factoryHourSequence.map(hour => {
+      const hData = hourlyCounts[hour];
+      return {
+        name: `${hour.toString().padStart(2, '0')}:00`,
+        windowLabel: `${hour.toString().padStart(2, '0')}:00 – ${((hour + 1) % 24).toString().padStart(2, '0')}:00`,
+        hour,
+        shift: hour >= 6 && hour < 14 ? 'Shift A' : hour >= 14 && hour < 22 ? 'Shift B' : 'Shift C',
+        breakdown: hData.breakdown,
+        minor: hData.minor,
+        other: hData.other,
+        total: hData.breakdown + hData.minor + hData.other,
+        durationSec: hData.durationSec || 0,
+        durationHours: parseFloat(((hData.durationSec || 0) / 3600).toFixed(2)),
+        breakdownSec: hData.breakdownSec || 0,
+        minorSec: hData.minorSec || 0,
+      };
+    });
 
     // Standard 0-23 array for summary table
     const hourlyData = hourlyCounts.map((data, hour) => ({
@@ -403,6 +427,113 @@ export const Dashboard: React.FC<DashboardProps> = ({ records }) => {
       }
     };
   }, [records]);
+
+  // Derived Top 5 Longest Stoppages for Visual Insights
+  const top5Longest = useMemo(() => {
+    return stats.topRecords.slice(0, 5).map((r, i) => {
+      const durSec = eventDuration(r);
+      const durMin = parseFloat((durSec / 60).toFixed(1));
+      const durHours = parseFloat((durSec / 3600).toFixed(2));
+      const d = r.started_at ? new Date(r.started_at) : null;
+      const timeNum = d ? d.getHours() + d.getMinutes() / 60 : 0;
+      const shift = (timeNum >= 6 && timeNum < 14) ? 'Shift A' : (timeNum >= 14 && timeNum < 22) ? 'Shift B' : 'Shift C';
+      const percent = stats.totalSec > 0 ? parseFloat(((durSec / stats.totalSec) * 100).toFixed(1)) : 0;
+      const isBreakdown = r.event_type === 'breakdown';
+      const rcaDone = hasRca(r);
+      const rawReason = (r.reason || '').trim();
+      let displayReason = rawReason || 'Pending reason';
+      let subReason = '';
+      if (rawReason.includes(' - ')) {
+        const parts = rawReason.split(' - ');
+        displayReason = parts[parts.length - 1];
+        subReason = parts.slice(0, -1).join(' - ');
+      }
+      return {
+        rank: i + 1,
+        record: r,
+        startedAtFormatted: d ? d.toLocaleString('en-GB') : '-',
+        shift,
+        durationSec: durSec,
+        durationDigital: formatDurationDigital(durSec),
+        durationShort: formatDuration(durSec, 'short'),
+        durationHours: durHours,
+        durationMin: durMin,
+        percent,
+        isBreakdown,
+        rcaDone,
+        reason: displayReason,
+        fullReason: rawReason || 'Pending reason',
+        subReason,
+        category: r.reason_category || (isBreakdown ? 'Machine Breakdown' : 'Minor Stoppage'),
+        fill: isBreakdown ? COLORS.breakdown : COLORS.minor
+      };
+    });
+  }, [stats.topRecords, stats.totalSec]);
+
+  const top5LongestChartData = useMemo(() => {
+    return top5Longest.map(item => ({
+      rank: `#${item.rank}`,
+      name: `#${item.rank} (${item.durationDigital})`,
+      fullName: item.fullReason,
+      durationMin: item.durationMin,
+      durationHours: item.durationHours,
+      durationFormatted: item.durationDigital,
+      percent: item.percent,
+      fill: item.fill,
+      category: item.category
+    }));
+  }, [top5Longest]);
+
+  const top5TotalSec = useMemo(() => {
+    return top5Longest.reduce((sum, item) => sum + item.durationSec, 0);
+  }, [top5Longest]);
+
+  const top5DowntimePct = stats.totalSec > 0 ? Math.round((top5TotalSec / stats.totalSec) * 100) : 0;
+  const top5AvgSec = top5Longest.length > 0 ? Math.round(top5TotalSec / top5Longest.length) : 0;
+  const top5RcaCount = top5Longest.filter(i => i.rcaDone).length;
+  const top5RcaPct = top5Longest.length > 0 ? Math.round((top5RcaCount / top5Longest.length) * 100) : 0;
+
+  // Derived Top 5 Production Bottleneck / Danger Zone Hours
+  const top5DangerHours = useMemo(() => {
+    const active = stats.factoryHourlyData.filter(d => d.total > 0);
+    return [...active]
+      .sort((a, b) => b.total - a.total || (b.durationSec || 0) - (a.durationSec || 0))
+      .slice(0, 5)
+      .map((h, i) => {
+        const pctOfEvents = stats.totalEvents > 0 ? parseFloat(((h.total / stats.totalEvents) * 100).toFixed(1)) : 0;
+        const pctOfDowntime = stats.totalSec > 0 ? parseFloat(((h.durationSec / stats.totalSec) * 100).toFixed(1)) : 0;
+        let severity = 'Moderate';
+        let badgeClass = 'info';
+        if (i === 0 || h.total >= 5 || h.breakdown >= 2) {
+          severity = 'Critical Bottleneck';
+          badgeClass = 'danger';
+        } else if (i <= 2 || h.total >= 3) {
+          severity = 'High Disruption';
+          badgeClass = 'warning';
+        }
+        return {
+          ...h,
+          rank: i + 1,
+          pctOfEvents,
+          pctOfDowntime,
+          severity,
+          badgeClass,
+          formattedDuration: formatDuration(h.durationSec, 'short')
+        };
+      });
+  }, [stats.factoryHourlyData, stats.totalEvents, stats.totalSec]);
+
+  const top5HoursEventsCount = useMemo(() => {
+    return top5DangerHours.reduce((sum, h) => sum + h.total, 0);
+  }, [top5DangerHours]);
+
+  const top5HoursEventsPct = stats.totalEvents > 0 ? Math.round((top5HoursEventsCount / stats.totalEvents) * 100) : 0;
+
+  const top5HoursDowntimeSec = useMemo(() => {
+    return top5DangerHours.reduce((sum, h) => sum + h.durationSec, 0);
+  }, [top5DangerHours]);
+
+  const top5HoursDowntimePct = stats.totalSec > 0 ? Math.round((top5HoursDowntimeSec / stats.totalSec) * 100) : 0;
 
   if (stats.totalEvents === 0) {
     return <div className="p-8 text-center text-gray-400">No records found for the selected period.</div>;
@@ -939,6 +1070,189 @@ export const Dashboard: React.FC<DashboardProps> = ({ records }) => {
         );
         break;
       }
+      case 'longest_stoppages': {
+        title = 'Top 10 Longest Stoppages — Critical Downtime Impact Analysis';
+        subtitle = 'Severity ranking of individual stoppage incidents with root cause category and RCA documentation audit';
+        chartElement = (
+          <ResponsiveContainer width="100%" height={380}>
+            <BarChart
+              data={stats.topRecords.map((r, i) => {
+                const dur = eventDuration(r);
+                return {
+                  rank: `#${i + 1}`,
+                  durationMin: parseFloat((dur / 60).toFixed(1)),
+                  durationFormatted: formatDurationDigital(dur),
+                  percent: stats.totalSec > 0 ? ((dur / stats.totalSec) * 100).toFixed(1) : '0',
+                  reason: (r.reason || 'Pending reason').substring(0, 30),
+                  fullReason: r.reason || 'Pending reason',
+                  fill: r.event_type === 'breakdown' ? COLORS.breakdown : COLORS.minor
+                };
+              })}
+              layout="vertical"
+              margin={{ top: 10, right: 70, left: 10, bottom: 0 }}
+            >
+              <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#334155" />
+              <XAxis type="number" tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={{ stroke: '#334155' }} tickLine={false} unit="m" />
+              <YAxis dataKey="rank" type="category" tick={{ fill: '#cbd5e1', fontSize: 12, fontWeight: 700 }} axisLine={{ stroke: '#334155' }} tickLine={false} width={45} />
+              <RechartsTooltip
+                cursor={{ fill: 'rgba(255,255,255,0.03)' }}
+                contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: '8px' }}
+                formatter={(val: any, _name: any, item: any) => [
+                  `${item.payload.durationFormatted} (${item.payload.percent}% of total loss)`,
+                  item.payload.fullReason
+                ]}
+              />
+              <Bar isAnimationActive={false} dataKey="durationMin" radius={[0, 8, 8, 0]} maxBarSize={30}>
+                {stats.topRecords.map((r, idx) => (
+                  <Cell key={`modal-bar-${idx}`} fill={r.event_type === 'breakdown' ? COLORS.breakdown : COLORS.minor} />
+                ))}
+                <LabelList
+                  dataKey="durationFormatted"
+                  position="right"
+                  fill="#f8fafc"
+                  fontSize={11}
+                  fontWeight="bold"
+                  formatter={(val: any, entry: any) => {
+                    const rec = stats.topRecords[entry.index];
+                    const pct = rec && stats.totalSec > 0 ? (eventDuration(rec) / stats.totalSec * 100).toFixed(1) : '0';
+                    return `${val} (${pct}%)`;
+                  }}
+                />
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        );
+        drilldownElement = (
+          <div className="chart-modal-drilldown">
+            <h4>Data Drilldown: Top 10 Longest Stoppages Audit Table</h4>
+            <div style={{ maxHeight: '300px', overflowY: 'auto' }}>
+              <table className="tpm-table">
+                <thead>
+                  <tr>
+                    <th>Rank #</th>
+                    <th>Start Date & Time</th>
+                    <th>Shift</th>
+                    <th>Category</th>
+                    <th>Duration</th>
+                    <th>% Plant Loss</th>
+                    <th>Failure Reason</th>
+                    <th>Root Cause Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {stats.topRecords.map((r, i) => {
+                    const d = r.started_at ? new Date(r.started_at) : null;
+                    const dStr = d ? d.toLocaleString('en-GB') : '-';
+                    const timeNum = d ? d.getHours() + d.getMinutes() / 60 : 0;
+                    const shift = (timeNum >= 6 && timeNum < 14) ? 'Shift A' : (timeNum >= 14 && timeNum < 22) ? 'Shift B' : 'Shift C';
+                    const isBreakdown = r.event_type === 'breakdown';
+                    const documented = hasRca(r);
+                    const durSec = eventDuration(r);
+                    const pct = stats.totalSec > 0 ? ((durSec / stats.totalSec) * 100).toFixed(1) : '0';
+                    return (
+                      <tr key={i}>
+                        <td style={{ fontWeight: 'bold' }}>#{i + 1}</td>
+                        <td>{dStr}</td>
+                        <td><span className="tpm-badge info">{shift}</span></td>
+                        <td>
+                          <span className={`tpm-badge ${isBreakdown ? 'danger' : 'warning'}`}>
+                            {r.reason_category || (isBreakdown ? 'Breakdown' : 'Minor Stoppage')}
+                          </span>
+                        </td>
+                        <td className="dur">{formatDurationDigital(durSec)}</td>
+                        <td style={{ fontWeight: 'bold', color: isBreakdown ? '#ef4444' : '#f59e0b' }}>{pct}%</td>
+                        <td className="reason-col" title={r.reason || ''}>{r.reason || 'Pending reason'}</td>
+                        <td>
+                          <span className={`tpm-badge-outline ${documented ? 'success' : 'pending'}`}>
+                            {documented ? '✓ RCA Done' : '⏳ Pending RCA'}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+        break;
+      }
+      case 'hourly_bottlenecks': {
+        title = 'Production Danger Zone Hours & Hourly Bottlenecks';
+        subtitle = 'Chronological 24-hour factory shift breakdown vs top recurring disruption windows';
+        chartElement = (
+          <ResponsiveContainer width="100%" height={380}>
+            <BarChart data={top5DangerHours} margin={{ top: 20, right: 30, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#334155" />
+              <XAxis dataKey="windowLabel" tick={{ fill: '#cbd5e1', fontSize: 12 }} axisLine={{ stroke: '#334155' }} tickLine={false} />
+              <YAxis tick={{ fill: '#94a3b8', fontSize: 12 }} axisLine={{ stroke: '#334155' }} tickLine={false} label={{ value: 'Stoppage Count', angle: -90, position: 'insideLeft', fill: '#94a3b8', fontSize: 12, offset: 10 }} />
+              <RechartsTooltip
+                cursor={{ fill: 'rgba(255,255,255,0.03)' }}
+                contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: '8px' }}
+                formatter={(val: any, name: any, item: any) => [
+                  `${val} incidents (Downtime: ${item.payload.formattedDuration})`,
+                  name === 'breakdown' ? 'Breakdowns' : name === 'minor' ? 'Minor Stoppages' : 'Operator Triggered'
+                ]}
+              />
+              <Legend verticalAlign="top" height={40} wrapperStyle={{ fontSize: '13px', color: '#cbd5e1' }} />
+              <Bar isAnimationActive={false} dataKey="breakdown" stackId="a" fill={COLORS.breakdown} name="Breakdown" radius={[0, 0, 0, 0]} maxBarSize={48} />
+              <Bar isAnimationActive={false} dataKey="minor" stackId="a" fill={COLORS.minor} name="Minor Stoppage" radius={[0, 0, 0, 0]} maxBarSize={48} />
+              <Bar isAnimationActive={false} dataKey="other" stackId="a" fill={COLORS.selfCapture} name="Operator Triggered" radius={[4, 4, 0, 0]} maxBarSize={48}>
+                <LabelList dataKey="total" position="top" fill="#f8fafc" fontSize={13} fontWeight="bold" formatter={(val: any) => val > 0 ? `${val} stops` : ''} />
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        );
+        drilldownElement = (
+          <div className="chart-modal-drilldown">
+            <h4>Data Drilldown: Danger Hours & 24-Hr Production Shift Sequence</h4>
+            <div style={{ maxHeight: '300px', overflowY: 'auto' }}>
+              <table className="tpm-table">
+                <thead>
+                  <tr>
+                    <th>Hour Window</th>
+                    <th>Shift</th>
+                    <th>Total Disruption Events</th>
+                    <th>Breakdowns</th>
+                    <th>Minor Stoppages</th>
+                    <th>Operator Triggered</th>
+                    <th>Total Lost Downtime</th>
+                    <th>Impact Severity</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {stats.factoryHourlyData.filter(d => d.total > 0).map((d, idx) => {
+                    const isTop5 = top5DangerHours.some(t => t.hour === d.hour);
+                    const top5Item = top5DangerHours.find(t => t.hour === d.hour);
+                    return (
+                      <tr key={idx} style={isTop5 ? { background: 'rgba(239, 68, 68, 0.08)' } : {}}>
+                        <td style={{ fontWeight: 'bold' }}>
+                          {d.windowLabel}
+                          {isTop5 && <span style={{ marginLeft: '6px', color: '#ef4444', fontSize: '11px', fontWeight: 'bold' }}>[Top #{top5Item?.rank}]</span>}
+                        </td>
+                        <td><span className="tpm-badge info">{d.shift}</span></td>
+                        <td style={{ fontWeight: 'bold' }}>{d.total}</td>
+                        <td>{d.breakdown > 0 ? <span className="tpm-badge danger">{d.breakdown}</span> : '-'}</td>
+                        <td>{d.minor > 0 ? <span className="tpm-badge warning">{d.minor}</span> : '-'}</td>
+                        <td>{d.other > 0 ? d.other : '-'}</td>
+                        <td style={{ fontWeight: '600', color: '#f8fafc' }}>{formatDuration(d.durationSec, 'short')}</td>
+                        <td>
+                          {isTop5 ? (
+                            <span className={`tpm-badge ${top5Item?.badgeClass}`}>{top5Item?.severity}</span>
+                          ) : (
+                            <span className="tpm-badge info">Normal</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+        break;
+      }
       default:
         return null;
     }
@@ -1409,87 +1723,401 @@ export const Dashboard: React.FC<DashboardProps> = ({ records }) => {
 
       </div>
 
-      {/* Top 10 Table */}
+      {/* Top Longest Stoppages Section */}
       <div className="tpm-table-section">
-        <h4>Top 10 Longest Stoppages</h4>
-        <div className="table-responsive">
-          <table className="tpm-table">
-            <thead>
-              <tr>
-                <th>#</th>
-                <th>Start Date & Time</th>
-                <th>Category</th>
-                <th>Duration</th>
-                <th>Reason</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {stats.topRecords.map((r, i) => {
-                const d = r.started_at ? new Date(r.started_at).toLocaleString('en-GB') : '-';
-                const isBreakdown = r.event_type === 'breakdown';
-                const documented = hasRca(r);
-                return (
-                  <tr key={r.file_path || i}>
-                    <td>{i+1}</td>
-                    <td>{d}</td>
-                    <td>
-                      <span className={`tpm-badge ${isBreakdown ? 'danger' : 'warning'}`}>
-                        {isBreakdown ? 'Breakdown' : 'Minor Stoppage'}
-                      </span>
-                    </td>
-                    <td className="dur">{formatDurationDigital(eventDuration(r))}</td>
-                    <td className="reason-col">{r.reason || 'Pending reason'}</td>
-                    <td>
-                      <span className={`tpm-badge-outline ${documented ? 'success' : 'pending'}`}>
-                        {documented ? '✓ RCA Done' : '⏳ Pending RCA'}
-                      </span>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+        <div className="tpm-section-header">
+          <div>
+            <h4>Top Longest Stoppages (Critical Production Loss)</h4>
+            <p className="chart-sub">
+              {longestViewMode === 'visual'
+                ? 'Top 5 major downtime contributors ranked by duration & Root Cause Analysis (RCA) status'
+                : 'Complete Top 10 longest stoppage incidents list with shift and duration logs'}
+            </p>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <div className="modal-toggle-group">
+              <button
+                type="button"
+                className={`modal-toggle-btn ${longestViewMode === 'visual' ? 'active' : ''}`}
+                onClick={() => setLongestViewMode('visual')}
+              >
+                📊 Visual Insights (Top 5)
+              </button>
+              <button
+                type="button"
+                className={`modal-toggle-btn ${longestViewMode === 'table' ? 'active' : ''}`}
+                onClick={() => setLongestViewMode('table')}
+              >
+                📋 Full Table (Top 10)
+              </button>
+            </div>
+            <button
+              type="button"
+              className="chart-fullscreen-btn"
+              title="Expand to Fullscreen"
+              onClick={() => setFullscreenChart('longest_stoppages')}
+            >
+              <FullscreenIcon /> Expand
+            </button>
+          </div>
         </div>
+
+        {longestViewMode === 'visual' ? (
+          <div>
+            {/* Top 5 Metrics Banner */}
+            <div className="top5-metrics-banner">
+              <div className="top5-metric-card">
+                <span className="top5-metric-label">Top 5 Total Downtime</span>
+                <div className="top5-metric-value" style={{ color: '#ef4444' }}>
+                  {formatDuration(top5TotalSec, 'short')}
+                  <span style={{ fontSize: '13px', fontWeight: '500', color: '#fca5a5' }}>
+                    ({top5DowntimePct}% of total plant loss)
+                  </span>
+                </div>
+                <span className="top5-metric-sub">Sum of 5 largest stoppage events</span>
+              </div>
+              <div className="top5-metric-card">
+                <span className="top5-metric-label">Average Stoppage Duration</span>
+                <div className="top5-metric-value" style={{ color: '#f59e0b' }}>
+                  {formatDurationDigital(top5AvgSec)}
+                </div>
+                <span className="top5-metric-sub">Mean MTTR for top 5 critical events</span>
+              </div>
+              <div className="top5-metric-card">
+                <span className="top5-metric-label">RCA Investigation Compliance</span>
+                <div className="top5-metric-value" style={{ color: top5RcaPct >= 80 ? '#22c55e' : '#f59e0b' }}>
+                  {top5RcaPct}%
+                  <span style={{ fontSize: '13px', fontWeight: '500', color: '#94a3b8' }}>
+                    ({top5RcaCount}/5 completed)
+                  </span>
+                </div>
+                <span className="top5-metric-sub">{top5RcaPct >= 80 ? '✓ High quality investigations' : '⚠ Critical events missing 5-Why RCA'}</span>
+              </div>
+            </div>
+
+            {/* Split View: Horizontal Chart + Cards */}
+            <div className="top5-visual-container">
+              {/* Left Column: Horizontal Bar Chart */}
+              <div className="top5-chart-box">
+                <div className="top5-chart-header">
+                  <span>Downtime Duration Comparison (Minutes)</span>
+                  <span className="top5-chart-legend">
+                    <span className="legend-dot breakdown"></span> Breakdown
+                    <span className="legend-dot minor"></span> Minor Stop
+                  </span>
+                </div>
+                <ResponsiveContainer width="100%" height={260}>
+                  <BarChart data={top5LongestChartData} layout="vertical" margin={{ top: 10, right: 70, left: 10, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#334155" />
+                    <XAxis type="number" tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={{ stroke: '#334155' }} tickLine={false} unit="m" />
+                    <YAxis dataKey="rank" type="category" tick={{ fill: '#cbd5e1', fontSize: 12, fontWeight: 700 }} axisLine={{ stroke: '#334155' }} tickLine={false} width={36} />
+                    <RechartsTooltip
+                      cursor={{ fill: 'rgba(255,255,255,0.03)' }}
+                      contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: '8px' }}
+                      formatter={(val: any, _name: any, item: any) => [
+                        `${item.payload.durationFormatted} (${item.payload.percent}% of total downtime)`,
+                        item.payload.fullName
+                      ]}
+                    />
+                    <Bar isAnimationActive={false} dataKey="durationMin" radius={[0, 6, 6, 0]} maxBarSize={28}>
+                      {top5LongestChartData.map((entry, idx) => (
+                        <Cell key={`bar-${idx}`} fill={entry.fill} />
+                      ))}
+                      <LabelList
+                        dataKey="durationFormatted"
+                        position="right"
+                        fill="#f8fafc"
+                        fontSize={11}
+                        fontWeight="bold"
+                        formatter={(val: any) => {
+                          const item = top5LongestChartData.find(d => d.durationFormatted === val);
+                          return item ? `${val} (${item.percent}%)` : val;
+                        }}
+                      />
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+
+              {/* Right Column: Ranked Cards */}
+              <div className="top5-cards-list">
+                {top5Longest.map((item) => (
+                  <div key={item.rank} className={`top5-incident-card ${item.rank === 1 ? 'rank-first' : ''}`}>
+                    <div className="top5-card-header">
+                      <div className="top5-rank-tag">
+                        <span className={`top5-rank-num rank-${item.rank}`}>#{item.rank}</span>
+                        <span className="top5-card-time">{item.startedAtFormatted}</span>
+                        <span className="top5-shift-badge">{item.shift}</span>
+                      </div>
+                      <div className="top5-card-duration">
+                        <span className="duration-digital">{item.durationDigital}</span>
+                        <span className="duration-percent">{item.percent}% plant loss</span>
+                      </div>
+                    </div>
+                    <div className="top5-card-body">
+                      <div className="top5-reason-text" title={item.fullReason}>
+                        <span className={`tpm-badge ${item.isBreakdown ? 'danger' : 'warning'}`} style={{ marginRight: '8px' }}>
+                          {item.category}
+                        </span>
+                        <strong>{item.reason}</strong>
+                        {item.subReason && <span className="top5-subreason"> — {item.subReason}</span>}
+                      </div>
+                      <div className="top5-rca-status">
+                        <span className={`tpm-badge-outline ${item.rcaDone ? 'success' : 'pending'}`}>
+                          {item.rcaDone ? '✓ RCA Completed' : '⏳ RCA Pending Action'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : (
+          /* Table View: Top 10 */
+          <div className="table-responsive">
+            <table className="tpm-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Start Date & Time</th>
+                  <th>Shift</th>
+                  <th>Category</th>
+                  <th>Duration</th>
+                  <th>% Plant Loss</th>
+                  <th>Reason</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {stats.topRecords.map((r, i) => {
+                  const d = r.started_at ? new Date(r.started_at) : null;
+                  const dStr = d ? d.toLocaleString('en-GB') : '-';
+                  const timeNum = d ? d.getHours() + d.getMinutes() / 60 : 0;
+                  const shift = (timeNum >= 6 && timeNum < 14) ? 'Shift A' : (timeNum >= 14 && timeNum < 22) ? 'Shift B' : 'Shift C';
+                  const isBreakdown = r.event_type === 'breakdown';
+                  const documented = hasRca(r);
+                  const durSec = eventDuration(r);
+                  const pct = stats.totalSec > 0 ? ((durSec / stats.totalSec) * 100).toFixed(1) : '0';
+                  return (
+                    <tr key={r.file_path || i}>
+                      <td><span className="font-bold">#{i+1}</span></td>
+                      <td>{dStr}</td>
+                      <td><span className="tpm-badge info">{shift}</span></td>
+                      <td>
+                        <span className={`tpm-badge ${isBreakdown ? 'danger' : 'warning'}`}>
+                          {r.reason_category || (isBreakdown ? 'Breakdown' : 'Minor Stoppage')}
+                        </span>
+                      </td>
+                      <td className="dur">{formatDurationDigital(durSec)}</td>
+                      <td style={{ fontWeight: '600', color: isBreakdown ? '#ef4444' : '#f59e0b' }}>{pct}%</td>
+                      <td className="reason-col" title={r.reason || ''}>{r.reason || 'Pending reason'}</td>
+                      <td>
+                        <span className={`tpm-badge-outline ${documented ? 'success' : 'pending'}`}>
+                          {documented ? '✓ RCA Done' : '⏳ Pending RCA'}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
-      {/* Hourly Breakdown Table */}
+      {/* Hourly Breakdown & Danger Zones Section */}
       <div className="tpm-table-section mt-8">
-        <h4>Hourly Stoppage Summary (Production Day Sequence: 06:00 to 06:00)</h4>
-        <div className="table-responsive">
-          <table className="tpm-table">
-            <thead>
-              <tr>
-                <th>Hour Window</th>
-                <th>Shift</th>
-                <th>Total Events</th>
-                <th>Breakdowns</th>
-                <th>Minor Stoppages</th>
-                <th>Operator Triggered</th>
-              </tr>
-            </thead>
-            <tbody>
-              {stats.factoryHourlyData.filter(d => d.total > 0).map((d) => (
-                <tr key={d.name}>
-                  <td style={{ fontWeight: 'bold' }}>{d.name} – {((d.hour + 1) % 24).toString().padStart(2, '0')}:00</td>
-                  <td><span className="tpm-badge info">{d.shift}</span></td>
-                  <td style={{ fontWeight: 'bold' }}>{d.total}</td>
-                  <td>
-                    {d.breakdown > 0 ? (
-                      <span className="tpm-badge danger" style={{ background: COLORS.breakdown, color: '#fff' }}>{d.breakdown}</span>
-                    ) : '-'}
-                  </td>
-                  <td>
-                    {d.minor > 0 ? (
-                      <span className="tpm-badge warning" style={{ background: COLORS.minor, color: '#fff' }}>{d.minor}</span>
-                    ) : '-'}
-                  </td>
-                  <td>{d.other > 0 ? d.other : '-'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="tpm-section-header">
+          <div>
+            <h4>Production Danger Zone Hours & Hourly Bottlenecks</h4>
+            <p className="chart-sub">
+              {hourlyViewMode === 'visual'
+                ? 'Top 5 peak disruption hours of the production day (06:00 to 06:00) requiring operational intervention'
+                : 'Complete 24-hour chronological stoppage summary according to factory shift cycles'}
+            </p>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <div className="modal-toggle-group">
+              <button
+                type="button"
+                className={`modal-toggle-btn ${hourlyViewMode === 'visual' ? 'active' : ''}`}
+                onClick={() => setHourlyViewMode('visual')}
+              >
+                🔥 Top 5 Danger Hours
+              </button>
+              <button
+                type="button"
+                className={`modal-toggle-btn ${hourlyViewMode === 'table' ? 'active' : ''}`}
+                onClick={() => setHourlyViewMode('table')}
+              >
+                🕒 24-Hr Sequence Table
+              </button>
+            </div>
+            <button
+              type="button"
+              className="chart-fullscreen-btn"
+              title="Expand to Fullscreen"
+              onClick={() => setFullscreenChart('hourly_bottlenecks')}
+            >
+              <FullscreenIcon /> Expand
+            </button>
+          </div>
         </div>
+
+        {hourlyViewMode === 'visual' ? (
+          <div>
+            {/* Top 5 Danger Hours Metrics Banner */}
+            <div className="top5-metrics-banner">
+              <div className="top5-metric-card">
+                <span className="top5-metric-label">Peak Disruption Hour (#1 Danger)</span>
+                <div className="top5-metric-value" style={{ color: '#ef4444' }}>
+                  {top5DangerHours[0]?.windowLabel || 'None'}
+                  <span style={{ fontSize: '13px', fontWeight: '500', color: '#fca5a5' }}>
+                    ({top5DangerHours[0]?.total || 0} stops)
+                  </span>
+                </div>
+                <span className="top5-metric-sub">{top5DangerHours[0]?.shift || 'Shift'} • Highest failure concentration</span>
+              </div>
+              <div className="top5-metric-card">
+                <span className="top5-metric-label">Top 5 Disruption Concentration</span>
+                <div className="top5-metric-value" style={{ color: '#38bdf8' }}>
+                  {top5HoursEventsPct}%
+                  <span style={{ fontSize: '13px', fontWeight: '500', color: '#94a3b8' }}>
+                    ({top5HoursEventsCount} / {stats.totalEvents} events)
+                  </span>
+                </div>
+                <span className="top5-metric-sub">Majority of plant disruptions confined to 5 hours</span>
+              </div>
+              <div className="top5-metric-card">
+                <span className="top5-metric-label">Downtime Loss in Top 5 Hours</span>
+                <div className="top5-metric-value" style={{ color: '#f59e0b' }}>
+                  {formatDuration(top5HoursDowntimeSec, 'short')}
+                  <span style={{ fontSize: '13px', fontWeight: '500', color: '#fde68a' }}>
+                    ({top5HoursDowntimePct}%)
+                  </span>
+                </div>
+                <span className="top5-metric-sub">Direct production time lost during bottleneck windows</span>
+              </div>
+            </div>
+
+            {/* Split View: Stacked Bar Chart + Danger Cards */}
+            <div className="top5-visual-container">
+              {/* Left Column: Stacked Column Chart */}
+              <div className="top5-chart-box">
+                <div className="top5-chart-header">
+                  <span>Top 5 Danger Hours: Breakdown vs Minor Stoppage</span>
+                  <span className="top5-chart-legend">
+                    <span className="legend-dot breakdown"></span> Breakdown
+                    <span className="legend-dot minor"></span> Minor Stop
+                    <span className="legend-dot operator"></span> Operator
+                  </span>
+                </div>
+                <ResponsiveContainer width="100%" height={260}>
+                  <BarChart data={top5DangerHours} margin={{ top: 20, right: 20, left: -10, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#334155" />
+                    <XAxis dataKey="windowLabel" tick={{ fill: '#cbd5e1', fontSize: 11 }} axisLine={{ stroke: '#334155' }} tickLine={false} />
+                    <YAxis tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={{ stroke: '#334155' }} tickLine={false} />
+                    <RechartsTooltip
+                      cursor={{ fill: 'rgba(255,255,255,0.03)' }}
+                      contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: '8px' }}
+                      formatter={(val: any, name: any, item: any) => [
+                        `${val} stops (Downtime: ${item.payload.formattedDuration})`,
+                        name === 'breakdown' ? 'Breakdowns' : name === 'minor' ? 'Minor Stoppages' : 'Operator Triggered'
+                      ]}
+                    />
+                    <Bar isAnimationActive={false} dataKey="breakdown" stackId="a" fill={COLORS.breakdown} name="Breakdown" radius={[0, 0, 0, 0]} maxBarSize={42} />
+                    <Bar isAnimationActive={false} dataKey="minor" stackId="a" fill={COLORS.minor} name="Minor Stoppage" radius={[0, 0, 0, 0]} maxBarSize={42} />
+                    <Bar isAnimationActive={false} dataKey="other" stackId="a" fill={COLORS.selfCapture} name="Operator Triggered" radius={[4, 4, 0, 0]} maxBarSize={42}>
+                      <LabelList dataKey="total" position="top" fill="#f8fafc" fontSize={12} fontWeight="bold" formatter={(val: any) => val > 0 ? `${val} stops` : ''} />
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+
+              {/* Right Column: Danger Hour Cards */}
+              <div className="top5-cards-list">
+                {top5DangerHours.map((h) => (
+                  <div key={h.hour} className={`top5-incident-card ${h.rank === 1 ? 'rank-first' : ''}`}>
+                    <div className="top5-card-header">
+                      <div className="top5-rank-tag">
+                        <span className={`top5-rank-num rank-${h.rank}`}>#{h.rank}</span>
+                        <strong className="top5-hour-window">{h.windowLabel}</strong>
+                        <span className="top5-shift-badge">{h.shift}</span>
+                      </div>
+                      <div className="top5-card-duration">
+                        <span className="duration-digital" style={{ color: h.breakdown > 0 ? '#ef4444' : '#f59e0b' }}>
+                          {h.total} Stoppages
+                        </span>
+                        <span className="duration-percent">{h.formattedDuration} lost</span>
+                      </div>
+                    </div>
+                    <div className="top5-card-body" style={{ marginTop: '8px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                        {h.breakdown > 0 && (
+                          <span className="tpm-badge danger" style={{ background: COLORS.breakdown, color: '#fff' }}>
+                            {h.breakdown} Breakdown{h.breakdown > 1 ? 's' : ''}
+                          </span>
+                        )}
+                        {h.minor > 0 && (
+                          <span className="tpm-badge warning" style={{ background: COLORS.minor, color: '#fff' }}>
+                            {h.minor} Minor Stop{h.minor > 1 ? 's' : ''}
+                          </span>
+                        )}
+                        {h.other > 0 && (
+                          <span className="tpm-badge info">
+                            {h.other} Operator Stop{h.other > 1 ? 's' : ''}
+                          </span>
+                        )}
+                        <span className="top5-danger-tag" style={{ marginLeft: 'auto' }}>
+                          <span className={`tpm-badge ${h.badgeClass}`}>{h.severity}</span>
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : (
+          /* Table View: 24h Production Day Sequence */
+          <div className="table-responsive">
+            <table className="tpm-table">
+              <thead>
+                <tr>
+                  <th>Hour Window</th>
+                  <th>Shift</th>
+                  <th>Total Events</th>
+                  <th>Breakdowns</th>
+                  <th>Minor Stoppages</th>
+                  <th>Operator Triggered</th>
+                  <th>Total Downtime</th>
+                </tr>
+              </thead>
+              <tbody>
+                {stats.factoryHourlyData.filter(d => d.total > 0).map((d) => (
+                  <tr key={d.name}>
+                    <td style={{ fontWeight: 'bold' }}>{d.windowLabel}</td>
+                    <td><span className="tpm-badge info">{d.shift}</span></td>
+                    <td style={{ fontWeight: 'bold' }}>{d.total}</td>
+                    <td>
+                      {d.breakdown > 0 ? (
+                        <span className="tpm-badge danger" style={{ background: COLORS.breakdown, color: '#fff' }}>{d.breakdown}</span>
+                      ) : '-'}
+                    </td>
+                    <td>
+                      {d.minor > 0 ? (
+                        <span className="tpm-badge warning" style={{ background: COLORS.minor, color: '#fff' }}>{d.minor}</span>
+                      ) : '-'}
+                    </td>
+                    <td>{d.other > 0 ? d.other : '-'}</td>
+                    <td style={{ fontWeight: '600', color: '#f8fafc' }}>{formatDuration(d.durationSec, 'short')}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
       
       {/* Methodology Section */}

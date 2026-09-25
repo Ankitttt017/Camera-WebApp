@@ -1585,7 +1585,23 @@ def meaningful_transcript_text(transcript: str | None) -> bool:
     words = [word for word in text.replace('|', ' ').split() if any(char.isalnum() for char in word)]
     if signal_chars < TRANSCRIPTION_MIN_REASON_CHARS:
         return False
-    return len(words) >= TRANSCRIPTION_MIN_REASON_WORDS or signal_chars >= TRANSCRIPTION_MIN_REASON_CHARS * 2
+    if len(words) < TRANSCRIPTION_MIN_REASON_WORDS and signal_chars < TRANSCRIPTION_MIN_REASON_CHARS * 2:
+        return False
+
+    # Anti-hallucination & loop detection:
+    if re.search(r'([^\w\s]|[\w])\1{4,}', text):
+        return False
+    if re.search(r'(.{3,})\1{2,}', text):
+        return False
+    for i in range(len(words) - 2):
+        if words[i].lower() == words[i+1].lower() == words[i+2].lower():
+            return False
+    if len(words) >= 6:
+        unique_ratio = len(set(w.lower() for w in words)) / len(words)
+        if unique_ratio < 0.40:
+            return False
+
+    return True
 
 
 def write_transcription_metadata(
@@ -1703,22 +1719,42 @@ def faster_whisper_available() -> bool:
     return True
 
 
+_WHISPER_MODEL_CACHE: dict = {}
+
+def get_shared_whisper_model():
+    from faster_whisper import WhisperModel
+    model_size = TRANSCRIPTION_MODEL or 'small'
+    device = os.getenv('TRANSCRIPTION_DEVICE', 'cpu')
+    compute_type = os.getenv('TRANSCRIPTION_COMPUTE_TYPE', 'int8')
+    download_root = str(TRANSCRIPTION_MODEL_CACHE / 'hf_hub') if (TRANSCRIPTION_MODEL_CACHE / 'hf_hub').exists() else None
+    cache_key = (model_size, device, compute_type, download_root)
+    if cache_key not in _WHISPER_MODEL_CACHE:
+        _WHISPER_MODEL_CACHE[cache_key] = WhisperModel(model_size, device=device, compute_type=compute_type, download_root=download_root)
+    return _WHISPER_MODEL_CACHE[cache_key]
+
+
 def transcribe_with_faster_whisper(audio_path: Path) -> str | None:
     if not faster_whisper_available():
         return None
-    from faster_whisper import WhisperModel
+    model = get_shared_whisper_model()
+    vad_params = dict(
+        threshold=float(os.getenv('TRANSCRIPTION_VAD_THRESHOLD', '0.40')),
+        min_speech_duration_ms=250,
+        min_silence_duration_ms=600,
+        speech_pad_ms=300,
+    ) if TRANSCRIPTION_VAD_FILTER else None
 
-    model_size = TRANSCRIPTION_MODEL or 'base'
-    device = os.getenv('TRANSCRIPTION_DEVICE', 'cpu')
-    compute_type = os.getenv('TRANSCRIPTION_COMPUTE_TYPE', 'int8')
-    model = WhisperModel(model_size, device=device, compute_type=compute_type)
     segments, _ = model.transcribe(
         str(audio_path),
         language=TRANSCRIPTION_LANGUAGE,
         initial_prompt=TRANSCRIPTION_INITIAL_PROMPT,
         vad_filter=TRANSCRIPTION_VAD_FILTER,
+        vad_parameters=vad_params,
         beam_size=TRANSCRIPTION_BEAM_SIZE,
         no_speech_threshold=TRANSCRIPTION_NO_SPEECH_THRESHOLD,
+        condition_on_previous_text=False,
+        compression_ratio_threshold=2.2,
+        hallucination_silence_threshold=2.0,
     )
     accepted_segments = []
     for segment in segments:
