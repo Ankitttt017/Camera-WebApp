@@ -50,6 +50,58 @@ const DOWNTIME_TYPES = [
   "HPDC Machine Accessories"
 ];
 
+const DOWNTIME_TYPE_CONFIG: Record<string, { color: string; bg: string; border: string; glow: string; icon: string }> = {
+  "Machine Breakdown": {
+    color: '#ef4444',
+    bg: 'rgba(239, 68, 68, 0.18)',
+    border: '#ef4444',
+    glow: 'rgba(239, 68, 68, 0.4)',
+    icon: '⚙️'
+  },
+  "Die Breakdown": {
+    color: '#f97316',
+    bg: 'rgba(249, 115, 22, 0.18)',
+    border: '#f97316',
+    glow: 'rgba(249, 115, 22, 0.4)',
+    icon: '🔩'
+  },
+  "Robot Breakdown": {
+    color: '#a855f7',
+    bg: 'rgba(168, 85, 247, 0.18)',
+    border: '#a855f7',
+    glow: 'rgba(168, 85, 247, 0.4)',
+    icon: '🤖'
+  },
+  "HPDC Machine Accessories": {
+    color: '#ec4899',
+    bg: 'rgba(236, 72, 153, 0.18)',
+    border: '#ec4899',
+    glow: 'rgba(236, 72, 153, 0.4)',
+    icon: '🔌'
+  },
+  "Process Loss": {
+    color: '#0ea5e9',
+    bg: 'rgba(14, 165, 233, 0.18)',
+    border: '#0ea5e9',
+    glow: 'rgba(14, 165, 233, 0.4)',
+    icon: '⚡'
+  },
+  "Planned Downtime": {
+    color: '#10b981',
+    bg: 'rgba(16, 185, 129, 0.18)',
+    border: '#10b981',
+    glow: 'rgba(16, 185, 129, 0.4)',
+    icon: '⏱️'
+  },
+  "Management Loss": {
+    color: '#6366f1',
+    bg: 'rgba(99, 102, 241, 0.18)',
+    border: '#6366f1',
+    glow: 'rgba(99, 102, 241, 0.4)',
+    icon: '📋'
+  }
+};
+
 import { ACTUAL_DOWNTIME_DATA } from './downtimeData';
 
 const DEFAULT_SETTINGS: CameraSettings = {
@@ -1258,9 +1310,12 @@ function SavedPage({
     
     // Parse category and subcategory from reason string
     const reasonParts = (record.reason || '').split(' - ');
-    setEditReasonText(reasonParts[0] || '');
-    setSelectedCategory(reasonParts[1] || '');
-    setSelectedSubReason(reasonParts[2] || '');
+    const rawType = (reasonParts[0] || '').trim();
+    const isStandardType = DOWNTIME_TYPES.includes(rawType);
+
+    setEditReasonText(isStandardType ? rawType : '');
+    setSelectedCategory(isStandardType ? (reasonParts[1] || '').trim() : '');
+    setSelectedSubReason(isStandardType ? (reasonParts[2] || '').trim() : '');
 
     // Parse note fields
     let resp = 'Maintenance', person = '', date = '', actionNote = '';
@@ -1273,7 +1328,7 @@ function SavedPage({
         else if (p.startsWith('Action: ')) actionNote = p.replace('Action: ', '');
       }
     } else {
-      actionNote = record.reason_note || '';
+      actionNote = record.reason_note || (!isStandardType && record.reason ? record.reason : '');
     }
 
     setEditResponsibility(resp);
@@ -1281,6 +1336,7 @@ function SavedPage({
     setEditTargetDate(date);
     setEditNoteText(actionNote);
     setEditManualTranscript(record.manual_transcript || '');
+    setOpenStep(isStandardType ? 5 : 1);
   }
   const [playbackState, setPlaybackState] = useState<PlaybackState>('idle');
 
@@ -1905,7 +1961,7 @@ function SavedPage({
           style={{
             position: 'fixed',
             top: 0, left: 0, right: 0, bottom: 0,
-            background: '#0a0f1e',
+            background: 'radial-gradient(ellipse at 50% 0%, #101c38 0%, #060a14 85%)',
             zIndex: 9999,
             overflowY: 'auto',
             display: 'flex',
@@ -1913,56 +1969,236 @@ function SavedPage({
           }}
         >
           {/* ── STICKY TOP BAR ── */}
-          <div style={{ position: 'sticky', top: 0, zIndex: 10, background: '#0a0f1e', borderBottom: '1px solid rgba(255,255,255,0.08)', padding: '20px 48px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+          <div style={{
+            position: 'sticky', top: 0, zIndex: 10,
+            background: 'rgba(15, 23, 42, 0.96)',
+            backdropFilter: 'blur(16px)',
+            WebkitBackdropFilter: 'blur(16px)',
+            borderBottom: '2px solid #1e293b',
+            padding: '20px 48px',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            flexShrink: 0
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
               <div>
-                <div style={{ fontSize: '0.85rem', color: '#94a3b8', fontWeight: '700', letterSpacing: '2.5px', textTransform: 'uppercase', marginBottom: '4px' }}>Downtime Event</div>
-                <h2 style={{ margin: 0, fontSize: '2rem', fontWeight: '800', color: '#f8fafc', letterSpacing: '0.3px' }}>EVENT REPORT DETAILS</h2>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
+                  <span style={{ fontSize: '0.85rem', color: '#38bdf8', fontWeight: '900', letterSpacing: '2.5px', textTransform: 'uppercase' }}>
+                    🏭 RICO AUTO INDUSTRIES • OFFICIAL TPM EVENT REPORT
+                  </span>
+                </div>
+                <h2 style={{ margin: 0, fontSize: '2.2rem', fontWeight: '900', color: '#ffffff', letterSpacing: '0.5px' }}>
+                  EVENT REPORT & ROOT CAUSE DETAILS
+                </h2>
               </div>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+              {/* Event Type Badge */}
+              <span style={{
+                fontSize: '1rem',
+                fontWeight: '800',
+                padding: '10px 18px',
+                borderRadius: '8px',
+                background: editingReasonRecord?.event_type === 'breakdown' ? 'rgba(239, 68, 68, 0.22)' : 'rgba(245, 158, 11, 0.22)',
+                border: `1.5px solid ${editingReasonRecord?.event_type === 'breakdown' ? '#ef4444' : '#f59e0b'}`,
+                color: editingReasonRecord?.event_type === 'breakdown' ? '#fca5a5' : '#fde68a',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '8px'
+              }}>
+                {editingReasonRecord?.event_type === 'breakdown' ? '🚨 Machine Breakdown' : '⚡ Minor Stoppage'}
+              </span>
+
+              {/* Duration Badge */}
+              <span style={{
+                fontSize: '1rem',
+                fontWeight: '800',
+                padding: '10px 18px',
+                borderRadius: '8px',
+                background: 'rgba(59, 130, 246, 0.18)',
+                border: '1.5px solid rgba(59, 130, 246, 0.45)',
+                color: '#93c5fd',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '8px'
+              }}>
+                ⏱️ {formatDuration(eventDuration(editingReasonRecord))}
+              </span>
+
+              {/* Timestamp Badge */}
               {editingReasonRecord?.event_started_at && (
-                <span style={{ fontSize: '1rem', color: '#94a3b8', background: 'rgba(255,255,255,0.04)', padding: '10px 16px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.08)', fontWeight: '600' }}>
-                  📅 {new Date(editingReasonRecord.event_started_at).toLocaleString()}
+                <span style={{
+                  fontSize: '1rem',
+                  color: '#f1f5f9',
+                  background: 'rgba(255,255,255,0.06)',
+                  padding: '10px 18px',
+                  borderRadius: '8px',
+                  border: '1.5px solid rgba(255,255,255,0.15)',
+                  fontWeight: '700',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '8px'
+                }}>
+                  📅 {new Date(editingReasonRecord.event_started_at).toLocaleString('en-GB')}
                 </span>
               )}
-              <button onClick={() => setEditingReasonRecord(null)}
-                style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: '#f87171', cursor: 'pointer', padding: '10px 24px', borderRadius: '8px', fontWeight: '700', fontSize: '1rem', transition: 'all 0.2s' }}
-                onMouseOver={(e) => { e.currentTarget.style.background = 'rgba(239,68,68,0.2)'; }}
-                onMouseOut={(e) => { e.currentTarget.style.background = 'rgba(239,68,68,0.1)'; }}
-              >✕ Close</button>
+
+              {/* Close Button */}
+              <button
+                type="button"
+                onClick={() => setEditingReasonRecord(null)}
+                style={{
+                  background: 'rgba(239, 68, 68, 0.15)',
+                  border: '1.5px solid rgba(239, 68, 68, 0.5)',
+                  color: '#f87171',
+                  cursor: 'pointer',
+                  padding: '10px 24px',
+                  borderRadius: '8px',
+                  fontWeight: '800',
+                  fontSize: '1.05rem',
+                  transition: 'all 0.2s',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px'
+                }}
+                onMouseOver={(e) => { e.currentTarget.style.background = '#ef4444'; e.currentTarget.style.color = '#ffffff'; }}
+                onMouseOut={(e) => { e.currentTarget.style.background = 'rgba(239, 68, 68, 0.15)'; e.currentTarget.style.color = '#f87171'; }}
+              >
+                ✕ Close
+              </button>
             </div>
           </div>
 
           {/* ── BODY ── */}
-          <div style={{ flex: 1, padding: '32px 48px 64px', display: 'flex', flexDirection: 'column', gap: '18px', maxWidth: '1300px', width: '100%', margin: '0 auto', boxSizing: 'border-box' }}>
+          <div style={{ flex: 1, padding: '16px 36px 40px', display: 'flex', flexDirection: 'column', gap: '14px', maxWidth: '1340px', width: '100%', margin: '0 auto', boxSizing: 'border-box' }}>
 
             {/* ─ AI CONTEXT SECTION ─ */}
-            <div style={{ border: '1px solid rgba(59,130,246,0.25)', borderRadius: '14px', overflow: 'hidden', background: 'rgba(59,130,246,0.04)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '20px 26px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                  <span style={{ fontSize: '0.75rem', fontWeight: '800', letterSpacing: '2px', textTransform: 'uppercase', color: '#3b82f6', background: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.25)', borderRadius: '6px', padding: '4px 10px' }}>AI</span>
-                  <span style={{ fontSize: '1.2rem', fontWeight: '700', color: '#f1f5f9' }}>Event Context & AI Transcript</span>
+            <div style={{
+              border: '1.5px solid rgba(56, 189, 248, 0.35)',
+              borderRadius: '12px',
+              overflow: 'hidden',
+              background: 'linear-gradient(180deg, rgba(14, 165, 233, 0.08) 0%, rgba(15, 23, 42, 0.8) 100%)',
+              boxShadow: '0 4px 20px rgba(14, 165, 233, 0.08)'
+            }}>
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '10px 18px',
+                borderBottom: '1px solid rgba(255,255,255,0.08)',
+                background: 'rgba(56, 189, 248, 0.06)'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <span style={{
+                    fontSize: '0.75rem',
+                    fontWeight: '900',
+                    letterSpacing: '1.5px',
+                    textTransform: 'uppercase',
+                    color: '#38bdf8',
+                    background: 'rgba(56,189,248,0.2)',
+                    border: '1px solid rgba(56,189,248,0.4)',
+                    borderRadius: '5px',
+                    padding: '3px 8px'
+                  }}>
+                    🤖 AI SPEECH ENGINE
+                  </span>
+                  <span style={{ fontSize: '1.05rem', fontWeight: '800', color: '#ffffff' }}>
+                    Operator Voice Commentary & Audio Context
+                  </span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  {editingReasonRecord?.transcript ? (
+                    <span style={{
+                      fontSize: '0.8rem',
+                      color: '#4ade80',
+                      background: 'rgba(74, 222, 128, 0.15)',
+                      border: '1px solid rgba(74, 222, 128, 0.35)',
+                      borderRadius: '12px',
+                      padding: '3px 10px',
+                      fontWeight: '700',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px'
+                    }}>
+                      🟢 Speech Recorded
+                    </span>
+                  ) : (
+                    <span style={{
+                      fontSize: '0.8rem',
+                      color: '#94a3b8',
+                      background: 'rgba(255, 255, 255, 0.05)',
+                      border: '1px solid rgba(255, 255, 255, 0.1)',
+                      borderRadius: '12px',
+                      padding: '3px 10px',
+                      fontWeight: '600',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px'
+                    }}>
+                      ⚪ No Speech Recorded
+                    </span>
+                  )}
                 </div>
               </div>
-              <div style={{ padding: '0 26px 24px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  <span style={{ fontSize: '0.85rem', color: '#94a3b8', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '1.5px' }}>AI Voice Transcript</span>
-                  <div style={{ background: 'rgba(255,255,255,0.03)', padding: '16px', borderRadius: '10px', color: editingReasonRecord?.transcript ? '#f1f5f9' : '#64748b', fontStyle: editingReasonRecord?.transcript ? 'normal' : 'italic', fontSize: '1.05rem', border: '1px solid rgba(255,255,255,0.08)', lineHeight: '1.6', minHeight: '90px' }}>
-                    {editingReasonRecord?.transcript || 'No speech detected during this event.'}
+
+              <div style={{ padding: '12px 18px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <span style={{ fontSize: '0.85rem', color: '#38bdf8', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    🎙️ AI Voice Transcript (Speech-to-Text)
+                  </span>
+                  <div style={{
+                    background: '#060d1d',
+                    padding: '10px 14px',
+                    borderRadius: '8px',
+                    color: editingReasonRecord?.transcript ? '#f8fafc' : '#64748b',
+                    fontStyle: editingReasonRecord?.transcript ? 'normal' : 'italic',
+                    fontSize: '1.02rem',
+                    fontWeight: editingReasonRecord?.transcript ? '600' : '500',
+                    border: '1px solid rgba(56, 189, 248, 0.25)',
+                    lineHeight: '1.5',
+                    minHeight: '62px',
+                    maxHeight: '82px',
+                    overflowY: 'auto',
+                    boxSizing: 'border-box'
+                  }}>
+                    {editingReasonRecord?.transcript || '⚪ No operator speech detected during this stoppage.'}
                   </div>
                 </div>
-                <label style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  <span style={{ fontSize: '0.85rem', color: '#94a3b8', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '1.5px' }}>Manual Correction (if AI is wrong)</span>
+
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <span style={{ fontSize: '0.85rem', color: '#fbbf24', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    ✏️ Manual Correction / Operator Remarks
+                  </span>
                   <div style={{ position: 'relative', flex: 1, display: 'flex' }}>
-                    <textarea disabled={savingReason || isViewMode} placeholder="Type corrected transcript here..."
-                      value={editManualTranscript} onChange={e => setEditManualTranscript(e.target.value)}
-                      style={{ flex: 1, minHeight: '90px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.09)', borderRadius: '10px', color: 'white', padding: '16px', fontSize: '1.05rem', resize: 'vertical', outline: 'none', boxSizing: 'border-box', lineHeight: '1.6', transition: 'border-color 0.2s', fontFamily: 'inherit' }}
-                      onFocus={(e) => { e.target.style.borderColor = '#3b82f6'; }}
-                      onBlur={(e) => { e.target.style.borderColor = 'rgba(255,255,255,0.09)'; }}
+                    <textarea
+                      disabled={savingReason || isViewMode}
+                      placeholder="Type verified operator remarks or Hindi/English speech correction here..."
+                      value={editManualTranscript}
+                      onChange={e => setEditManualTranscript(e.target.value)}
+                      style={{
+                        flex: 1,
+                        minHeight: '62px',
+                        maxHeight: '82px',
+                        background: '#060d1d',
+                        border: '1px solid rgba(245, 158, 11, 0.3)',
+                        borderRadius: '8px',
+                        color: '#ffffff',
+                        padding: '10px 32px 10px 14px',
+                        fontSize: '1.02rem',
+                        fontWeight: '600',
+                        resize: 'none',
+                        outline: 'none',
+                        boxSizing: 'border-box',
+                        lineHeight: '1.5',
+                        transition: 'border-color 0.2s',
+                        fontFamily: 'inherit'
+                      }}
+                      onFocus={(e) => { e.target.style.borderColor = '#fbbf24'; }}
+                      onBlur={(e) => { e.target.style.borderColor = 'rgba(245, 158, 11, 0.3)'; }}
                     />
-                    <div style={{ position: 'absolute', bottom: '14px', right: '14px', pointerEvents: 'none', color: '#64748b', opacity: 0.8 }}>
-                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                    <div style={{ position: 'absolute', bottom: '10px', right: '10px', pointerEvents: 'none', color: '#fbbf24', opacity: 0.7 }}>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
                     </div>
                   </div>
                 </label>
@@ -1972,8 +2208,8 @@ function SavedPage({
             {/* ─ STEP 1: DOWNTIME TYPE ACCORDION ─ */}
             <AccordionSection
               step="1"
-              title="Downtime Type"
-              color="#10b981"
+              title="Downtime Type (Primary Classification)"
+              color="#ef4444"
               selected={editReasonText}
               isOpen={openStep === 1}
               onToggle={() => setOpenStep(openStep === 1 ? 0 : 1)}
@@ -1984,16 +2220,79 @@ function SavedPage({
                 const filtered = [...DOWNTIME_TYPES].sort((a, b) => a.localeCompare(b)).filter(o => o.toLowerCase().includes(search.toLowerCase()));
                 return (
                   <>
-                    {search && <div style={{ fontSize: '0.78rem', color: '#475569', marginBottom: '10px' }}>{filtered.length} result{filtered.length !== 1 ? 's' : ''} for "{search}"</div>}
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '10px' }}>
-                      {filtered.length > 0 ? filtered.map(opt => (
-                        <button key={opt} type="button" disabled={savingReason || isViewMode}
-                          onClick={() => { setEditReasonText(opt); setSelectedCategory(''); setSelectedSubReason(''); setOpenStep(2); }}
-                          style={{ padding: '14px 16px', borderRadius: '10px', border: editReasonText === opt ? '2px solid #10b981' : '1px solid rgba(255,255,255,0.09)', background: editReasonText === opt ? 'rgba(16,185,129,0.15)' : 'rgba(255,255,255,0.04)', color: editReasonText === opt ? '#34d399' : '#94a3b8', cursor: (savingReason || isViewMode) ? 'not-allowed' : 'pointer', fontSize: '0.92rem', fontWeight: editReasonText === opt ? '700' : '500', transition: 'all 0.18s', boxShadow: editReasonText === opt ? '0 0 0 3px rgba(16,185,129,0.12)' : 'none', textAlign: 'left' }}
-                          onMouseOver={(e) => { if (editReasonText !== opt) { e.currentTarget.style.background = 'rgba(255,255,255,0.08)'; e.currentTarget.style.color = '#e2e8f0'; } }}
-                          onMouseOut={(e) => { if (editReasonText !== opt) { e.currentTarget.style.background = 'rgba(255,255,255,0.04)'; e.currentTarget.style.color = '#94a3b8'; } }}
-                        >{opt}</button>
-                      )) : <div style={{ color: '#475569', fontSize: '0.9rem', padding: '8px 0' }}>No results found for "{search}"</div>}
+                    {search && (
+                      <div style={{ fontSize: '0.95rem', color: '#94a3b8', marginBottom: '12px', fontWeight: '600' }}>
+                        {filtered.length} result{filtered.length !== 1 ? 's' : ''} for "{search}"
+                      </div>
+                    )}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '14px' }}>
+                      {filtered.length > 0 ? filtered.map(opt => {
+                        const cfg = DOWNTIME_TYPE_CONFIG[opt] || { color: '#ef4444', bg: 'rgba(239,68,68,0.18)', border: '#ef4444', glow: 'rgba(239,68,68,0.4)', icon: '⚙️' };
+                        const isSelected = editReasonText === opt;
+                        return (
+                          <button
+                            key={opt}
+                            type="button"
+                            disabled={savingReason || isViewMode}
+                            onClick={() => {
+                              setEditReasonText(opt);
+                              setSelectedCategory('');
+                              setSelectedSubReason('');
+                              setOpenStep(2);
+                            }}
+                            style={{
+                              padding: '16px 20px',
+                              borderRadius: '12px',
+                              border: isSelected ? `2.5px solid ${cfg.color}` : '1.5px solid rgba(255,255,255,0.12)',
+                              background: isSelected ? cfg.bg : 'rgba(255,255,255,0.04)',
+                              color: isSelected ? '#ffffff' : '#e2e8f0',
+                              cursor: (savingReason || isViewMode) ? 'not-allowed' : 'pointer',
+                              fontSize: '1.1rem',
+                              fontWeight: isSelected ? '800' : '700',
+                              transition: 'all 0.2s ease',
+                              boxShadow: isSelected ? `0 6px 24px ${cfg.glow}` : 'none',
+                              textAlign: 'left',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              gap: '10px'
+                            }}
+                            onMouseOver={(e) => {
+                              if (!isSelected) {
+                                e.currentTarget.style.background = cfg.bg;
+                                e.currentTarget.style.borderColor = cfg.color;
+                                e.currentTarget.style.color = '#ffffff';
+                                e.currentTarget.style.transform = 'translateY(-2px)';
+                              }
+                            }}
+                            onMouseOut={(e) => {
+                              if (!isSelected) {
+                                e.currentTarget.style.background = 'rgba(255,255,255,0.04)';
+                                e.currentTarget.style.borderColor = 'rgba(255,255,255,0.12)';
+                                e.currentTarget.style.color = '#e2e8f0';
+                                e.currentTarget.style.transform = 'none';
+                              }
+                            }}
+                          >
+                            <span style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                              <span style={{ fontSize: '1.3rem' }}>{cfg.icon}</span>
+                              <span>{opt}</span>
+                            </span>
+                            {isSelected && (
+                              <span style={{
+                                width: '24px', height: '24px', borderRadius: '50%',
+                                background: cfg.color, color: '#ffffff',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                fontSize: '0.85rem', fontWeight: '900', flexShrink: 0
+                              }}>✓</span>
+                            )}
+                          </button>
+                        );
+                      }) : (
+                        <div style={{ color: '#94a3b8', fontSize: '1.05rem', padding: '12px 0', fontWeight: '600' }}>
+                          No results found for "{search}"
+                        </div>
+                      )}
                     </div>
                   </>
                 );
@@ -2004,8 +2303,8 @@ function SavedPage({
             {editReasonText && DOWNTIME_TYPES.includes(editReasonText) && (
               <AccordionSection
                 step="2"
-                title="Category"
-                color="#10b981"
+                title="Category (Failure Component / Source)"
+                color="#f59e0b"
                 selected={selectedCategory}
                 isOpen={openStep === 2}
                 onToggle={() => setOpenStep(openStep === 2 ? 0 : 2)}
@@ -2017,16 +2316,74 @@ function SavedPage({
                   const filtered = allOpts.filter(o => o.toLowerCase().includes(search.toLowerCase()));
                   return (
                     <>
-                      {search && <div style={{ fontSize: '0.78rem', color: '#475569', marginBottom: '10px' }}>{filtered.length} result{filtered.length !== 1 ? 's' : ''} for "{search}"</div>}
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '10px' }}>
-                        {filtered.length > 0 ? filtered.map(opt => (
-                          <button key={opt} type="button" disabled={savingReason || isViewMode}
-                            onClick={() => { setSelectedCategory(opt); setSelectedSubReason(opt === 'No Reason' ? 'No Reason' : ''); setOpenStep((ACTUAL_DOWNTIME_DATA[editReasonText]?.[opt] || []).length > 0 && opt !== 'No Reason' ? 3 : 4); }}
-                            style={{ padding: '14px 16px', borderRadius: '10px', border: selectedCategory === opt ? '2px solid #10b981' : '1px solid rgba(255,255,255,0.09)', background: selectedCategory === opt ? 'rgba(16,185,129,0.15)' : 'rgba(255,255,255,0.04)', color: selectedCategory === opt ? '#34d399' : '#94a3b8', cursor: (savingReason || isViewMode) ? 'not-allowed' : 'pointer', fontSize: '0.92rem', fontWeight: selectedCategory === opt ? '700' : '500', transition: 'all 0.18s', boxShadow: selectedCategory === opt ? '0 0 0 3px rgba(16,185,129,0.12)' : 'none', textAlign: 'left' }}
-                            onMouseOver={(e) => { if (selectedCategory !== opt) { e.currentTarget.style.background = 'rgba(255,255,255,0.08)'; e.currentTarget.style.color = '#e2e8f0'; } }}
-                            onMouseOut={(e) => { if (selectedCategory !== opt) { e.currentTarget.style.background = 'rgba(255,255,255,0.04)'; e.currentTarget.style.color = '#94a3b8'; } }}
-                          >{opt}</button>
-                        )) : <div style={{ color: '#475569', fontSize: '0.9rem', padding: '8px 0' }}>No results found for "{search}"</div>}
+                      {search && (
+                        <div style={{ fontSize: '0.95rem', color: '#94a3b8', marginBottom: '12px', fontWeight: '600' }}>
+                          {filtered.length} result{filtered.length !== 1 ? 's' : ''} for "{search}"
+                        </div>
+                      )}
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '12px' }}>
+                        {filtered.length > 0 ? filtered.map(opt => {
+                          const isSelected = selectedCategory === opt;
+                          return (
+                            <button
+                              key={opt}
+                              type="button"
+                              disabled={savingReason || isViewMode}
+                              onClick={() => {
+                                setSelectedCategory(opt);
+                                setSelectedSubReason(opt === 'No Reason' ? 'No Reason' : '');
+                                setOpenStep((ACTUAL_DOWNTIME_DATA[editReasonText]?.[opt] || []).length > 0 && opt !== 'No Reason' ? 3 : 4);
+                              }}
+                              style={{
+                                padding: '15px 18px',
+                                borderRadius: '12px',
+                                border: isSelected ? '2.5px solid #f59e0b' : '1.5px solid rgba(255,255,255,0.12)',
+                                background: isSelected ? 'rgba(245, 158, 11, 0.22)' : 'rgba(255,255,255,0.04)',
+                                color: isSelected ? '#ffffff' : '#e2e8f0',
+                                cursor: (savingReason || isViewMode) ? 'not-allowed' : 'pointer',
+                                fontSize: '1.08rem',
+                                fontWeight: isSelected ? '800' : '700',
+                                transition: 'all 0.2s ease',
+                                boxShadow: isSelected ? '0 6px 20px rgba(245, 158, 11, 0.35)' : 'none',
+                                textAlign: 'left',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                gap: '8px'
+                              }}
+                              onMouseOver={(e) => {
+                                if (!isSelected) {
+                                  e.currentTarget.style.background = 'rgba(245, 158, 11, 0.12)';
+                                  e.currentTarget.style.borderColor = '#f59e0b';
+                                  e.currentTarget.style.color = '#ffffff';
+                                  e.currentTarget.style.transform = 'translateY(-2px)';
+                                }
+                              }}
+                              onMouseOut={(e) => {
+                                if (!isSelected) {
+                                  e.currentTarget.style.background = 'rgba(255,255,255,0.04)';
+                                  e.currentTarget.style.borderColor = 'rgba(255,255,255,0.12)';
+                                  e.currentTarget.style.color = '#e2e8f0';
+                                  e.currentTarget.style.transform = 'none';
+                                }
+                              }}
+                            >
+                              <span>{opt}</span>
+                              {isSelected && (
+                                <span style={{
+                                  width: '22px', height: '22px', borderRadius: '50%',
+                                  background: '#f59e0b', color: '#000',
+                                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                  fontSize: '0.8rem', fontWeight: '900', flexShrink: 0
+                                }}>✓</span>
+                              )}
+                            </button>
+                          );
+                        }) : (
+                          <div style={{ color: '#94a3b8', fontSize: '1.05rem', padding: '12px 0', fontWeight: '600' }}>
+                            No results found for "{search}"
+                          </div>
+                        )}
                       </div>
                     </>
                   );
@@ -2038,8 +2395,8 @@ function SavedPage({
             {editReasonText && selectedCategory && selectedCategory !== 'No Reason' && (ACTUAL_DOWNTIME_DATA[editReasonText]?.[selectedCategory] || []).length > 0 && (
               <AccordionSection
                 step="3"
-                title="Sub-Reason"
-                color="#10b981"
+                title="Sub-Reason (Specific Failure Cause)"
+                color="#8b5cf6"
                 selected={selectedSubReason}
                 isOpen={openStep === 3}
                 onToggle={() => setOpenStep(openStep === 3 ? 0 : 3)}
@@ -2051,16 +2408,73 @@ function SavedPage({
                   const filtered = allOpts.filter((o: string) => o.toLowerCase().includes(search.toLowerCase()));
                   return (
                     <>
-                      {search && <div style={{ fontSize: '0.78rem', color: '#475569', marginBottom: '10px' }}>{filtered.length} result{filtered.length !== 1 ? 's' : ''} for "{search}"</div>}
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '10px' }}>
-                        {filtered.length > 0 ? filtered.map((opt: string) => (
-                          <button key={opt} type="button" disabled={savingReason || isViewMode}
-                            onClick={() => { setSelectedSubReason(opt); setOpenStep(4); }}
-                            style={{ padding: '14px 16px', borderRadius: '10px', border: selectedSubReason === opt ? '2px solid #10b981' : '1px solid rgba(255,255,255,0.09)', background: selectedSubReason === opt ? 'rgba(16,185,129,0.15)' : 'rgba(255,255,255,0.04)', color: selectedSubReason === opt ? '#34d399' : '#94a3b8', cursor: (savingReason || isViewMode) ? 'not-allowed' : 'pointer', fontSize: '0.92rem', fontWeight: selectedSubReason === opt ? '700' : '500', transition: 'all 0.18s', boxShadow: selectedSubReason === opt ? '0 0 0 3px rgba(16,185,129,0.12)' : 'none', textAlign: 'left' }}
-                            onMouseOver={(e) => { if (selectedSubReason !== opt) { e.currentTarget.style.background = 'rgba(255,255,255,0.08)'; e.currentTarget.style.color = '#e2e8f0'; } }}
-                            onMouseOut={(e) => { if (selectedSubReason !== opt) { e.currentTarget.style.background = 'rgba(255,255,255,0.04)'; e.currentTarget.style.color = '#94a3b8'; } }}
-                          >{opt}</button>
-                        )) : <div style={{ color: '#475569', fontSize: '0.9rem', padding: '8px 0' }}>No results found for "{search}"</div>}
+                      {search && (
+                        <div style={{ fontSize: '0.95rem', color: '#94a3b8', marginBottom: '12px', fontWeight: '600' }}>
+                          {filtered.length} result{filtered.length !== 1 ? 's' : ''} for "{search}"
+                        </div>
+                      )}
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '12px' }}>
+                        {filtered.length > 0 ? filtered.map((opt: string) => {
+                          const isSelected = selectedSubReason === opt;
+                          return (
+                            <button
+                              key={opt}
+                              type="button"
+                              disabled={savingReason || isViewMode}
+                              onClick={() => {
+                                setSelectedSubReason(opt);
+                                setOpenStep(4);
+                              }}
+                              style={{
+                                padding: '15px 18px',
+                                borderRadius: '12px',
+                                border: isSelected ? '2.5px solid #8b5cf6' : '1.5px solid rgba(255,255,255,0.12)',
+                                background: isSelected ? 'rgba(139, 92, 246, 0.22)' : 'rgba(255,255,255,0.04)',
+                                color: isSelected ? '#ffffff' : '#e2e8f0',
+                                cursor: (savingReason || isViewMode) ? 'not-allowed' : 'pointer',
+                                fontSize: '1.08rem',
+                                fontWeight: isSelected ? '800' : '700',
+                                transition: 'all 0.2s ease',
+                                boxShadow: isSelected ? '0 6px 20px rgba(139, 92, 246, 0.35)' : 'none',
+                                textAlign: 'left',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                gap: '8px'
+                              }}
+                              onMouseOver={(e) => {
+                                if (!isSelected) {
+                                  e.currentTarget.style.background = 'rgba(139, 92, 246, 0.12)';
+                                  e.currentTarget.style.borderColor = '#8b5cf6';
+                                  e.currentTarget.style.color = '#ffffff';
+                                  e.currentTarget.style.transform = 'translateY(-2px)';
+                                }
+                              }}
+                              onMouseOut={(e) => {
+                                if (!isSelected) {
+                                  e.currentTarget.style.background = 'rgba(255,255,255,0.04)';
+                                  e.currentTarget.style.borderColor = 'rgba(255,255,255,0.12)';
+                                  e.currentTarget.style.color = '#e2e8f0';
+                                  e.currentTarget.style.transform = 'none';
+                                }
+                              }}
+                            >
+                              <span>{opt}</span>
+                              {isSelected && (
+                                <span style={{
+                                  width: '22px', height: '22px', borderRadius: '50%',
+                                  background: '#8b5cf6', color: '#ffffff',
+                                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                  fontSize: '0.8rem', fontWeight: '900', flexShrink: 0
+                                }}>✓</span>
+                              )}
+                            </button>
+                          );
+                        }) : (
+                          <div style={{ color: '#94a3b8', fontSize: '1.05rem', padding: '12px 0', fontWeight: '600' }}>
+                            No results found for "{search}"
+                          </div>
+                        )}
                       </div>
                     </>
                   );
@@ -2072,82 +2486,222 @@ function SavedPage({
             {editReasonText && selectedCategory && (
               <AccordionSection
                 step="4"
-                title="Responsible Department"
+                title="Responsible Department & Ownership"
                 color="#3b82f6"
                 selected={editResponsibility}
                 isOpen={openStep === 4}
                 onToggle={() => setOpenStep(openStep === 4 ? 0 : 4)}
                 disabled={savingReason || isViewMode}
               >
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
-                  {["M/c Maintenance", "Die-Maintenance", "Quality", "Production"].map(opt => (
-                    <button key={opt} type="button" disabled={savingReason || isViewMode}
-                      onClick={() => {
-                        setEditResponsibility(opt);
-                        if (opt === 'M/c Maintenance') setEditPerson('Ashutosh Pandey');
-                        else if (opt === 'Die-Maintenance') setEditPerson('S.A. Yadav');
-                        else if (opt === 'Quality') setEditPerson('Sanjay Kaul');
-                        else if (opt === 'Production') setEditPerson('Samsher Singh');
-                        else setEditPerson('');
-                        setOpenStep(5);
-                      }}
-                      style={{ padding: '12px 22px', borderRadius: '10px', border: editResponsibility === opt ? '2px solid #3b82f6' : '1px solid rgba(255,255,255,0.09)', background: editResponsibility === opt ? 'rgba(59,130,246,0.15)' : 'rgba(255,255,255,0.04)', color: editResponsibility === opt ? '#93c5fd' : '#94a3b8', cursor: (savingReason || isViewMode) ? 'not-allowed' : 'pointer', fontSize: '0.95rem', fontWeight: editResponsibility === opt ? '700' : '500', transition: 'all 0.18s', boxShadow: editResponsibility === opt ? '0 0 0 3px rgba(59,130,246,0.15)' : 'none' }}
-                      onMouseOver={(e) => { if (editResponsibility !== opt) { e.currentTarget.style.background = 'rgba(255,255,255,0.08)'; e.currentTarget.style.color = '#e2e8f0'; } }}
-                      onMouseOut={(e) => { if (editResponsibility !== opt) { e.currentTarget.style.background = 'rgba(255,255,255,0.04)'; e.currentTarget.style.color = '#94a3b8'; } }}
-                    >{opt}</button>
-                  ))}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '14px' }}>
+                  {[
+                    { name: "M/c Maintenance", color: '#3b82f6', icon: '🔧', hod: 'Ashutosh Pandey' },
+                    { name: "Die-Maintenance", color: '#f97316', icon: '🔩', hod: 'S.A. Yadav' },
+                    { name: "Quality",         color: '#10b981', icon: '🛡️', hod: 'Sanjay Kaul' },
+                    { name: "Production",      color: '#a855f7', icon: '🏭', hod: 'Samsher Singh' }
+                  ].map(dep => {
+                    const isSelected = editResponsibility === dep.name;
+                    return (
+                      <button
+                        key={dep.name}
+                        type="button"
+                        disabled={savingReason || isViewMode}
+                        onClick={() => {
+                          setEditResponsibility(dep.name);
+                          setEditPerson(dep.hod);
+                          setOpenStep(5);
+                        }}
+                        style={{
+                          padding: '18px 22px',
+                          borderRadius: '14px',
+                          border: isSelected ? `2.5px solid ${dep.color}` : '1.5px solid rgba(255,255,255,0.14)',
+                          background: isSelected ? `${dep.color}25` : 'rgba(255,255,255,0.04)',
+                          color: isSelected ? '#ffffff' : '#e2e8f0',
+                          cursor: (savingReason || isViewMode) ? 'not-allowed' : 'pointer',
+                          fontSize: '1.15rem',
+                          fontWeight: isSelected ? '800' : '700',
+                          transition: 'all 0.2s ease',
+                          boxShadow: isSelected ? `0 6px 24px ${dep.color}40` : 'none',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '6px',
+                          textAlign: 'left'
+                        }}
+                        onMouseOver={(e) => {
+                          if (!isSelected) {
+                            e.currentTarget.style.background = `${dep.color}15`;
+                            e.currentTarget.style.borderColor = dep.color;
+                            e.currentTarget.style.color = '#ffffff';
+                            e.currentTarget.style.transform = 'translateY(-2px)';
+                          }
+                        }}
+                        onMouseOut={(e) => {
+                          if (!isSelected) {
+                            e.currentTarget.style.background = 'rgba(255,255,255,0.04)';
+                            e.currentTarget.style.borderColor = 'rgba(255,255,255,0.14)';
+                            e.currentTarget.style.color = '#e2e8f0';
+                            e.currentTarget.style.transform = 'none';
+                          }
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                          <span style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                            <span style={{ fontSize: '1.4rem' }}>{dep.icon}</span>
+                            <span>{dep.name}</span>
+                          </span>
+                          {isSelected && (
+                            <span style={{
+                              width: '24px', height: '24px', borderRadius: '50%',
+                              background: dep.color, color: '#ffffff',
+                              display: 'flex', alignItems: 'center', justifyContent: 'center',
+                              fontSize: '0.85rem', fontWeight: '900'
+                            }}>✓</span>
+                          )}
+                        </div>
+                        <span style={{ fontSize: '0.9rem', color: isSelected ? '#cbd5e1' : '#94a3b8', fontWeight: '500' }}>
+                          Default HOD: <strong>{dep.hod}</strong>
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
               </AccordionSection>
             )}
 
             {/* ─ STEP 5: DETAILS ─ */}
             {editResponsibility && (
-              <div style={{ border: '1px solid rgba(59,130,246,0.2)', borderRadius: '14px', overflow: 'hidden', background: 'rgba(59,130,246,0.02)' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '18px 24px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                  <span style={{ fontSize: '0.75rem', fontWeight: '800', letterSpacing: '2px', textTransform: 'uppercase', color: '#3b82f6', background: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.25)', borderRadius: '6px', padding: '4px 10px' }}>5</span>
-                  <span style={{ fontSize: '1.2rem', fontWeight: '700', color: '#f1f5f9' }}>Additional Details</span>
+              <div style={{
+                border: '2px solid rgba(16, 185, 129, 0.45)',
+                borderRadius: '16px',
+                overflow: 'hidden',
+                background: 'linear-gradient(180deg, rgba(16, 185, 129, 0.1) 0%, rgba(15, 23, 42, 0.85) 100%)',
+                boxShadow: '0 8px 32px rgba(16, 185, 129, 0.15)'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '22px 28px', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+                  <span style={{ fontSize: '0.85rem', fontWeight: '900', letterSpacing: '2px', textTransform: 'uppercase', color: '#10b981', background: 'rgba(16,185,129,0.2)', border: '1.5px solid rgba(16,185,129,0.4)', borderRadius: '6px', padding: '6px 14px' }}>
+                    STEP 5
+                  </span>
+                  <div>
+                    <span style={{ fontSize: '1.35rem', fontWeight: '800', color: '#ffffff' }}>Additional Details & Action Plan</span>
+                    <p style={{ margin: '4px 0 0', fontSize: '0.95rem', color: '#94a3b8' }}>Assign responsibility, corrective action, target date, and resolution status</p>
+                  </div>
                 </div>
-                <div style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '16px' }}>
-                    <label style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                      <span style={{ fontSize: '0.9rem', color: '#94a3b8', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '1.5px' }}>HOD / Person Name</span>
-                      <input type="text" disabled={savingReason || isViewMode} placeholder="e.g. Ashutosh Pandey" value={editPerson} onChange={e => setEditPerson(e.target.value)}
-                        style={{ height: '52px', padding: '0 16px', fontSize: '1.1rem', borderRadius: '10px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', outline: 'none', boxSizing: 'border-box', transition: 'border-color 0.2s', fontFamily: 'inherit' }}
+                <div style={{ padding: '26px 28px', display: 'flex', flexDirection: 'column', gap: '22px' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '20px' }}>
+                    <label style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                      <span style={{ fontSize: '1.05rem', color: '#93c5fd', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '1px' }}>
+                        👤 HOD / Assigned Person
+                      </span>
+                      <input
+                        type="text"
+                        disabled={savingReason || isViewMode}
+                        placeholder="e.g. Ashutosh Pandey"
+                        value={editPerson}
+                        onChange={e => setEditPerson(e.target.value)}
+                        style={{
+                          height: '56px',
+                          padding: '0 18px',
+                          fontSize: '1.2rem',
+                          fontWeight: '700',
+                          borderRadius: '12px',
+                          background: '#070d1d',
+                          border: '1.5px solid rgba(59,130,246,0.4)',
+                          color: '#ffffff',
+                          outline: 'none',
+                          boxSizing: 'border-box',
+                          transition: 'border-color 0.2s',
+                          fontFamily: 'inherit'
+                        }}
                         onFocus={(e) => { e.target.style.borderColor = '#3b82f6'; }}
-                        onBlur={(e) => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; }}
+                        onBlur={(e) => { e.target.style.borderColor = 'rgba(59,130,246,0.4)'; }}
                       />
                     </label>
-                    <label style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                      <span style={{ fontSize: '0.9rem', color: '#94a3b8', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '1.5px' }}>Status</span>
-                      <select disabled={savingReason || isViewMode} value={editStatus} onChange={e => setEditStatus(e.target.value)}
-                        style={{ height: '52px', padding: '0 16px', fontSize: '1.1rem', borderRadius: '10px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: editStatus === 'Completed' ? '#34d399' : '#fbbf24', outline: 'none', boxSizing: 'border-box', transition: 'border-color 0.2s', fontFamily: 'inherit', fontWeight: '700', cursor: (savingReason || isViewMode) ? 'not-allowed' : 'pointer' }}
+                    <label style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                      <span style={{ fontSize: '1.05rem', color: '#fbbf24', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '1px' }}>
+                        📌 Resolution Status
+                      </span>
+                      <select
+                        disabled={savingReason || isViewMode}
+                        value={editStatus}
+                        onChange={e => setEditStatus(e.target.value)}
+                        style={{
+                          height: '56px',
+                          padding: '0 18px',
+                          fontSize: '1.2rem',
+                          borderRadius: '12px',
+                          background: '#070d1d',
+                          border: editStatus === 'Completed' ? '2px solid #10b981' : '2px solid #f59e0b',
+                          color: editStatus === 'Completed' ? '#34d399' : '#fbbf24',
+                          outline: 'none',
+                          boxSizing: 'border-box',
+                          transition: 'border-color 0.2s',
+                          fontFamily: 'inherit',
+                          fontWeight: '800',
+                          cursor: (savingReason || isViewMode) ? 'not-allowed' : 'pointer'
+                        }}
                         onFocus={(e) => { e.target.style.borderColor = editStatus === 'Completed' ? '#10b981' : '#f59e0b'; }}
-                        onBlur={(e) => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; }}
+                        onBlur={(e) => { e.target.style.borderColor = editStatus === 'Completed' ? '#10b981' : '#f59e0b'; }}
                       >
-                        <option value="Pending" style={{ color: '#fbbf24', background: '#0f172a' }}>Pending</option>
-                        <option value="Completed" style={{ color: '#34d399', background: '#0f172a' }}>Completed</option>
+                        <option value="Pending" style={{ color: '#fbbf24', background: '#0f172a', fontWeight: '700' }}>⏳ Pending</option>
+                        <option value="Completed" style={{ color: '#34d399', background: '#0f172a', fontWeight: '700' }}>✓ Completed</option>
                       </select>
                     </label>
-                    <label style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                      <span style={{ fontSize: '0.9rem', color: '#94a3b8', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '1.5px' }}>Target Date</span>
-                      <input type="date" disabled={savingReason || isViewMode} value={editTargetDate} onChange={e => setEditTargetDate(e.target.value)}
-                        style={{ height: '52px', padding: '0 16px', fontSize: '1.1rem', borderRadius: '10px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', outline: 'none', boxSizing: 'border-box', colorScheme: 'dark', transition: 'border-color 0.2s' }}
-                        onFocus={(e) => { e.target.style.borderColor = '#3b82f6'; }}
-                        onBlur={(e) => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; }}
+                    <label style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                      <span style={{ fontSize: '1.05rem', color: '#38bdf8', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '1px' }}>
+                        📅 Target Date
+                      </span>
+                      <input
+                        type="date"
+                        disabled={savingReason || isViewMode}
+                        value={editTargetDate}
+                        onChange={e => setEditTargetDate(e.target.value)}
+                        style={{
+                          height: '56px',
+                          padding: '0 18px',
+                          fontSize: '1.2rem',
+                          fontWeight: '700',
+                          borderRadius: '12px',
+                          background: '#070d1d',
+                          border: '1.5px solid rgba(56,189,248,0.4)',
+                          color: '#ffffff',
+                          outline: 'none',
+                          boxSizing: 'border-box',
+                          colorScheme: 'dark',
+                          transition: 'border-color 0.2s'
+                        }}
+                        onFocus={(e) => { e.target.style.borderColor = '#38bdf8'; }}
+                        onBlur={(e) => { e.target.style.borderColor = 'rgba(56,189,248,0.4)'; }}
                       />
                     </label>
                   </div>
-                  <label style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <span style={{ fontSize: '0.9rem', color: '#f59e0b', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '1.5px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#f59e0b', flexShrink: 0 }}></span>
-                      Action Taken
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    <span style={{ fontSize: '1.05rem', color: '#f59e0b', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '1px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#f59e0b', flexShrink: 0 }}></span>
+                      🛠️ Corrective Action Taken / 5-Why RCA Notes
                     </span>
-                    <textarea disabled={savingReason || isViewMode}
-                      placeholder="Describe the corrective action taken to resolve this downtime issue..."
-                      value={editNoteText} onChange={e => setEditNoteText(e.target.value)}
-                      style={{ minHeight: '110px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(245,158,11,0.25)', borderRadius: '10px', color: 'white', padding: '16px', fontSize: '1.1rem', resize: 'vertical', outline: 'none', boxSizing: 'border-box', lineHeight: '1.6', transition: 'border-color 0.2s', fontFamily: 'inherit' }}
+                    <textarea
+                      disabled={savingReason || isViewMode}
+                      placeholder="Describe the corrective action taken to resolve this downtime issue, replace parts, or fix tooling..."
+                      value={editNoteText}
+                      onChange={e => setEditNoteText(e.target.value)}
+                      style={{
+                        minHeight: '130px',
+                        background: '#070d1d',
+                        border: '1.5px solid rgba(245,158,11,0.4)',
+                        borderRadius: '12px',
+                        color: '#ffffff',
+                        padding: '18px 22px',
+                        fontSize: '1.2rem',
+                        fontWeight: '600',
+                        resize: 'vertical',
+                        outline: 'none',
+                        boxSizing: 'border-box',
+                        lineHeight: '1.7',
+                        transition: 'border-color 0.2s',
+                        fontFamily: 'inherit'
+                      }}
                       onFocus={(e) => { e.target.style.borderColor = '#f59e0b'; }}
-                      onBlur={(e) => { e.target.style.borderColor = 'rgba(245,158,11,0.25)'; }}
+                      onBlur={(e) => { e.target.style.borderColor = 'rgba(245,158,11,0.4)'; }}
                     />
                   </label>
                 </div>
@@ -2155,17 +2709,47 @@ function SavedPage({
             )}
 
             {/* ─ FOOTER BUTTONS ─ */}
-            <div style={{ display: 'flex', gap: '14px', justifyContent: 'flex-end', paddingTop: '20px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-              <button type="button" onClick={() => setEditingReasonRecord(null)} disabled={savingReason}
-                style={{ padding: '13px 30px', background: 'transparent', border: '1px solid rgba(255,255,255,0.12)', color: '#94a3b8', borderRadius: '10px', fontSize: '0.95rem', fontWeight: '600', cursor: 'pointer', transition: 'all 0.2s' }}
-                onMouseOver={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.05)'; e.currentTarget.style.color = '#e2e8f0'; }}
-                onMouseOut={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#94a3b8'; }}
-              >{isViewMode ? 'Close' : 'Cancel'}</button>
+            <div style={{ display: 'flex', gap: '16px', justifyContent: 'flex-end', paddingTop: '24px', borderTop: '2px solid rgba(255,255,255,0.08)' }}>
+              <button
+                type="button"
+                onClick={() => setEditingReasonRecord(null)}
+                disabled={savingReason}
+                style={{
+                  padding: '16px 36px',
+                  background: 'rgba(255,255,255,0.06)',
+                  border: '1.5px solid rgba(255,255,255,0.18)',
+                  color: '#cbd5e1',
+                  borderRadius: '12px',
+                  fontSize: '1.1rem',
+                  fontWeight: '700',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s'
+                }}
+                onMouseOver={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.12)'; e.currentTarget.style.color = '#ffffff'; }}
+                onMouseOut={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; e.currentTarget.style.color = '#cbd5e1'; }}
+              >
+                {isViewMode ? 'Close' : 'Cancel'}
+              </button>
 
               {isViewMode ? (
-                <button type="button" onClick={() => setIsViewMode(false)}
-                  style={{ padding: '13px 30px', background: 'linear-gradient(135deg, #f59e0b, #d97706)', border: 'none', color: 'white', borderRadius: '10px', fontSize: '0.95rem', fontWeight: '700', cursor: 'pointer', transition: 'all 0.2s', boxShadow: '0 4px 16px rgba(245,158,11,0.3)' }}
-                >✏️ Edit Details</button>
+                <button
+                  type="button"
+                  onClick={() => setIsViewMode(false)}
+                  style={{
+                    padding: '16px 36px',
+                    background: 'linear-gradient(135deg, #f59e0b, #d97706)',
+                    border: 'none',
+                    color: 'white',
+                    borderRadius: '12px',
+                    fontSize: '1.1rem',
+                    fontWeight: '800',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s',
+                    boxShadow: '0 6px 20px rgba(245,158,11,0.35)'
+                  }}
+                >
+                  ✏️ Edit Details
+                </button>
               ) : (
                 (() => {
                   const hasSubReasons = ACTUAL_DOWNTIME_DATA[editReasonText]?.[selectedCategory]?.length > 0;
@@ -2176,13 +2760,31 @@ function SavedPage({
                     editTargetDate.trim() && editStatus.trim() && editNoteText.trim()
                   );
                   return (
-                    <button type="button" onClick={() => saveEditedReason(editingReasonRecord)}
+                    <button
+                      type="button"
+                      onClick={() => saveEditedReason(editingReasonRecord)}
                       disabled={savingReason || !isValid}
                       title={!isValid ? 'Please fill out all required fields first' : ''}
-                      style={{ padding: '13px 36px', background: isValid ? 'linear-gradient(135deg, #3b82f6, #8b5cf6)' : 'rgba(255,255,255,0.05)', border: 'none', color: isValid ? 'white' : '#334155', borderRadius: '10px', fontSize: '0.95rem', fontWeight: '700', cursor: (savingReason || !isValid) ? 'not-allowed' : 'pointer', transition: 'all 0.2s', boxShadow: isValid ? '0 4px 20px rgba(59,130,246,0.35)' : 'none' }}
-                      onMouseOver={(e) => isValid && (e.currentTarget.style.transform = 'translateY(-1px)')}
+                      style={{
+                        padding: '16px 44px',
+                        background: isValid ? 'linear-gradient(135deg, #2563eb, #7c3aed)' : 'rgba(255,255,255,0.05)',
+                        border: isValid ? '1.5px solid rgba(255,255,255,0.2)' : '1px solid rgba(255,255,255,0.06)',
+                        color: isValid ? 'white' : '#64748b',
+                        borderRadius: '12px',
+                        fontSize: '1.15rem',
+                        fontWeight: '900',
+                        cursor: (savingReason || !isValid) ? 'not-allowed' : 'pointer',
+                        transition: 'all 0.2s',
+                        boxShadow: isValid ? '0 6px 24px rgba(37,99,235,0.45)' : 'none',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '10px'
+                      }}
+                      onMouseOver={(e) => isValid && (e.currentTarget.style.transform = 'translateY(-2px)')}
                       onMouseOut={(e) => isValid && (e.currentTarget.style.transform = 'none')}
-                    >{savingReason ? '⏳ Saving...' : '💾 Save Details'}</button>
+                    >
+                      {savingReason ? '⏳ Saving Event Report...' : isValid ? '💾 Save Event Details' : '💾 Save Details (Fill Required Fields)'}
+                    </button>
                   );
                 })()
               )}
@@ -2195,38 +2797,128 @@ function SavedPage({
 }
 
 
-function AccordionSection({ step, title, color, selected, isOpen, onToggle, disabled, searchable, children }: { step: string, title: string, color: string, selected: string, isOpen: boolean, onToggle: () => void, disabled?: boolean, searchable?: boolean, children: ((search: string) => React.ReactNode) | React.ReactNode }) {
+function AccordionSection({
+  step,
+  title,
+  color,
+  selected,
+  isOpen,
+  onToggle,
+  disabled,
+  searchable,
+  children
+}: {
+  step: string;
+  title: string;
+  color: string;
+  selected: string;
+  isOpen: boolean;
+  onToggle: () => void;
+  disabled?: boolean;
+  searchable?: boolean;
+  children: ((search: string) => React.ReactNode) | React.ReactNode;
+}) {
   const [search, setSearch] = useState('');
 
   // Reset search when closed
   useEffect(() => { if (!isOpen) setSearch(''); }, [isOpen]);
 
   return (
-    <div style={{ border: `1px solid ${isOpen ? color + '40' : 'rgba(255,255,255,0.07)'}`, borderRadius: '14px', overflow: 'hidden', background: isOpen ? `rgba(255,255,255,0.02)` : 'transparent', transition: 'border-color 0.2s, background 0.2s' }}>
+    <div
+      style={{
+        border: isOpen ? `2px solid ${color}` : selected ? `1.5px solid ${color}80` : '1.5px solid rgba(255,255,255,0.12)',
+        borderRadius: '12px',
+        overflow: 'hidden',
+        background: isOpen ? 'rgba(15, 23, 42, 0.96)' : selected ? 'rgba(15, 23, 42, 0.75)' : 'rgba(15, 23, 42, 0.45)',
+        boxShadow: isOpen ? `0 8px 28px -6px ${color}30` : 'none',
+        transition: 'all 0.25s ease'
+      }}
+    >
       {/* Header */}
-      <button type="button" onClick={onToggle} disabled={disabled}
-        style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 24px', background: 'transparent', border: 'none', cursor: disabled ? 'not-allowed' : 'pointer', textAlign: 'left' }}
+      <button
+        type="button"
+        onClick={onToggle}
+        disabled={disabled}
+        style={{
+          width: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '13px 20px',
+          background: 'transparent',
+          border: 'none',
+          cursor: disabled ? 'not-allowed' : 'pointer',
+          textAlign: 'left'
+        }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-          <span style={{ fontSize: '0.75rem', fontWeight: '800', letterSpacing: '2px', textTransform: 'uppercase', color: color, background: color + '18', border: `1px solid ${color}35`, borderRadius: '6px', padding: '4px 10px', flexShrink: 0 }}>{step}</span>
-          <span style={{ fontSize: '1.2rem', fontWeight: '700', color: '#f1f5f9' }}>{title}</span>
+          <span style={{
+            fontSize: '0.78rem',
+            fontWeight: '900',
+            letterSpacing: '1.5px',
+            textTransform: 'uppercase',
+            color: color,
+            background: color + '22',
+            border: `1.5px solid ${color}55`,
+            borderRadius: '6px',
+            padding: '4px 10px',
+            flexShrink: 0
+          }}>
+            STEP {step}
+          </span>
+          <span style={{ fontSize: '1.18rem', fontWeight: '800', color: '#ffffff' }}>
+            {title}
+          </span>
           {selected && !isOpen && (
-            <span style={{ fontSize: '0.9rem', color: color, background: color + '15', border: `1px solid ${color}30`, borderRadius: '20px', padding: '4px 14px', fontWeight: '700' }}>✓ {selected}</span>
+            <span style={{
+              fontSize: '0.95rem',
+              color: '#ffffff',
+              background: color + '30',
+              border: `1.5px solid ${color}`,
+              borderRadius: '18px',
+              padding: '4px 14px',
+              fontWeight: '800',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px'
+            }}>
+              ✓ {selected}
+            </span>
           )}
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-          {!selected && !isOpen && <span style={{ fontSize: '0.9rem', color: '#64748b', fontWeight: '500' }}>Not selected</span>}
-          <div style={{ width: '26px', height: '26px', borderRadius: '50%', border: `1px solid ${isOpen ? color + '50' : 'rgba(255,255,255,0.08)'}`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: isOpen ? color : '#64748b', fontSize: '0.7rem', transition: 'all 0.25s', transform: isOpen ? 'rotate(180deg)' : 'none' }}>▼</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
+          {!selected && !isOpen && (
+            <span style={{ fontSize: '0.9rem', color: '#94a3b8', fontWeight: '600' }}>
+              Pending Selection
+            </span>
+          )}
+          <div style={{
+            width: '28px',
+            height: '28px',
+            borderRadius: '50%',
+            background: isOpen ? color : 'rgba(255,255,255,0.06)',
+            border: `1.5px solid ${isOpen ? color : 'rgba(255,255,255,0.15)'}`,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: isOpen ? '#ffffff' : '#94a3b8',
+            fontSize: '0.8rem',
+            fontWeight: '900',
+            transition: 'all 0.25s',
+            transform: isOpen ? 'rotate(180deg)' : 'none'
+          }}>
+            ▼
+          </div>
         </div>
       </button>
 
       {/* Content */}
       {isOpen && (
-        <div style={{ padding: '0 24px 20px' }}>
+        <div style={{ padding: '0 20px 18px' }}>
           {/* Search bar */}
           {searchable && (
             <div style={{ position: 'relative', marginBottom: '14px' }}>
-              <span style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', color: '#475569', fontSize: '1rem', pointerEvents: 'none' }}>🔍</span>
+              <span style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8', fontSize: '1.05rem', pointerEvents: 'none' }}>🔍</span>
               <input
                 type="text"
                 autoFocus
@@ -2234,14 +2926,44 @@ function AccordionSection({ step, title, color, selected, isOpen, onToggle, disa
                 value={search}
                 onChange={e => setSearch(e.target.value)}
                 onClick={e => e.stopPropagation()}
-                style={{ width: '100%', height: '46px', padding: '0 40px 0 46px', fontSize: '1rem', borderRadius: '10px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', outline: 'none', boxSizing: 'border-box', fontFamily: 'inherit', transition: 'border-color 0.2s' }}
+                style={{
+                  width: '100%',
+                  height: '46px',
+                  padding: '0 42px 0 44px',
+                  fontSize: '1.05rem',
+                  fontWeight: '600',
+                  borderRadius: '12px',
+                  background: '#070d1d',
+                  border: '1.5px solid rgba(255,255,255,0.15)',
+                  color: 'white',
+                  outline: 'none',
+                  boxSizing: 'border-box',
+                  fontFamily: 'inherit',
+                  transition: 'border-color 0.2s'
+                }}
                 onFocus={e => { e.target.style.borderColor = color; }}
-                onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; }}
+                onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.15)'; }}
               />
               {search && (
-                <button type="button" onClick={() => setSearch('')}
-                  style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: '1rem', lineHeight: 1, padding: '2px' }}
-                >✕</button>
+                <button
+                  type="button"
+                  onClick={() => setSearch('')}
+                  style={{
+                    position: 'absolute',
+                    right: '16px',
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    background: 'none',
+                    border: 'none',
+                    color: '#94a3b8',
+                    cursor: 'pointer',
+                    fontSize: '1.2rem',
+                    lineHeight: 1,
+                    padding: '4px'
+                  }}
+                >
+                  ✕
+                </button>
               )}
             </div>
           )}

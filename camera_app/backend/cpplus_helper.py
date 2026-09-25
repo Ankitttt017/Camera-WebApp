@@ -202,7 +202,10 @@ VIDEO_FILE_EXTENSIONS = {'.mp4', '.webm', '.mov', '.m4v', '.avi', '.mkv', '.dav'
 DEFAULT_CAMERA_IP = '192.168.119.205'
 DEFAULT_CAMERA_USER = 'admin'
 DEFAULT_CAMERA_PASSWORD = 'Admin@123'
-DEFAULT_STORAGE_ROOT = '/home/automation/apps/Camera-WebApp/camera_app/recordings'
+IS_WINDOWS = os.name == 'nt'
+LINUX_STORAGE_ROOT = '/home/automation/apps/Camera-WebApp/camera_app/recordings'
+WINDOWS_STORAGE_ROOT = r'C:\CPPLUS_RECORDINGS'
+DEFAULT_STORAGE_ROOT = WINDOWS_STORAGE_ROOT if IS_WINDOWS else LINUX_STORAGE_ROOT
 LEGACY_STORAGE_ROOT = r'D:\CPPLUS_RECORDINGS'
 APP_BASE_DIR = Path(__file__).resolve().parents[1]
 load_dotenv(APP_BASE_DIR / '.env')
@@ -244,16 +247,17 @@ TRANSCRIPTION_REASON_MAX_CHARS = int(os.getenv('TRANSCRIPTION_REASON_MAX_CHARS',
 TRANSCRIPTION_AUDIO_SECONDS = int(os.getenv('TRANSCRIPTION_AUDIO_SECONDS', '0'))
 TRANSCRIPTION_TMP_DIR = APP_BASE_DIR / 'transcription_tmp'
 TRANSCRIPTION_MODEL_CACHE = Path(os.getenv('TRANSCRIPTION_MODEL_CACHE', APP_BASE_DIR / 'model_cache'))
-TRANSCRIPTION_VAD_FILTER = os.getenv('TRANSCRIPTION_VAD_FILTER', '0').strip().lower() not in {'0', 'false', 'no', 'off'}
+TRANSCRIPTION_VAD_FILTER = os.getenv('TRANSCRIPTION_VAD_FILTER', '1').strip().lower() not in {'0', 'false', 'no', 'off'}
+TRANSCRIPTION_VAD_THRESHOLD = float(os.getenv('TRANSCRIPTION_VAD_THRESHOLD', '0.40'))
 TRANSCRIPTION_AUDIO_FILTER = os.getenv(
     'TRANSCRIPTION_AUDIO_FILTER',
-    'highpass=f=180,lowpass=f=3700,afftdn=nf=-30:nt=w,equalizer=f=300:t=q:w=1.5:g=-5,equalizer=f=2400:t=q:w=1.2:g=8,dynaudnorm=f=120:g=25:m=40.0:p=0.9,volume=6.0,alimiter=limit=0.92',
+    'highpass=f=180,lowpass=f=3700,afftdn=nf=-25:nt=w,equalizer=f=300:t=q:w=1.5:g=-4,equalizer=f=2400:t=q:w=1.2:g=6,dynaudnorm=f=120:g=15:m=8.0:p=0.85,volume=2.5,alimiter=limit=0.92',
 ).strip()
 TRANSCRIPTION_BEAM_SIZE = int(os.getenv('TRANSCRIPTION_BEAM_SIZE', '5'))
-TRANSCRIPTION_NO_SPEECH_THRESHOLD = float(os.getenv('TRANSCRIPTION_NO_SPEECH_THRESHOLD', '0.95'))
-TRANSCRIPTION_MAX_SEGMENT_NO_SPEECH_PROB = float(os.getenv('TRANSCRIPTION_MAX_SEGMENT_NO_SPEECH_PROB', '0.65'))
-TRANSCRIPTION_MIN_AVG_LOGPROB = float(os.getenv('TRANSCRIPTION_MIN_AVG_LOGPROB', '-1.0'))
-TRANSCRIPTION_MIN_REASON_CHARS = int(os.getenv('TRANSCRIPTION_MIN_REASON_CHARS', '8'))
+TRANSCRIPTION_NO_SPEECH_THRESHOLD = float(os.getenv('TRANSCRIPTION_NO_SPEECH_THRESHOLD', '0.60'))
+TRANSCRIPTION_MAX_SEGMENT_NO_SPEECH_PROB = float(os.getenv('TRANSCRIPTION_MAX_SEGMENT_NO_SPEECH_PROB', '0.60'))
+TRANSCRIPTION_MIN_AVG_LOGPROB = float(os.getenv('TRANSCRIPTION_MIN_AVG_LOGPROB', '-1.10'))
+TRANSCRIPTION_MIN_REASON_CHARS = int(os.getenv('TRANSCRIPTION_MIN_REASON_CHARS', '6'))
 TRANSCRIPTION_MIN_REASON_WORDS = int(os.getenv('TRANSCRIPTION_MIN_REASON_WORDS', '2'))
 TRANSCRIPTION_AUTO_REASON_ENABLED = os.getenv('TRANSCRIPTION_AUTO_REASON_ENABLED', '0').strip().lower() not in {'0', 'false', 'no', 'off'}
 TRANSCRIPTION_INITIAL_PROMPT = os.getenv('TRANSCRIPTION_INITIAL_PROMPT', 'हिंदी में देवनागरी लिपि में लिखें। ट्रायल, गेट खुला है, मशीन, माइनर स्टॉपेज, ब्रेकडाउन, ऑपरेटर, रीज़न।').strip()
@@ -1227,7 +1231,13 @@ def hide_secret(text: str, password: str) -> str:
 
 
 def normalize_storage_root(root_text: str | Path | None) -> str:
-    text = str(root_text or DEFAULT_STORAGE_ROOT).strip() or DEFAULT_STORAGE_ROOT
+    text = str(root_text or '').strip()
+    if not text:
+        return DEFAULT_STORAGE_ROOT
+    if not IS_WINDOWS and (text.startswith(('C:', 'c:', 'D:', 'd:', 'E:', 'e:')) or '\\' in text):
+        return LINUX_STORAGE_ROOT
+    if IS_WINDOWS and text.startswith('/home/'):
+        return WINDOWS_STORAGE_ROOT
     return text
 
 
@@ -1554,44 +1564,54 @@ def index_event_only_record(
     db_path = init_recording_index(storage_root)
     with get_db_connection() as connection:
         cursor = PrefixCursor(connection.cursor())
-        cursor.execute(
-            """
-            INSERT INTO recordings (
-                file_path, file_name, metadata_path, storage_root, camera_ip, channel,
-                started_at, ended_at, duration_seconds, frames, file_size, status,
-                error, source_url, recording_engine, audio, event_type, event_started_at,
-                event_ended_at, event_duration_seconds, reason_category, reason, reason_note,
-                reason_submitted_by, reason_submitted_at, transcript, transcript_status,
-                transcript_error, transcribed_at, created_at, updated_at
+        cursor = cursor.execute("SELECT 1 FROM recordings WHERE file_path = :file_path", {'file_path': file_path})
+        exists = cursor.fetchone()
+        if exists:
+            cursor.execute(
+                """
+                UPDATE recordings SET
+                    file_name = :file_name,
+                    ended_at = :ended_at,
+                    status = :status,
+                    event_type = :event_type,
+                    event_ended_at = :event_ended_at,
+                    event_duration_seconds = :event_duration_seconds,
+                    reason_category = COALESCE(reason_category, :reason_category),
+                    reason = COALESCE(reason, :reason),
+                    reason_note = COALESCE(reason_note, :reason_note),
+                    reason_submitted_by = COALESCE(reason_submitted_by, :reason_submitted_by),
+                    reason_submitted_at = COALESCE(reason_submitted_at, :reason_submitted_at),
+                    transcript = COALESCE(:transcript, transcript),
+                    transcript_status = COALESCE(:transcript_status, transcript_status),
+                    transcript_error = :transcript_error,
+                    transcribed_at = COALESCE(:transcribed_at, transcribed_at),
+                    updated_at = :updated_at
+                WHERE file_path = :file_path
+                """,
+                record,
             )
-            VALUES (
-                :file_path, :file_name, :metadata_path, :storage_root, :camera_ip, :channel,
-                :started_at, :ended_at, :duration_seconds, :frames, :file_size, :status,
-                :error, :source_url, :recording_engine, :audio, :event_type, :event_started_at,
-                :event_ended_at, :event_duration_seconds, :reason_category, :reason, :reason_note,
-                :reason_submitted_by, :reason_submitted_at, :transcript, :transcript_status,
-                :transcript_error, :transcribed_at, :created_at, :updated_at
+        else:
+            cursor.execute(
+                """
+                INSERT INTO recordings (
+                    file_path, file_name, metadata_path, storage_root, camera_ip, channel,
+                    started_at, ended_at, duration_seconds, frames, file_size, status,
+                    error, source_url, recording_engine, audio, event_type, event_started_at,
+                    event_ended_at, event_duration_seconds, reason_category, reason, reason_note,
+                    reason_submitted_by, reason_submitted_at, transcript, transcript_status,
+                    transcript_error, transcribed_at, created_at, updated_at
+                )
+                VALUES (
+                    :file_path, :file_name, :metadata_path, :storage_root, :camera_ip, :channel,
+                    :started_at, :ended_at, :duration_seconds, :frames, :file_size, :status,
+                    :error, :source_url, :recording_engine, :audio, :event_type, :event_started_at,
+                    :event_ended_at, :event_duration_seconds, :reason_category, :reason, :reason_note,
+                    :reason_submitted_by, :reason_submitted_at, :transcript, :transcript_status,
+                    :transcript_error, :transcribed_at, :created_at, :updated_at
+                )
+                """,
+                record,
             )
-            ON CONFLICT(file_path) DO UPDATE SET
-                file_name = excluded.file_name,
-                ended_at = excluded.ended_at,
-                status = excluded.status,
-                event_type = excluded.event_type,
-                event_ended_at = excluded.event_ended_at,
-                event_duration_seconds = excluded.event_duration_seconds,
-                reason_category = COALESCE(recordings.reason_category, excluded.reason_category),
-                reason = COALESCE(recordings.reason, excluded.reason),
-                reason_note = COALESCE(recordings.reason_note, excluded.reason_note),
-                reason_submitted_by = COALESCE(recordings.reason_submitted_by, excluded.reason_submitted_by),
-                reason_submitted_at = COALESCE(recordings.reason_submitted_at, excluded.reason_submitted_at),
-                transcript = COALESCE(excluded.transcript, recordings.transcript),
-                transcript_status = COALESCE(excluded.transcript_status, recordings.transcript_status),
-                transcript_error = excluded.transcript_error,
-                transcribed_at = COALESCE(excluded.transcribed_at, recordings.transcribed_at),
-                updated_at = excluded.updated_at
-            """,
-            record,
-        )
     return record
 
 
@@ -1795,7 +1815,30 @@ def meaningful_transcript_text(transcript: str | None) -> bool:
     words = [word for word in text.replace('|', ' ').split() if any(char.isalnum() for char in word)]
     if signal_chars < TRANSCRIPTION_MIN_REASON_CHARS:
         return False
-    return len(words) >= TRANSCRIPTION_MIN_REASON_WORDS or signal_chars >= TRANSCRIPTION_MIN_REASON_CHARS * 2
+    if len(words) < TRANSCRIPTION_MIN_REASON_WORDS and signal_chars < TRANSCRIPTION_MIN_REASON_CHARS * 2:
+        return False
+
+    # Anti-hallucination & loop detection:
+    # 1. Reject repetitive single characters (e.g. 'ब..................' or 'रररररर')
+    if re.search(r'([^\w\s]|[\w])\1{4,}', text):
+        return False
+
+    # 2. Reject repeated phrase/substring loops (e.g. 'sario-sario-sario' or repeating syllables)
+    if re.search(r'(.{3,})\1{2,}', text):
+        return False
+
+    # 3. Reject consecutive identical words (3+ times)
+    for i in range(len(words) - 2):
+        if words[i].lower() == words[i+1].lower() == words[i+2].lower():
+            return False
+
+    # 4. Reject low vocabulary diversity (hallucination repeating syllables)
+    if len(words) >= 6:
+        unique_ratio = len(set(w.lower() for w in words)) / len(words)
+        if unique_ratio < 0.40:
+            return False
+
+    return True
 
 
 def write_transcription_metadata(
@@ -1913,23 +1956,42 @@ def faster_whisper_available() -> bool:
     return True
 
 
-def transcribe_with_faster_whisper(audio_path: Path) -> str | None:
-    if not faster_whisper_available():
-        return None
-    from faster_whisper import WhisperModel
+_WHISPER_MODEL_CACHE: dict = {}
 
-    model_size = TRANSCRIPTION_MODEL or 'base'
+def get_shared_whisper_model():
+    from faster_whisper import WhisperModel
+    model_size = TRANSCRIPTION_MODEL or 'small'
     device = os.getenv('TRANSCRIPTION_DEVICE', 'cpu')
     compute_type = os.getenv('TRANSCRIPTION_COMPUTE_TYPE', 'int8')
     download_root = str(TRANSCRIPTION_MODEL_CACHE / 'hf_hub') if (TRANSCRIPTION_MODEL_CACHE / 'hf_hub').exists() else None
-    model = WhisperModel(model_size, device=device, compute_type=compute_type, download_root=download_root)
+    cache_key = (model_size, device, compute_type, download_root)
+    if cache_key not in _WHISPER_MODEL_CACHE:
+        _WHISPER_MODEL_CACHE[cache_key] = WhisperModel(model_size, device=device, compute_type=compute_type, download_root=download_root)
+    return _WHISPER_MODEL_CACHE[cache_key]
+
+
+def transcribe_with_faster_whisper(audio_path: Path) -> str | None:
+    if not faster_whisper_available():
+        return None
+    model = get_shared_whisper_model()
+    vad_params = dict(
+        threshold=TRANSCRIPTION_VAD_THRESHOLD,
+        min_speech_duration_ms=250,
+        min_silence_duration_ms=600,
+        speech_pad_ms=300,
+    ) if TRANSCRIPTION_VAD_FILTER else None
+
     segments, _ = model.transcribe(
         str(audio_path),
         language=TRANSCRIPTION_LANGUAGE,
         initial_prompt=TRANSCRIPTION_INITIAL_PROMPT,
         vad_filter=TRANSCRIPTION_VAD_FILTER,
+        vad_parameters=vad_params,
         beam_size=TRANSCRIPTION_BEAM_SIZE,
         no_speech_threshold=TRANSCRIPTION_NO_SPEECH_THRESHOLD,
+        condition_on_previous_text=False,
+        compression_ratio_threshold=2.2,
+        hallucination_silence_threshold=2.0,
     )
     accepted_segments = []
     for segment in segments:
