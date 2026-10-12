@@ -8,19 +8,21 @@ import {
 
 interface DashboardProps {
   records: RecordingRecord[];
+  businessRange?: { fromDate: string; toDate: string; startAt: string; endAt: string } | null;
+  thresholdSeconds?: number;
 }
 
-/* ─── Colour tokens ───────────────────────────────────────────── */
+/* ─── Executive Industrial Colour Tokens ───────────────────────── */
 const C = {
-  breakdown:   '#ef4444',
-  minor:       '#f59e0b',
-  operator:    '#3b82f6',
-  documented:  '#22c55e',
-  pending:     '#fb923c',
-  noRca:       '#64748b',
-  shiftA:      '#8b5cf6',
-  shiftB:      '#10b981',
-  shiftC:      '#f43f5e',
+  breakdown:   '#f43f5e', // Vibrant coral red
+  minor:       '#f59e0b', // Rich industrial amber
+  operator:    '#38bdf8', // Sky cyan
+  documented:  '#10b981', // Clean emerald green
+  pending:     '#f97316', // Bright safety orange
+  noRca:       '#64748b', // Slate muted
+  shiftA:      '#3b82f6', // Sapphire blue
+  shiftB:      '#10b981', // Emerald green
+  shiftC:      '#8b5cf6', // Violet
 };
 
 const CATEGORY_COLOR: Record<string, string> = {
@@ -52,6 +54,11 @@ function fmtDigital(sec: number) {
   if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   return `${m}:${String(s).padStart(2, '0')}`;
 }
+function thresholdLabel(sec?: number) {
+  const s = Math.max(1, Number(sec || 300));
+  if (s % 60 === 0) return `${s / 60} min`;
+  return `${s}s`;
+}
 function evtDur(r: RecordingRecord) {
   return r.event_duration_seconds || r.duration_seconds || 0;
 }
@@ -71,7 +78,7 @@ const ttItemStyle = { color: '#e2e8f0', fontSize: '12px' };
 const ttLabelStyle = { color: '#f8fafc', fontWeight: 600, fontSize: '13px', marginBottom: 4 };
 
 /* ─── Component ───────────────────────────────────────────────── */
-export const Dashboard: React.FC<DashboardProps> = ({ records }) => {
+export const Dashboard: React.FC<DashboardProps> = ({ records, businessRange, thresholdSeconds = 300 }) => {
 
   /* ── computed stats ─────────────────────────────────────────── */
   const stats = useMemo(() => {
@@ -88,7 +95,17 @@ export const Dashboard: React.FC<DashboardProps> = ({ records }) => {
     const reasonCnt: Record<string, number> = {};
     const catMap: Record<string, { sec: number; count: number }> = {};
 
-    const valid = records.filter(r => r.started_at);
+    const startBoundary = businessRange?.startAt ? new Date(businessRange.startAt).getTime() : null;
+    const endBoundary = businessRange?.endAt ? new Date(businessRange.endAt).getTime() : null;
+
+    const valid = records.filter(r => {
+      if (!r.started_at) return false;
+      const t = new Date(r.started_at).getTime();
+      if (isNaN(t)) return false;
+      if (startBoundary !== null && t < startBoundary) return false;
+      if (endBoundary !== null && t > endBoundary) return false;
+      return true;
+    });
 
     valid.forEach(r => {
       const dur = evtDur(r);
@@ -256,7 +273,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ records }) => {
         pendPct: totalEvents > 0 ? +((pendCnt/totalEvents)*100).toFixed(0) : 0,
       },
     };
-  }, [records]);
+  }, [records, businessRange]);
 
   /* ── no-data guard ──────────────────────────────────────────── */
   if (stats.totalEvents === 0) {
@@ -291,42 +308,40 @@ export const Dashboard: React.FC<DashboardProps> = ({ records }) => {
       ══════════════════════════════════════════════════════ */}
       <div className="tpm-kpi-grid">
 
+        <div className="kpi-card color-blue">
+          <div className="kpi-val">{stats.totalEvents}</div>
+          <div className="kpi-label">Total Events</div>
+          <div className="kpi-sub">{stats.bdCnt} Breakdown · {stats.minCnt} Minor · {stats.opCnt} Operator</div>
+        </div>
+
+        <div className="kpi-card color-red">
+          <div className="kpi-val">{stats.bdCnt}</div>
+          <div className="kpi-label">Breakdown (&gt; {thresholdLabel(thresholdSeconds)})</div>
+          <div className="kpi-sub">{fmtShort(stats.bdSec)} lost · Avg {fmtDigital(stats.avgBdSec)} MTTR</div>
+        </div>
+
+        <div className="kpi-card color-orange">
+          <div className="kpi-val">{stats.minCnt}</div>
+          <div className="kpi-label">Minor Stoppage (&lt; {thresholdLabel(thresholdSeconds)})</div>
+          <div className="kpi-sub">{fmtShort(stats.minSec)} lost duration</div>
+        </div>
+
         <div className="kpi-card color-red">
           <div className="kpi-val">{fmtShort(stats.totalSec)}</div>
           <div className="kpi-label">Total Downtime</div>
           <div className="kpi-sub">Avg {stats.avgDailyHrs}h / production day</div>
         </div>
 
-        <div className="kpi-card color-blue">
-          <div className="kpi-val">{stats.totalEvents}</div>
-          <div className="kpi-label">Total Stoppage Events</div>
-          <div className="kpi-sub">{stats.bdCnt} Breakdown · {stats.minCnt} Minor · {stats.opCnt} Operator</div>
-        </div>
-
-        <div className="kpi-card color-orange">
-          <div className="kpi-val">{fmtDigital(stats.avgBdSec)}</div>
-          <div className="kpi-label">Avg Breakdown Duration</div>
-          <div className="kpi-sub">Per breakdown event (MTTR)</div>
-        </div>
-
         <div className="kpi-card color-purple">
           <div className="kpi-val">{fmtShort(stats.maxSec)}</div>
-          <div className="kpi-label">Longest Single Stoppage</div>
+          <div className="kpi-label">Longest Stoppage</div>
           <div className="kpi-sub">Worst single incident recorded</div>
         </div>
 
         <div className="kpi-card color-green">
           <div className="kpi-val">{stats.rcaPct}%</div>
           <div className="kpi-label">RCA Completion</div>
-          <div className="kpi-sub">{stats.docCnt} of {stats.totalEvents} events documented</div>
-        </div>
-
-        <div className="kpi-card" style={{ borderColor: stats.pendCnt > 10 ? '#ef4444' : '#f59e0b', background: 'rgba(239,68,68,0.07)' }}>
-          <div className="kpi-val" style={{ color: stats.pendCnt > 10 ? '#ef4444' : '#f59e0b' }}>{stats.pendCnt}</div>
-          <div className="kpi-label" style={{ color: '#94a3b8' }}>Pending RCA Actions</div>
-          <div className="kpi-sub" style={{ color: stats.pendCnt > 0 ? '#ef4444' : '#22c55e', fontWeight: 600 }}>
-            {stats.pendCnt > 0 ? '⚠ Action required' : '✓ All cleared'}
-          </div>
+          <div className="kpi-sub">{stats.docCnt} done · {stats.pendCnt} pending action</div>
         </div>
 
       </div>
@@ -427,21 +442,25 @@ export const Dashboard: React.FC<DashboardProps> = ({ records }) => {
           {stats.shiftData.length > 0 ? (
             <>
               <div style={{ position: 'relative' }}>
-                <ResponsiveContainer width="100%" height={170}>
+                <ResponsiveContainer width="100%" height={175}>
                   <PieChart>
-                    <Pie isAnimationActive={false} data={stats.shiftData}
-                      cx="50%" cy="50%" innerRadius={50} outerRadius={72}
-                      paddingAngle={4} dataKey="value" labelLine={false}
+                    <Pie
+                      isAnimationActive={false}
+                      data={stats.shiftData}
+                      cx="50%"
+                      cy="50%"
+                      outerRadius={68}
+                      dataKey="value"
+                      stroke="#0f172a"
+                      strokeWidth={2}
+                      label={({ name, percent }) => `${name.split(' ')[0]} ${name.split(' ')[1]} · ${((percent || 0) * 100).toFixed(0)}%`}
+                      labelLine={false}
                     >
                       {stats.shiftData.map((d, i) => <Cell key={i} fill={d.fill} />)}
                     </Pie>
                     <RechartsTooltip contentStyle={ttStyle} itemStyle={ttItemStyle} labelStyle={ttLabelStyle} formatter={(v: any, name: any) => [`${v}h`, name]} />
                   </PieChart>
                 </ResponsiveContainer>
-                <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', textAlign: 'center', pointerEvents: 'none' }}>
-                  <div style={{ fontSize: 18, fontWeight: 800, color: '#f1f5f9' }}>{+(stats.totalSec/3600).toFixed(1)}h</div>
-                  <div style={{ fontSize: 9, color: '#64748b', textTransform: 'uppercase', letterSpacing: '1px' }}>total</div>
-                </div>
               </div>
               <div className="shift-pills-row">
                 {stats.shiftData.map((s, i) => (
