@@ -1706,7 +1706,7 @@ function SavedPage({
         </div>
 
         {activeAppPage === 'analytics' ? (
-          <Dashboard records={dashboardRecords} />
+          <Dashboard records={dashboardRecords} businessRange={activeBusinessRange} thresholdSeconds={settings.max_record_seconds} />
         ) : (
           <>
             {error && <div className="error-banner">{error}</div>}
