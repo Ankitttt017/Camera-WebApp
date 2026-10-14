@@ -3132,14 +3132,16 @@ nav button.active .nav-count {
 }
 
 .tpm-header {
-  margin-bottom: 24px;
+  margin-bottom: 28px;
+  text-align: center;
 }
 
 .tpm-header h1 {
-  font-size: 24px;
-  font-weight: 600;
+  font-size: 26px;
+  font-weight: 700;
   margin: 0 0 8px 0;
   color: #f8fafc;
+  letter-spacing: -0.02em;
 }
 
 .tpm-header p {
@@ -3296,13 +3298,20 @@ nav button.active .nav-count {
 }
 
 .chart-box {
-  background: #1e293b;
-  border-radius: 10px;
-  padding: 20px;
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  background: linear-gradient(180deg, #182234 0%, #0f172a 100%);
+  border-radius: 12px;
+  padding: 22px 24px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
   display: flex;
   flex-direction: column;
+  position: relative;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.chart-box:hover {
+  border-color: rgba(255, 255, 255, 0.14);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
 }
 
 .chart-box.col-7 {
@@ -3330,37 +3339,109 @@ nav button.active .nav-count {
   }
 }
 
-.chart-box h4 {
-  font-size: 14px;
-  font-weight: 600;
-  color: #f1f5f9;
+/* Official Centered Chart Headers */
+.chart-box-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  margin-bottom: 14px;
+  min-height: 42px;
+  gap: 3px;
+}
+
+.chart-box-header h4 {
+  font-size: 15px;
+  font-weight: 700;
+  color: #f8fafc;
   margin: 0;
   letter-spacing: 0.02em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  text-align: center;
+}
+
+.chart-sub {
+  font-size: 0.8rem;
+  color: #94a3b8;
+  margin: 0;
+  text-align: center;
+  font-weight: 400;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.date-input-ddmmyyyy input[type="text"] {
+  width: 125px;
+  text-align: center;
+  font-weight: 500;
+  font-size: 13px;
+}
+
+.chart-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.1);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  padding: 3px 10px;
+  border-radius: 12px;
+  margin-bottom: 3px;
+}
+
+.chart-worst-badge {
+  font-size: 0.72rem;
+  color: #ef4444;
+  font-weight: 700;
+  background: rgba(239, 68, 68, 0.14);
+  padding: 2px 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  display: inline-block;
 }
 
 /* Shift Summary Badges below Donut */
 .shift-pills-row {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
   gap: 10px;
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid #334155;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .shift-pill-card {
-  flex: 1;
   background: rgba(15, 23, 42, 0.6);
-  border: 1px solid #334155;
+  border: 1px solid rgba(255, 255, 255, 0.07);
   border-radius: 8px;
-  padding: 8px 10px;
+  padding: 10px 8px;
   text-align: center;
-  transition: transform 0.15s ease;
+  transition: all 0.2s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .shift-pill-card:hover {
+  background: rgba(15, 23, 42, 0.9);
+  border-color: rgba(255, 255, 255, 0.18);
   transform: translateY(-2px);
-  border-color: #475569;
+}
+
+.shift-pill-card.idle {
+  opacity: 0.75;
 }
 
 .shift-pill-name {
@@ -3368,38 +3449,108 @@ nav button.active .nav-count {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+
+.shift-pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
 }
 
 .shift-pill-val {
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 800;
-  margin: 2px 0;
+  margin: 1px 0;
   color: #f8fafc;
 }
 
 .shift-pill-time {
   font-size: 10px;
-  color: #64748b;
+  color: #94a3b8;
+  font-weight: 500;
+}
+
+/* Hourly Shift Timeline Demarcation */
+.hourly-shift-timeline {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.hourly-shift-segment {
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 11px;
+  color: #94a3b8;
+  text-align: center;
+  transition: background 0.2s ease;
+}
+
+.hourly-shift-segment:hover {
+  background: rgba(15, 23, 42, 0.85);
 }
 
 /* RCA Target Indicator Banner */
 .rca-target-banner {
   display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: rgba(15, 23, 42, 0.65);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-top: 14px;
+}
+
+.rca-meta-row {
+  display: flex;
   align-items: center;
   justify-content: space-between;
-  background: rgba(15, 23, 42, 0.7);
-  border: 1px solid #334155;
-  border-radius: 8px;
-  padding: 8px 14px;
-  margin-top: 12px;
   font-size: 12px;
 }
 
 .rca-target-label {
   color: #94a3b8;
+}
+
+.rca-progress-track {
+  width: 100%;
+  height: 7px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  position: relative;
+  overflow: hidden;
+}
+
+.rca-progress-bar {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.4s ease;
+}
+
+.rca-progress-target-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: #38bdf8;
+  z-index: 2;
+}
+
+.rca-stats-footer {
   display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: center;
+  gap: 8px;
+  font-size: 11px;
 }
 
 .rca-target-badge {
@@ -3585,28 +3736,6 @@ nav button.active .nav-count {
 .table-responsive { width: 100%; overflow-x: auto; }
 
 /* Fullscreen Chart Controls & Modal */
-.chart-box-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 8px;
-  gap: 12px;
-}
-
-.chart-box-header h4 {
-  margin: 0 0 4px 0 !important;
-  font-size: 14px;
-  font-weight: 600;
-  color: #f1f5f9;
-  letter-spacing: 0.03em;
-}
-
-.chart-sub {
-  font-size: 0.78rem;
-  color: #94a3b8;
-  margin: 0;
-  font-style: italic;
-}
 
 .chart-fullscreen-btn {
   display: inline-flex;

@@ -424,10 +424,139 @@ function businessDateTimeRange(range: { fromDate: string; toDate: string } | nul
   };
 }
 
+function toDDMMYYYY(isoDate: string): string {
+  if (!isoDate) return '';
+  const parts = isoDate.split('-');
+  if (parts.length === 3) {
+    return `${parts[2]}/${parts[1]}/${parts[0]}`;
+  }
+  return isoDate;
+}
+
+function parseDDMMYYYY(str: string): string | null {
+  if (!str) return null;
+  const match = str.trim().match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+  if (!match) return null;
+  const day = match[1].padStart(2, '0');
+  const month = match[2].padStart(2, '0');
+  const year = match[3];
+  const dNum = parseInt(day, 10);
+  const mNum = parseInt(month, 10);
+  const yNum = parseInt(year, 10);
+  if (mNum < 1 || mNum > 12 || dNum < 1 || dNum > 31 || yNum < 2000 || yNum > 2100) return null;
+  return `${year}-${month}-${day}`;
+}
+
+function DateInputDDMMYYYY({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: string;
+  onChange: (val: string) => void;
+  disabled?: boolean;
+}) {
+  const hiddenDateRef = useRef<HTMLInputElement>(null);
+  const [inputText, setInputText] = useState(() => toDDMMYYYY(value));
+
+  useEffect(() => {
+    setInputText(toDDMMYYYY(value));
+  }, [value]);
+
+  const handleBlur = () => {
+    const parsed = parseDDMMYYYY(inputText);
+    if (parsed) {
+      onChange(parsed);
+      setInputText(toDDMMYYYY(parsed));
+    } else {
+      setInputText(toDDMMYYYY(value));
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      handleBlur();
+    }
+  };
+
+  const openCalendar = () => {
+    if (disabled) return;
+    try {
+      hiddenDateRef.current?.showPicker?.();
+    } catch {
+      hiddenDateRef.current?.focus();
+    }
+  };
+
+  return (
+    <div className="date-input-ddmmyyyy" style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
+      <input
+        type="text"
+        disabled={disabled}
+        value={inputText}
+        placeholder="DD/MM/YYYY"
+        onChange={(e) => setInputText(e.target.value)}
+        onBlur={handleBlur}
+        onKeyDown={handleKeyDown}
+        onClick={openCalendar}
+        style={{ paddingRight: '28px', letterSpacing: '0.04em', cursor: disabled ? 'not-allowed' : 'pointer' }}
+      />
+      <button
+        type="button"
+        tabIndex={-1}
+        disabled={disabled}
+        onClick={openCalendar}
+        style={{
+          position: 'absolute',
+          right: '8px',
+          background: 'transparent',
+          border: 'none',
+          padding: 0,
+          cursor: disabled ? 'not-allowed' : 'pointer',
+          color: disabled ? '#475569' : '#94a3b8',
+          fontSize: '13px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+        title="Calendar"
+      >
+        📅
+      </button>
+      <input
+        ref={hiddenDateRef}
+        type="date"
+        disabled={disabled}
+        value={value}
+        onChange={(e) => {
+          if (e.target.value) {
+            onChange(e.target.value);
+          }
+        }}
+        style={{
+          position: 'absolute',
+          bottom: 0,
+          right: 0,
+          width: 0,
+          height: 0,
+          opacity: 0,
+          pointerEvents: 'none',
+          border: 'none',
+          padding: 0,
+        }}
+      />
+    </div>
+  );
+}
+
 function reportDateLabel(value: string) {
+  const parts = value.split('-');
+  if (parts.length === 3) {
+    return `${parts[2]}/${parts[1]}/${parts[0]}`;
+  }
   const date = new Date(`${value}T00:00:00`);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleDateString();
+  return date.toLocaleDateString('en-GB');
 }
 
 function reportPresetLabel(value: ReportDatePreset) {
@@ -453,10 +582,21 @@ function reportCategoryLabel(value: string, thresholdSeconds: number) {
 }
 
 function reportShiftLabel(value: ReportShift) {
-  if (value === 'A') return 'Shift A: 06:00 to 14:00';
-  if (value === 'B') return 'Shift B: 14:00 to 22:00';
-  if (value === 'C') return 'Shift C: 22:00 to 06:00';
+  if (value === 'A') return 'Shift A';
+  if (value === 'B') return 'Shift B';
+  if (value === 'C') return 'Shift C';
   return 'All Shifts';
+}
+
+function formatIsoToDDMMYYYY(isoStr: string) {
+  try {
+    const [dPart, tPart] = isoStr.split('T');
+    const [y, m, d] = dPart.split('-');
+    const time = tPart ? tPart.slice(0, 5) : '';
+    return time ? `${d}/${m}/${y} ${time}` : `${d}/${m}/${y}`;
+  } catch {
+    return isoStr;
+  }
 }
 
 function reportRangeSummary(filters: ReportFilters) {
@@ -464,8 +604,8 @@ function reportRangeSummary(filters: ReportFilters) {
   if (!range) return 'All time';
   const businessRange = businessDateTimeRange(range);
   if (!businessRange) return `${reportPresetLabel(filters.datePreset)}: ${reportDateLabel(range.fromDate)} to ${reportDateLabel(range.toDate)}`;
-  const startLabel = businessRange.startAt.replace('T', ' ').slice(0, 16);
-  const endLabel = businessRange.endAt.replace('T', ' ').slice(0, 16);
+  const startLabel = formatIsoToDDMMYYYY(businessRange.startAt);
+  const endLabel = formatIsoToDDMMYYYY(businessRange.endAt);
   return `${reportPresetLabel(filters.datePreset)}: ${startLabel} to ${endLabel}`;
 }
 
@@ -1672,11 +1812,11 @@ function SavedPage({
           </label>
           <label>
             From
-            <input type="date" disabled={datePreset !== 'custom'} value={fromDate} onChange={(event) => setFromDate(event.target.value)} />
+            <DateInputDDMMYYYY disabled={datePreset !== 'custom'} value={fromDate} onChange={setFromDate} />
           </label>
           <label>
             To
-            <input type="date" disabled={datePreset !== 'custom'} value={toDate} onChange={(event) => setToDate(event.target.value)} />
+            <DateInputDDMMYYYY disabled={datePreset !== 'custom'} value={toDate} onChange={setToDate} />
           </label>
           <label>
             Category
@@ -1690,9 +1830,9 @@ function SavedPage({
             Shift
             <select value={shift} onChange={(event) => setShift(event.target.value as ReportShift)}>
               <option value="all">All Shifts</option>
-              <option value="A">Shift A (06:00-14:00)</option>
-              <option value="B">Shift B (14:00-22:00)</option>
-              <option value="C">Shift C (22:00-06:00)</option>
+              <option value="A">Shift A</option>
+              <option value="B">Shift B</option>
+              <option value="C">Shift C</option>
             </select>
           </label>
           <div className="filter-apply">
