@@ -91,6 +91,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ records, businessRange, th
     }));
     const dailyMap: Record<string, number> = {};
     const shiftMap = { A: 0, B: 0, C: 0 };
+    const shiftCntMap = { A: 0, B: 0, C: 0 };
     const reasonDur: Record<string, number> = {};
     const reasonCnt: Record<string, number> = {};
     const catMap: Record<string, { sec: number; count: number }> = {};
@@ -125,6 +126,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ records, businessRange, th
       const tNum = h + d.getMinutes() / 60;
       const shift = tNum >= 6 && tNum < 14 ? 'A' : tNum >= 14 && tNum < 22 ? 'B' : 'C';
       shiftMap[shift] += dur;
+      shiftCntMap[shift]++;
 
       hourlyMap[h].durSec += dur;
       if (isBd) hourlyMap[h].bd++;
@@ -198,20 +200,18 @@ export const Dashboard: React.FC<DashboardProps> = ({ records, businessRange, th
     // Peak hour
     const peakHour = hourlyData.reduce((best, d) => d.total > best.total ? d : best, { name: '-', total: 0, shift: '', bd: 0, min: 0, op: 0 });
 
-    // Shift donuts
-    const shiftData = [
-      { name: 'Shift A (6–14h)', value: +(shiftMap.A / 3600).toFixed(2), fill: C.shiftA,
-        count: valid.filter(r => { const d = new Date(r.started_at as string); const t = d.getHours() + d.getMinutes()/60; return t>=6&&t<14; }).length },
-      { name: 'Shift B (14–22h)', value: +(shiftMap.B / 3600).toFixed(2), fill: C.shiftB,
-        count: valid.filter(r => { const d = new Date(r.started_at as string); const t = d.getHours() + d.getMinutes()/60; return t>=14&&t<22; }).length },
-      { name: 'Shift C (22–6h)',  value: +(shiftMap.C / 3600).toFixed(2), fill: C.shiftC,
-        count: valid.filter(r => { const d = new Date(r.started_at as string); const t = d.getHours() + d.getMinutes()/60; return t>=22||t<6; }).length },
-    ].filter(d => d.value > 0);
+    // Shift summary & donut
+    const shiftSummary = [
+      { key: 'A', name: 'Shift A', timing: '06:00 – 14:00', value: +(shiftMap.A / 3600).toFixed(2), fill: C.shiftA, count: shiftCntMap.A, pct: totalSec > 0 ? Math.round((shiftMap.A / totalSec) * 100) : 0 },
+      { key: 'B', name: 'Shift B', timing: '14:00 – 22:00', value: +(shiftMap.B / 3600).toFixed(2), fill: C.shiftB, count: shiftCntMap.B, pct: totalSec > 0 ? Math.round((shiftMap.B / totalSec) * 100) : 0 },
+      { key: 'C', name: 'Shift C', timing: '22:00 – 06:00', value: +(shiftMap.C / 3600).toFixed(2), fill: C.shiftC, count: shiftCntMap.C, pct: totalSec > 0 ? Math.round((shiftMap.C / totalSec) * 100) : 0 },
+    ];
+    const shiftData = shiftSummary.filter(d => d.value > 0);
 
     // Top reasons
     const topReasons = Object.keys(reasonDur)
       .map(k => ({
-        name: k.length > 20 ? k.slice(0,20) + '…' : k,
+        name: k.length > 22 ? k.slice(0,22) + '…' : k,
         fullName: k,
         hours: +(reasonDur[k] / 3600).toFixed(2),
         count: reasonCnt[k],
@@ -223,7 +223,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ records, businessRange, th
     // Category data
     const catData = Object.entries(catMap)
       .map(([name, info]) => ({
-        name: name.length > 22 ? name.slice(0,22)+'…' : name,
+        name: name.length > 24 ? name.slice(0,24)+'…' : name,
+        fullName: name,
         hours: +(info.sec / 3600).toFixed(2),
         count: info.count,
         fill: catColor(name),
@@ -234,8 +235,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ records, businessRange, th
 
     // RCA data
     const rcaData = [
-      { name: 'RCA Done',     value: docCnt,  fill: C.documented },
-      { name: 'Pending RCA',  value: pendCnt, fill: C.pending    },
+      { name: 'RCA Completed', value: docCnt,  fill: C.documented },
+      { name: 'Pending RCA',   value: pendCnt, fill: docCnt === 0 ? '#ef4444' : C.pending },
     ].filter(d => d.value > 0);
 
     // Top 5 records for insight list
@@ -266,7 +267,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ records, businessRange, th
       bdCnt, minCnt, opCnt,
       rcaPct, pendCnt, docCnt, maxSec, avgBdSec, avgDailyHrs,
       dailyData, worstDay, hourlyData, peakHour,
-      shiftData, topReasons, catData, rcaData, top5,
+      shiftData, shiftSummary, topReasons, catData, rcaData, top5,
       insights: {
         bdPct: totalSec > 0 ? +((bdSec/totalSec)*100).toFixed(0) : 0,
         top3pct,
@@ -286,9 +287,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ records, businessRange, th
   }
 
   /* ── helpers inline ─────────────────────────────────────────── */
-  const emptyChart = (h = 200) => (
-    <div style={{ height: h, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#475569', flexDirection: 'column', gap: 8 }}>
-      <span style={{ fontSize: '2rem' }}>📋</span>
+  const emptyChart = (h = 240) => (
+    <div style={{ height: h, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b', flexDirection: 'column', gap: 8 }}>
+      <span style={{ fontSize: '2rem' }}>📊</span>
       <span style={{ fontSize: '0.85rem' }}>No data to display</span>
     </div>
   );
@@ -388,91 +389,121 @@ export const Dashboard: React.FC<DashboardProps> = ({ records, businessRange, th
         {/* Daily Trend bar chart */}
         <div className="chart-box col-7">
           <div className="chart-box-header">
-            <div>
-              <h4>Daily Downtime Trend
-                {stats.worstDay.hours > 0 && stats.dailyData.length > 1 && (
-                  <span style={{ marginLeft: 10, fontSize: '0.75rem', color: '#ef4444', fontWeight: 700, background: 'rgba(239,68,68,0.12)', padding: '2px 8px', borderRadius: 20, border: '1px solid rgba(239,68,68,0.25)' }}>
-                    ● Worst: {stats.worstDay.full} ({stats.worstDay.hours}h)
-                  </span>
-                )}
-              </h4>
-              <p className="chart-sub">Production day 06:00–06:00 · Avg {stats.avgDailyHrs}h/day</p>
-            </div>
+            <h4>Daily Downtime Trend</h4>
+            <p className="chart-sub">
+              Avg: <strong>{stats.avgDailyHrs}h / day</strong>
+              {stats.worstDay.hours > 0 && stats.dailyData.length > 1 && (
+                <span className="chart-worst-badge">
+                  ● Worst: {stats.worstDay.full} ({stats.worstDay.hours}h)
+                </span>
+              )}
+            </p>
           </div>
           {stats.dailyData.length > 0 ? (
-            <ResponsiveContainer width="100%" height={240}>
-              <ComposedChart data={stats.dailyData}>
+            <ResponsiveContainer width="100%" height={270}>
+              <ComposedChart data={stats.dailyData} margin={{ top: 15, right: 25, left: 10, bottom: 10 }}>
                 <defs>
                   <linearGradient id="cumGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#38bdf8" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="#38bdf8" stopOpacity={0} />
+                    <stop offset="5%" stopColor="#38bdf8" stopOpacity={0.35} />
+                    <stop offset="95%" stopColor="#38bdf8" stopOpacity={0.0} />
+                  </linearGradient>
+                  <linearGradient id="barGradDaily" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#fbbf24" stopOpacity={1} />
+                    <stop offset="100%" stopColor="#d97706" stopOpacity={0.85} />
+                  </linearGradient>
+                  <linearGradient id="barGradDailyWorst" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#f43f5e" stopOpacity={1} />
+                    <stop offset="100%" stopColor="#be123c" stopOpacity={0.85} />
                   </linearGradient>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#1e293b" />
-                <XAxis dataKey="date" tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={{ stroke: '#334155' }} tickLine={false} />
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(255, 255, 255, 0.08)" />
+                <XAxis dataKey="date" tick={{ fill: '#cbd5e1', fontSize: 11, fontWeight: 500 }} axisLine={{ stroke: '#334155' }} tickLine={false} />
                 <YAxis tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={{ stroke: '#334155' }} tickLine={false}
-                  label={{ value: 'Hours', angle: -90, position: 'insideLeft', fill: '#94a3b8', fontSize: 10, offset: 10 }} />
+                  label={{ value: 'Hours (h)', angle: -90, position: 'insideLeft', fill: '#94a3b8', fontSize: 11, offset: 12 }} />
                 <RechartsTooltip
                   contentStyle={ttStyle}
-                  itemStyle={{ color: '#e2e8f0' }}
-                  labelStyle={{ color: '#f8fafc', fontWeight: 600, marginBottom: 4 }}
+                  itemStyle={ttItemStyle}
+                  labelStyle={ttLabelStyle}
                   formatter={(v: any, name: any) => [`${v}h`, name]}
                 />
-                <Legend verticalAlign="top" height={28} wrapperStyle={{ fontSize: '11px', color: '#cbd5e1' }} />
-                <Bar isAnimationActive={false} dataKey="hours" name="Downtime (h)" fill="#fbbf24" radius={[5,5,0,0]} maxBarSize={40}>
+                <Legend align="center" verticalAlign="top" height={32} iconType="circle" wrapperStyle={{ fontSize: '11px', color: '#cbd5e1' }} />
+                <Bar
+                  isAnimationActive={false}
+                  dataKey="hours"
+                  name="Downtime (h)"
+                  fill="url(#barGradDaily)"
+                  radius={[6, 6, 0, 0]}
+                  barSize={stats.dailyData.length <= 2 ? 48 : stats.dailyData.length <= 6 ? 34 : 22}
+                >
                   {stats.dailyData.map((d, i) => (
-                    <Cell key={i} fill={d.full === stats.worstDay.full && stats.dailyData.length > 1 ? '#ef4444' : '#fbbf24'} />
+                    <Cell
+                      key={i}
+                      fill={d.full === stats.worstDay.full && stats.dailyData.length > 1 ? 'url(#barGradDailyWorst)' : 'url(#barGradDaily)'}
+                    />
                   ))}
-                  <LabelList dataKey="hours" position="top" fill="#cbd5e1" fontSize={11} formatter={(v: any) => v > 0 ? `${v}h` : ''} />
+                  <LabelList dataKey="hours" position="top" fill="#f8fafc" fontSize={11} fontWeight={600} offset={6} formatter={(v: any) => v > 0 ? `${v}h` : ''} />
                 </Bar>
-                <Line isAnimationActive={false} type="monotone" dataKey="cumulative" name="Cumulative (h)" stroke="#38bdf8" strokeWidth={2} dot={{ r: 3, fill: '#38bdf8' }} />
+                <Line
+                  isAnimationActive={false}
+                  type="monotone"
+                  dataKey="cumulative"
+                  name="Cumulative (h)"
+                  stroke="#38bdf8"
+                  strokeWidth={2.5}
+                  dot={{ r: 4, fill: '#0f172a', stroke: '#38bdf8', strokeWidth: 2 }}
+                  activeDot={{ r: 6, fill: '#38bdf8' }}
+                />
               </ComposedChart>
             </ResponsiveContainer>
-          ) : emptyChart(240)}
+          ) : emptyChart(270)}
         </div>
 
         {/* Shift distribution donut */}
         <div className="chart-box col-5">
           <div className="chart-box-header">
-            <div>
-              <h4>Downtime by Shift</h4>
-              <p className="chart-sub">A: 06–14h · B: 14–22h · C: 22–06h</p>
-            </div>
+            <h4>Downtime by Shift</h4>
           </div>
-          {stats.shiftData.length > 0 ? (
+          {stats.shiftSummary.some(s => s.value > 0) ? (
             <>
               <div style={{ position: 'relative' }}>
-                <ResponsiveContainer width="100%" height={175}>
+                <ResponsiveContainer width="100%" height={190}>
                   <PieChart>
                     <Pie
                       isAnimationActive={false}
                       data={stats.shiftData}
                       cx="50%"
                       cy="50%"
-                      outerRadius={68}
+                      innerRadius={56}
+                      outerRadius={84}
                       dataKey="value"
                       stroke="#0f172a"
                       strokeWidth={2}
-                      label={({ name, percent }) => `${name.split(' ')[0]} ${name.split(' ')[1]} · ${((percent || 0) * 100).toFixed(0)}%`}
-                      labelLine={false}
+                      paddingAngle={stats.shiftData.length > 1 ? 3 : 0}
                     >
                       {stats.shiftData.map((d, i) => <Cell key={i} fill={d.fill} />)}
                     </Pie>
                     <RechartsTooltip contentStyle={ttStyle} itemStyle={ttItemStyle} labelStyle={ttLabelStyle} formatter={(v: any, name: any) => [`${v}h`, name]} />
                   </PieChart>
                 </ResponsiveContainer>
+                <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center', pointerEvents: 'none' }}>
+                  <div style={{ fontSize: 20, fontWeight: 800, color: '#f8fafc', lineHeight: 1 }}>{fmtShort(stats.totalSec)}</div>
+                  <div style={{ fontSize: 9.5, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600, marginTop: 4 }}>Total Loss</div>
+                </div>
               </div>
               <div className="shift-pills-row">
-                {stats.shiftData.map((s, i) => (
-                  <div key={i} className="shift-pill-card">
-                    <div className="shift-pill-name" style={{ color: s.fill }}>{s.name.split(' ')[0]} {s.name.split(' ')[1]}</div>
-                    <div className="shift-pill-val">{s.value}h</div>
-                    <div className="shift-pill-time">{s.count} events</div>
+                {stats.shiftSummary.map((s, i) => (
+                  <div key={i} className={`shift-pill-card ${s.value > 0 ? 'active' : 'idle'}`} style={{ borderTop: `2px solid ${s.fill}` }}>
+                    <div className="shift-pill-name" style={{ color: s.fill }}>
+                      <span className="shift-pill-dot" style={{ backgroundColor: s.fill }}></span>
+                      {s.name}
+                    </div>
+                    <div className="shift-pill-val">{s.value > 0 ? `${s.value}h` : '0h'}</div>
+                    <div className="shift-pill-time">{s.count > 0 ? `${s.count} events` : '0 events'}</div>
                   </div>
                 ))}
               </div>
             </>
-          ) : emptyChart(220)}
+          ) : emptyChart(240)}
         </div>
 
         {/* ── CHARTS ROW 2 — Top Reasons + Category ── */}
@@ -480,58 +511,59 @@ export const Dashboard: React.FC<DashboardProps> = ({ records, businessRange, th
         {/* Top Stoppage Reasons bar */}
         <div className="chart-box col-7">
           <div className="chart-box-header">
-            <div>
-              <h4>Top Stoppage Reasons — Downtime &amp; Frequency</h4>
-              <p className="chart-sub">🟥 Bar = Downtime Hours · 🔵 Line = Incident Count</p>
-            </div>
+            <h4>Top Stoppage Reasons</h4>
+            <p className="chart-sub">Pareto: Downtime Hours vs Incidents</p>
           </div>
           {stats.topReasons.length > 0 ? (
-            <ResponsiveContainer width="100%" height={270}>
-              <ComposedChart data={stats.topReasons}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#1e293b" />
-                <XAxis dataKey="name" tick={{ fill: '#94a3b8', fontSize: 10 }} axisLine={{ stroke: '#334155' }} tickLine={false}
-                  interval={0} angle={-14} textAnchor="end" height={52} />
-                <YAxis yAxisId="left"  tick={{ fill: '#ef4444', fontSize: 11 }} axisLine={{ stroke: '#334155' }} tickLine={false}
-                  label={{ value: 'Hours', angle: -90, position: 'insideLeft', fill: '#ef4444', fontSize: 10, offset: 10 }} />
-                <YAxis yAxisId="right" orientation="right" tick={{ fill: '#38bdf8', fontSize: 11 }} axisLine={{ stroke: '#334155' }} tickLine={false}
-                  label={{ value: 'Count', angle: 90, position: 'insideRight', fill: '#38bdf8', fontSize: 10, offset: 5 }} />
+            <ResponsiveContainer width="100%" height={280}>
+              <ComposedChart data={stats.topReasons} margin={{ top: 15, right: 30, left: 10, bottom: 42 }}>
+                <defs>
+                  <linearGradient id="barGradReason" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#f43f5e" stopOpacity={1} />
+                    <stop offset="100%" stopColor="#be123c" stopOpacity={0.85} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(255, 255, 255, 0.08)" />
+                <XAxis dataKey="name" tick={{ fill: '#cbd5e1', fontSize: 10.5, fontWeight: 500 }} axisLine={{ stroke: '#334155' }} tickLine={false}
+                  interval={0} angle={-15} textAnchor="end" height={44} />
+                <YAxis yAxisId="left" tick={{ fill: '#f43f5e', fontSize: 11 }} axisLine={{ stroke: '#334155' }} tickLine={false}
+                  label={{ value: 'Hours', angle: -90, position: 'insideLeft', fill: '#f43f5e', fontSize: 11, offset: 12 }} />
+                <YAxis yAxisId="right" orientation="right" allowDecimals={false} tick={{ fill: '#38bdf8', fontSize: 11 }} axisLine={{ stroke: '#334155' }} tickLine={false}
+                  label={{ value: 'Count', angle: 90, position: 'insideRight', fill: '#38bdf8', fontSize: 11, offset: 12 }} />
                 <RechartsTooltip contentStyle={ttStyle} itemStyle={ttItemStyle} labelStyle={ttLabelStyle} />
-                <Legend verticalAlign="top" height={28} wrapperStyle={{ fontSize: '11px', color: '#cbd5e1' }} />
-                <Bar isAnimationActive={false} yAxisId="left" dataKey="hours" name="Downtime (h)" fill="#ef4444" radius={[5,5,0,0]} maxBarSize={36}>
-                  <LabelList dataKey="hours" position="top" fill="#fca5a5" fontSize={10} formatter={(v: any) => v > 0 ? `${v}h` : ''} />
+                <Legend align="center" verticalAlign="top" height={32} iconType="circle" wrapperStyle={{ fontSize: '11px', color: '#cbd5e1' }} />
+                <Bar isAnimationActive={false} yAxisId="left" dataKey="hours" name="Downtime (h)" fill="url(#barGradReason)" radius={[6,6,0,0]} barSize={stats.topReasons.length <= 2 ? 48 : 34}>
+                  <LabelList dataKey="hours" position="top" fill="#fecdd3" fontSize={11} fontWeight={600} offset={6} formatter={(v: any) => v > 0 ? `${v}h` : ''} />
                 </Bar>
-                <Line isAnimationActive={false} yAxisId="right" type="monotone" dataKey="count" name="Incidents" stroke="#38bdf8" strokeWidth={2.2}
-                  dot={{ r: 4, fill: '#38bdf8', stroke: '#0f172a', strokeWidth: 2 }}>
-                  <LabelList dataKey="count" position="top" fill="#bae6fd" fontSize={10} offset={8} formatter={(v: any) => v > 0 ? v : ''} />
+                <Line isAnimationActive={false} yAxisId="right" type="monotone" dataKey="count" name="Incidents" stroke="#38bdf8" strokeWidth={2.5}
+                  dot={{ r: 4, fill: '#0f172a', stroke: '#38bdf8', strokeWidth: 2 }} activeDot={{ r: 6, fill: '#38bdf8' }}>
+                  <LabelList dataKey="count" position="top" fill="#bae6fd" fontSize={11} fontWeight={600} offset={8} formatter={(v: any) => v > 0 ? v : ''} />
                 </Line>
               </ComposedChart>
             </ResponsiveContainer>
-          ) : emptyChart(270)}
+          ) : emptyChart(280)}
         </div>
 
         {/* Loss by Category horizontal bar */}
         <div className="chart-box col-5">
           <div className="chart-box-header">
-            <div>
-              <h4>Loss by Category (Hours)</h4>
-              <p className="chart-sub">Downtime grouped by root-cause department</p>
-            </div>
+            <h4>Downtime by Category</h4>
           </div>
           {stats.catData.length > 0 ? (
-            <ResponsiveContainer width="100%" height={270}>
-              <BarChart data={stats.catData} layout="vertical">
-                <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#334155" />
+            <ResponsiveContainer width="100%" height={280}>
+              <BarChart data={stats.catData} layout="vertical" margin={{ top: 15, right: 40, left: 10, bottom: 10 }}>
+                <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="rgba(255, 255, 255, 0.08)" />
                 <XAxis type="number" tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={{ stroke: '#334155' }} tickLine={false} />
-                <YAxis dataKey="name" type="category" tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={{ stroke: '#334155' }} tickLine={false} width={140} />
+                <YAxis dataKey="name" type="category" tick={{ fill: '#cbd5e1', fontSize: 11, fontWeight: 500 }} axisLine={{ stroke: '#334155' }} tickLine={false} width={145} />
                 <RechartsTooltip contentStyle={ttStyle} itemStyle={ttItemStyle} labelStyle={ttLabelStyle} formatter={(v: any) => [`${v}h`, 'Downtime']} />
-                <Bar isAnimationActive={false} dataKey="hours" radius={[0,6,6,0]} maxBarSize={26}>
+                <Bar isAnimationActive={false} dataKey="hours" radius={[0,6,6,0]} barSize={stats.catData.length <= 2 ? 32 : stats.catData.length <= 4 ? 24 : 18}>
                   {stats.catData.map((d, i) => <Cell key={i} fill={d.fill} />)}
-                  <LabelList dataKey="hours" position="right" fill="#cbd5e1" fontSize={11} fontWeight="bold"
+                  <LabelList dataKey="hours" position="right" fill="#f8fafc" fontSize={11} fontWeight={700}
                     formatter={(v: any) => v > 0 ? `${v}h` : ''} />
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
-          ) : emptyChart(270)}
+          ) : emptyChart(280)}
         </div>
 
         {/* ── CHARTS ROW 3 — Hourly rhythm + RCA ── */}
@@ -539,31 +571,30 @@ export const Dashboard: React.FC<DashboardProps> = ({ records, businessRange, th
         {/* 24-hour production rhythm */}
         <div className="chart-box col-7">
           <div className="chart-box-header">
-            <div>
-              <h4>24-Hour Production Rhythm <span style={{ fontSize: '0.8rem', color: '#64748b', fontWeight: 400 }}>(06:00 → 06:00)</span></h4>
-              <p className="chart-sub">Stoppage wave across Shift A (6–14h), Shift B (14–22h), Shift C (22–6h)</p>
-            </div>
+            <h4>24-Hour Production Rhythm</h4>
+            <p className="chart-sub">Factory Day (06:00 → 06:00)</p>
           </div>
-          <ResponsiveContainer width="100%" height={230}>
-            <AreaChart data={stats.hourlyData}>
+
+          <ResponsiveContainer width="100%" height={260}>
+            <AreaChart data={stats.hourlyData} margin={{ top: 10, right: 25, left: 10, bottom: 10 }}>
               <defs>
                 <linearGradient id="gradBd" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor={C.breakdown} stopOpacity={0.6} />
-                  <stop offset="95%" stopColor={C.breakdown} stopOpacity={0.04} />
+                  <stop offset="5%" stopColor={C.breakdown} stopOpacity={0.65} />
+                  <stop offset="95%" stopColor={C.breakdown} stopOpacity={0.02} />
                 </linearGradient>
                 <linearGradient id="gradMin" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor={C.minor} stopOpacity={0.6} />
-                  <stop offset="95%" stopColor={C.minor} stopOpacity={0.04} />
+                  <stop offset="5%" stopColor={C.minor} stopOpacity={0.65} />
+                  <stop offset="95%" stopColor={C.minor} stopOpacity={0.02} />
                 </linearGradient>
               </defs>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#334155" />
-              <XAxis dataKey="name" tick={{ fill: '#94a3b8', fontSize: 9 }} axisLine={{ stroke: '#334155' }} tickLine={false} interval={1} />
-              <YAxis tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={{ stroke: '#334155' }} tickLine={false}
-                label={{ value: 'Incidents', angle: -90, position: 'insideLeft', fill: '#94a3b8', fontSize: 10, offset: 10 }} />
+              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(255, 255, 255, 0.08)" />
+              <XAxis dataKey="name" tick={{ fill: '#cbd5e1', fontSize: 10.5, fontWeight: 500 }} axisLine={{ stroke: '#334155' }} tickLine={false} interval={1} />
+              <YAxis allowDecimals={false} tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={{ stroke: '#334155' }} tickLine={false}
+                label={{ value: 'Incidents', angle: -90, position: 'insideLeft', fill: '#94a3b8', fontSize: 11, offset: 12 }} />
               <RechartsTooltip contentStyle={ttStyle} itemStyle={ttItemStyle} labelStyle={ttLabelStyle} />
-              <Legend verticalAlign="top" height={28} wrapperStyle={{ fontSize: '11px', color: '#cbd5e1' }} />
-              <Area isAnimationActive={false} type="monotone" dataKey="bd"  name="Breakdown"      stroke={C.breakdown} strokeWidth={2} fill="url(#gradBd)" />
-              <Area isAnimationActive={false} type="monotone" dataKey="min" name="Minor Stoppage"  stroke={C.minor}     strokeWidth={2} fill="url(#gradMin)" />
+              <Legend align="center" verticalAlign="top" height={30} iconType="circle" wrapperStyle={{ fontSize: '11px', color: '#cbd5e1' }} />
+              <Area isAnimationActive={false} type="monotone" dataKey="bd" name="Breakdown" stroke={C.breakdown} strokeWidth={2.5} fill="url(#gradBd)" dot={{ r: 3, fill: C.breakdown }} activeDot={{ r: 5 }} />
+              <Area isAnimationActive={false} type="monotone" dataKey="min" name="Minor Stoppage" stroke={C.minor} strokeWidth={2.5} fill="url(#gradMin)" dot={{ r: 3, fill: C.minor }} activeDot={{ r: 5 }} />
             </AreaChart>
           </ResponsiveContainer>
         </div>
@@ -571,34 +602,53 @@ export const Dashboard: React.FC<DashboardProps> = ({ records, businessRange, th
         {/* RCA compliance donut */}
         <div className="chart-box col-5">
           <div className="chart-box-header">
-            <div>
-              <h4>RCA Compliance</h4>
-              <p className="chart-sub">Root-cause investigation rate per event</p>
-            </div>
+            <h4>RCA Compliance</h4>
+            <p className="chart-sub">Benchmark: ≥ 80% Complete</p>
           </div>
           <div style={{ position: 'relative' }}>
             <ResponsiveContainer width="100%" height={180}>
               <PieChart>
                 <Pie isAnimationActive={false} data={stats.rcaData}
-                  cx="50%" cy="50%" innerRadius={50} outerRadius={72}
-                  paddingAngle={4} dataKey="value" labelLine={false}
+                  cx="50%" cy="50%" innerRadius={58} outerRadius={84}
+                  paddingAngle={stats.rcaData.length > 1 ? 4 : 0} dataKey="value" labelLine={false}
+                  stroke="#0f172a" strokeWidth={2}
                 >
                   {stats.rcaData.map((d, i) => <Cell key={i} fill={d.fill} />)}
                 </Pie>
                 <RechartsTooltip contentStyle={ttStyle} itemStyle={ttItemStyle} labelStyle={ttLabelStyle} />
-                <Legend verticalAlign="bottom" height={28} wrapperStyle={{ fontSize: '11px', color: '#94a3b8' }} />
               </PieChart>
             </ResponsiveContainer>
-            <div style={{ position: 'absolute', top: '44%', left: '50%', transform: 'translate(-50%,-50%)', textAlign: 'center', pointerEvents: 'none' }}>
-              <div style={{ fontSize: 22, fontWeight: 800, color: stats.rcaPct >= 80 ? '#22c55e' : '#ef4444' }}>{stats.rcaPct}%</div>
-              <div style={{ fontSize: 9, color: '#64748b', textTransform: 'uppercase', letterSpacing: '1px', marginTop: 2 }}>RCA done</div>
+            <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', textAlign: 'center', pointerEvents: 'none' }}>
+              <div style={{ fontSize: 24, fontWeight: 800, color: stats.rcaPct >= 80 ? '#22c55e' : stats.rcaPct >= 50 ? '#f59e0b' : '#ef4444', lineHeight: 1 }}>
+                {stats.rcaPct}%
+              </div>
+              <div style={{ fontSize: 9.5, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700, marginTop: 4 }}>
+                RCA Done
+              </div>
             </div>
           </div>
           <div className="rca-target-banner">
-            <span className="rca-target-label">Target: <strong>≥ 80% RCA Complete</strong></span>
-            <span className={`rca-target-badge ${stats.rcaPct >= 80 ? 'achieved' : 'missed'}`}>
-              {stats.rcaPct >= 80 ? '✓ Target Achieved' : '⚠ Action Needed'}
-            </span>
+            <div className="rca-meta-row">
+              <span className="rca-target-label">Target: <strong>80% Complete</strong></span>
+              <span className={`rca-target-badge ${stats.rcaPct >= 80 ? 'achieved' : 'missed'}`}>
+                {stats.rcaPct >= 80 ? '✓ Target Met' : '⚠ Action Needed'}
+              </span>
+            </div>
+            <div className="rca-progress-track">
+              <div
+                className="rca-progress-bar"
+                style={{
+                  width: `${Math.min(100, stats.rcaPct)}%`,
+                  backgroundColor: stats.rcaPct >= 80 ? '#22c55e' : stats.rcaPct >= 50 ? '#f59e0b' : '#ef4444',
+                }}
+              />
+              <div className="rca-progress-target-line" style={{ left: '80%' }} title="Target 80%" />
+            </div>
+            <div className="rca-stats-footer">
+              <span style={{ color: '#10b981', fontWeight: 600 }}>✓ {stats.docCnt} Documented</span>
+              <span style={{ color: '#94a3b8' }}>·</span>
+              <span style={{ color: stats.pendCnt > 0 ? '#f59e0b' : '#94a3b8', fontWeight: 600 }}>⏳ {stats.pendCnt} Pending</span>
+            </div>
           </div>
         </div>
 
@@ -607,12 +657,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ records, businessRange, th
       {/* ══════════════════════════════════════════════════════
           TOP 5 CRITICAL INCIDENTS TABLE
       ══════════════════════════════════════════════════════ */}
-      <div className="tpm-table-section" style={{ marginTop: '24px' }}>
-        <div className="tpm-section-header">
-          <div>
-            <h4>Top 5 Longest Stoppages</h4>
-            <p className="chart-sub">Critical production-loss incidents ranked by duration</p>
-          </div>
+      <div className="tpm-table-section" style={{ marginTop: '28px' }}>
+        <div className="tpm-section-header" style={{ justifyContent: 'center', textAlign: 'center', flexDirection: 'column', gap: '4px' }}>
+          <h4 style={{ fontSize: '17px', fontWeight: 700, margin: 0 }}>Top 5 Longest Stoppages</h4>
+          <p className="chart-sub">Ranked by lost duration</p>
         </div>
         <div className="table-responsive">
           <table className="tpm-table">

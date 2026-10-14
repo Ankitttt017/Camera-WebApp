@@ -86,9 +86,18 @@ MAX_GATE_RECORD_SECONDS = 300
 RECORDING_MAX_WIDTH = int(os.getenv('RECORDING_MAX_WIDTH', '1280'))
 RECORDING_TARGET_FPS = float(os.getenv('RECORDING_TARGET_FPS', os.getenv('RECORDING_FPS', '20')))
 RECORDING_CRF = int(os.getenv('RECORDING_CRF', '24'))
+RECORDING_VIDEO_CODEC = os.getenv('RECORDING_VIDEO_CODEC', 'h264_mf' if IS_WINDOWS else 'libx264').strip()
+RECORDING_PRESET = os.getenv('RECORDING_PRESET', 'ultrafast').strip()
+RECORDING_BITRATE = os.getenv('RECORDING_BITRATE', '2000k').strip()
 RECORDING_AUDIO_FILTER = os.getenv(
     'RECORDING_AUDIO_FILTER',
-    'highpass=f=250,lowpass=f=3200,afftdn=nf=-45:nt=w,anlmdn=s=0.00003:p=0.002:r=0.01,agate=threshold=0.03:ratio=12:attack=15:release=250,dynaudnorm=f=200:g=10:p=0.85,volume=8.0,alimiter=limit=0.90',
+    'highpass=f=300:poles=2,lowpass=f=3000:poles=2,'
+    'afftdn=nf=-20:nt=w:om=o,'
+    'agate=threshold=0.08:ratio=30:attack=3:release=60,'
+    'equalizer=f=800:t=q:w=2.0:g=3,equalizer=f=2200:t=q:w=1.5:g=4,'
+    'acompressor=threshold=0.04:ratio=8:attack=2:release=100:makeup=1,'
+    'speechnorm=e=6.25:r=0.00001:l=1,'
+    'volume=1.5,alimiter=limit=0.95',
 ).strip()
 LIVE_PREVIEW_MAX_WIDTH = int(os.getenv('LIVE_PREVIEW_MAX_WIDTH', '1280'))
 LIVE_PREVIEW_TARGET_FPS = float(os.getenv('LIVE_PREVIEW_TARGET_FPS', '15'))
@@ -103,7 +112,13 @@ LIVE_VIDEO_BUFSIZE = os.getenv('LIVE_VIDEO_BUFSIZE', '1000k').strip()
 LIVE_RTSP_TRANSPORT = os.getenv('LIVE_RTSP_TRANSPORT', 'udp').strip().lower() or 'udp'
 LIVE_AUDIO_FILTER = os.getenv(
     'LIVE_AUDIO_FILTER',
-    'highpass=f=250,lowpass=f=3200,afftdn=nf=-45:nt=w,anlmdn=s=0.00003:p=0.002:r=0.01,agate=threshold=0.03:ratio=12:attack=15:release=250,dynaudnorm=f=200:g=10:p=0.85,volume=8.0,alimiter=limit=0.90',
+    'highpass=f=300:poles=2,lowpass=f=3000:poles=2,'
+    'afftdn=nf=-20:nt=w:om=o,'
+    'agate=threshold=0.08:ratio=30:attack=3:release=60,'
+    'equalizer=f=800:t=q:w=2.0:g=3,equalizer=f=2200:t=q:w=1.5:g=4,'
+    'acompressor=threshold=0.04:ratio=8:attack=2:release=100:makeup=1,'
+    'speechnorm=e=6.25:r=0.00001:l=1,'
+    'volume=1.5,alimiter=limit=0.95',
 ).strip()
 USE_FFMPEG_RECORDING = True
 RECORDING_START_RETRY_SECONDS = 1.0
@@ -121,7 +136,7 @@ TRANSCRIPTION_MODEL_CACHE = Path(os.getenv('TRANSCRIPTION_MODEL_CACHE', APP_BASE
 TRANSCRIPTION_VAD_FILTER = os.getenv('TRANSCRIPTION_VAD_FILTER', '0').strip().lower() not in {'0', 'false', 'no', 'off'}
 TRANSCRIPTION_AUDIO_FILTER = os.getenv(
     'TRANSCRIPTION_AUDIO_FILTER',
-    'highpass=f=250,lowpass=f=3200,afftdn=nf=-45:nt=w,anlmdn=s=0.00003:p=0.002:r=0.01,agate=threshold=0.03:ratio=12:attack=15:release=250,dynaudnorm=f=200:g=10:p=0.85,volume=8.0,alimiter=limit=0.90',
+    'highpass=f=120,lowpass=f=7500,afftdn=nf=-20:nt=w,speechnorm=e=4.0:r=0.0001:l=1',
 ).strip()
 TRANSCRIPTION_BEAM_SIZE = int(os.getenv('TRANSCRIPTION_BEAM_SIZE', '5'))
 TRANSCRIPTION_NO_SPEECH_THRESHOLD = float(os.getenv('TRANSCRIPTION_NO_SPEECH_THRESHOLD', '0.95'))
@@ -130,7 +145,10 @@ TRANSCRIPTION_MIN_AVG_LOGPROB = float(os.getenv('TRANSCRIPTION_MIN_AVG_LOGPROB',
 TRANSCRIPTION_MIN_REASON_CHARS = int(os.getenv('TRANSCRIPTION_MIN_REASON_CHARS', '8'))
 TRANSCRIPTION_MIN_REASON_WORDS = int(os.getenv('TRANSCRIPTION_MIN_REASON_WORDS', '2'))
 TRANSCRIPTION_AUTO_REASON_ENABLED = os.getenv('TRANSCRIPTION_AUTO_REASON_ENABLED', '0').strip().lower() not in {'0', 'false', 'no', 'off'}
-TRANSCRIPTION_INITIAL_PROMPT = os.getenv('TRANSCRIPTION_INITIAL_PROMPT', 'हिंदी में देवनागरी लिपि में लिखें। ट्रायल, गेट खुला है, मशीन, माइनर स्टॉपेज, ब्रेकडाउन, ऑपरेटर, रीज़न।').strip()
+TRANSCRIPTION_INITIAL_PROMPT = os.getenv(
+    'TRANSCRIPTION_INITIAL_PROMPT',
+    'यह फैक्ट्री और प्लांट का हिंदी और हिंग्लिश ऑडियो है। ऑपरेटर, मशीन ब्रेकडाउन, सेल, लाइन, गेट खुला है, काम रुका हुआ है, मेंटेनेंस बुलाओ, टूल चेंज, प्रॉब्लम है, पार्ट रिजेक्ट, शिफ्ट हैंडओवर, स्टॉपेज।',
+).strip()
 os.environ.setdefault('HF_HOME', str(TRANSCRIPTION_MODEL_CACHE / 'hf_home'))
 os.environ.setdefault('HF_HUB_CACHE', str(TRANSCRIPTION_MODEL_CACHE / 'hf_hub'))
 KNOWN_FFMPEG_PATHS = [
@@ -1685,7 +1703,7 @@ def extract_transcription_audio(video_path: Path) -> Path:
         command.extend(['-t', str(TRANSCRIPTION_AUDIO_SECONDS)])
     command.append(str(audio_path))
     result = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=180)
-    if result.returncode != 0 or not audio_path.exists() or audio_path.stat().st_size == 0:
+    if not audio_path.exists() or audio_path.stat().st_size == 0:
         message = result.stderr.decode(errors='ignore').strip() or 'Audio extraction failed.'
         raise RuntimeError(message[-800:])
     return audio_path
@@ -1733,6 +1751,59 @@ def get_shared_whisper_model():
     return _WHISPER_MODEL_CACHE[cache_key]
 
 
+FACTORY_HINDI_CORRECTIONS = [
+    (r'(?<!\S)(प्रुब्लम|प्रुबुलाग|प्रबलेम|प्रब्लम|प्रोब्लम|प्रुब)(?!\S)', 'प्रॉब्लम'),
+    (r'(?<!\S)(बासेन|वासेन|माशिन|माशीन|मजीं|मकिन|मेसीन|मशीने|मसीण)(?!\S)', 'मशीन'),
+    (r'(?<!\S)(ब्रेक्ट|ब्रेक्टीण|ब्रेकडौन|ब्रेक\s*डाऊन|ब्रेक\s*डाउण|ब्रेक\s*डाउन)(?!\S)', 'ब्रेकडाउन'),
+    (r'(?<!\S)(तूब\s*आब|दूब\s*आब|बंदुक\s*बाहे|दूगवा|दुपा|तुपा|दूपा|दुखा)\s*(आई\s*है|गई\s*है)(?!\S)', 'रुक गई है'),
+    (r'(?<!\S)(तूब\s*आब|दूब\s*आब|बंदुक\s*बाहे|दूगवा|दुपा|तुपा|दूपा|दुखा)(\s*(है|हें|हो|था))?(?!\S)', 'रुका है'),
+    (r'(?<!\S)(बाले|पाले)(?!\S)', 'पहले'),
+    (r'(?<!\S)(सल्टिग|शुल्टिग|सुल्टिग|शूल्टिग)(?!\S)', 'स्टॉपेज'),
+    (r'(?<!\S)(स्टोपिज|स्टोपिस|स्टोपेज)(?!\S)', 'स्टॉपेज'),
+    (r'(?<!\S)(शलवाले|सलवाले)(?!\S)', 'समस्या'),
+    (r'(?<!\S)(ओपरेटर|ऑप्रेटर|अपरटर|अप्रो|गप्रो|आप\s*परुबुले)(?!\S)', 'ऑपरेटर'),
+    (r'(?<!\S)(मेनटेनेंस|मेंटनेन्स|मेन्टेनेन्स)(?!\S)', 'मेंटेनेंस'),
+    (r'(?<!\S)(रिजेकसन|रिजेकट|रिजेक्षन)(?!\S)', 'रिजेक्ट'),
+    (r'(?<!\S)(शुरु|सुरु)(?!\S)', 'शुरू'),
+    (r'(?<!\S)(चालु)(?!\S)', 'चालू'),
+    (r'(?<!\S)(लाइन|लाईन)(?!\S)', 'लाइन'),
+    (r'(?<!\S)(गेट|गेठ)(?!\S)', 'गेट'),
+    (r'(?<!\S)(टूल\s*चेन्ज|तुल\s*चेंज)(?!\S)', 'टूल चेंज'),
+    (r'(?<!\S)(हैंड\s*ओवर|हेंडओवर)(?!\S)', 'हैंडओवर'),
+]
+
+
+def clean_factory_hindi_text(text: str) -> str:
+    cleaned = ' '.join(str(text or '').split())
+    if not cleaned:
+        return ''
+    cleaned = re.sub(r'[,.\-_/\\;:!?।]+', ' ', cleaned)
+    cleaned = ' '.join(cleaned.split())
+    for pattern, replacement in FACTORY_HINDI_CORRECTIONS:
+        cleaned = re.sub(pattern, replacement, cleaned, flags=re.IGNORECASE)
+    cleaned = ' '.join(cleaned.split())
+    words = cleaned.split()
+    deduped = []
+    for w in words:
+        if not deduped or deduped[-1] != w:
+            deduped.append(w)
+    words = deduped
+    for n in (4, 3, 2):
+        i = 0
+        new_words = []
+        while i < len(words):
+            if i + 2 * n <= len(words) and words[i:i+n] == words[i+n:i+2*n]:
+                new_words.extend(words[i:i+n])
+                i += 2 * n
+            else:
+                new_words.append(words[i])
+                i += 1
+        words = new_words
+    cleaned = ' '.join(words).strip()
+    cleaned = re.sub(r'^(रहा\s*है|रह\s*गया|हो\s*रहा\s*है)\s+', '', cleaned)
+    return cleaned.strip()
+
+
 def transcribe_with_faster_whisper(audio_path: Path) -> str | None:
     if not faster_whisper_available():
         return None
@@ -1768,8 +1839,11 @@ def transcribe_with_faster_whisper(audio_path: Path) -> str | None:
         if avg_logprob < TRANSCRIPTION_MIN_AVG_LOGPROB:
             continue
         accepted_segments.append(text)
-    transcript = ' '.join(accepted_segments).strip()
-    return transcript if meaningful_transcript_text(transcript) else None
+    raw_transcript = ' '.join(accepted_segments).strip()
+    transcript = clean_factory_hindi_text(raw_transcript)
+    if transcript and meaningful_transcript_text(transcript):
+        return transcript
+    return raw_transcript if meaningful_transcript_text(raw_transcript) else None
 
 
 def transcribe_recording_worker(storage_root: str | Path, video_path_text: str) -> None:
@@ -2669,20 +2743,42 @@ def record_camera_ffmpeg_worker(request: RecordingRequest) -> bool:
         '0:v:0',
         '-map',
         '0:a?',
-        '-c:v',
-        'libx264',
-        '-preset',
-        'veryfast',
-        '-crf',
-        str(RECORDING_CRF),
-        '-vf',
-        f'scale=min({RECORDING_MAX_WIDTH}\\,iw):-2,fps={RECORDING_TARGET_FPS:g}',
-        '-fps_mode',
-        'cfr',
-        '-r',
-        f'{RECORDING_TARGET_FPS:g}',
-        '-video_track_timescale',
-        '90000',
+    ]
+    if RECORDING_VIDEO_CODEC == 'copy':
+        command.extend(['-c:v', 'copy'])
+    elif RECORDING_VIDEO_CODEC == 'h264_mf':
+        command.extend([
+            '-c:v',
+            'h264_mf',
+            '-b:v',
+            RECORDING_BITRATE,
+            '-vf',
+            f'scale=min({RECORDING_MAX_WIDTH}\\,iw):-2,fps={RECORDING_TARGET_FPS:g}',
+            '-fps_mode',
+            'cfr',
+            '-r',
+            f'{RECORDING_TARGET_FPS:g}',
+            '-video_track_timescale',
+            '90000',
+        ])
+    else:
+        command.extend([
+            '-c:v',
+            'libx264',
+            '-preset',
+            RECORDING_PRESET,
+            '-crf',
+            str(RECORDING_CRF),
+            '-vf',
+            f'scale=min({RECORDING_MAX_WIDTH}\\,iw):-2,fps={RECORDING_TARGET_FPS:g}',
+            '-fps_mode',
+            'cfr',
+            '-r',
+            f'{RECORDING_TARGET_FPS:g}',
+            '-video_track_timescale',
+            '90000',
+        ])
+    command.extend([
         '-c:a',
         'aac',
         '-af',
@@ -2696,7 +2792,7 @@ def record_camera_ffmpeg_worker(request: RecordingRequest) -> bool:
         '-movflags',
         '+faststart',
         str(output_path),
-    ]
+    ])
 
     try:
         recording_process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -2735,7 +2831,7 @@ def record_camera_ffmpeg_worker(request: RecordingRequest) -> bool:
             'compression': {
                 'max_width': RECORDING_MAX_WIDTH,
                 'target_fps': RECORDING_TARGET_FPS,
-                'video_codec': 'libx264',
+                'video_codec': RECORDING_VIDEO_CODEC,
                 'crf': RECORDING_CRF,
                 'profile': 'storage-balanced',
                 'audio_filter': RECORDING_AUDIO_FILTER,
