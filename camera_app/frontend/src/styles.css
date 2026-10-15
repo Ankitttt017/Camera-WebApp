@@ -3247,14 +3247,14 @@ nav button.active .nav-count {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
 }
 
-.kpi-badge {
-  font-size: 9.5px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+.kpi-label {
+  font-size: 12.5px;
+  font-weight: 700;
   color: #94a3b8;
+  line-height: 1.35;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
   margin-bottom: 8px;
-  display: inline-block;
 }
 
 .kpi-val {
@@ -3263,25 +3263,7 @@ nav button.active .nav-count {
   color: #f8fafc;
   line-height: 1.1;
   font-variant-numeric: tabular-nums;
-  margin-bottom: 6px;
   letter-spacing: -0.02em;
-}
-
-.kpi-label {
-  font-size: 11.5px;
-  font-weight: 700;
-  color: #cbd5e1;
-  line-height: 1.35;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.kpi-sub {
-  font-size: 11px;
-  color: #94a3b8;
-  margin-top: 6px;
-  line-height: 1.4;
-  font-weight: 500;
 }
 
 /* Industrial Card Borders & Accents */
@@ -3556,74 +3538,122 @@ nav button.active .nav-count {
 }
 
 /* =========================================================================
-   SHIFT DONUT CARDS & TIMELINE DEMARCATION
+   SHIFT DONUT INTEGRATED LAYOUT & TIMELINE DEMARCATION
    ========================================================================= */
 
-.shift-pills-row {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
-  margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-.shift-pill-card {
-  background: rgba(15, 23, 42, 0.65);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 8px;
-  padding: 10px 8px;
-  text-align: center;
-  transition: all 0.2s ease;
+.shift-donut-layout {
   display: flex;
-  flex-direction: column;
-  gap: 3px;
+  align-items: center;
+  justify-content: space-around;
+  gap: 20px;
+  padding: 8px 12px;
+  flex: 1;
 }
 
-.shift-pill-card:hover {
-  background: rgba(15, 23, 42, 0.95);
-  border-color: rgba(255, 255, 255, 0.2);
-  transform: translateY(-2px);
-}
-
-.shift-pill-card.idle {
-  opacity: 0.65;
-}
-
-.shift-pill-name {
-  font-size: 11px;
-  font-weight: 800;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+.shift-donut-chart-wrap {
+  position: relative;
+  width: 190px;
+  height: 190px;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
 }
 
-.shift-pill-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  display: inline-block;
+.shift-donut-center-text {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  pointer-events: none;
 }
 
-.shift-pill-timing {
+.shift-donut-center-text .sub {
   font-size: 9.5px;
-  color: #64748b;
-  font-weight: 500;
+  color: #94a3b8;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
-.shift-pill-val {
-  font-size: 17px;
+.shift-donut-center-text .val {
+  font-size: 22px;
   font-weight: 800;
-  margin: 2px 0;
+  color: #f8fafc;
+  line-height: 1.15;
+  margin-top: 2px;
+}
+
+.shift-stats-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  max-width: 260px;
+}
+
+.shift-stat-item {
+  display: flex;
+  flex-direction: column;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 8px 12px;
+  gap: 3px;
+  transition: all 0.2s ease;
+}
+
+.shift-stat-item:hover {
+  background: rgba(15, 23, 42, 0.9);
+  border-color: rgba(255, 255, 255, 0.16);
+  transform: translateX(2px);
+}
+
+.shift-stat-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.shift-stat-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.shift-stat-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.shift-stat-pct {
+  font-size: 12px;
+  font-weight: 700;
+  color: #94a3b8;
+}
+
+.shift-stat-bottom {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-top: 1px;
+}
+
+.shift-stat-val {
+  font-size: 16px;
+  font-weight: 800;
   color: #f8fafc;
   font-variant-numeric: tabular-nums;
 }
 
-.shift-pill-time {
-  font-size: 10.5px;
+.shift-stat-cnt {
+  font-size: 11px;
   color: #94a3b8;
   font-weight: 600;
 }
@@ -4334,5 +4364,70 @@ nav button.active .nav-count {
 .top5-subreason {
   color: #94a3b8;
   font-size: 12px;
+}
+
+/* ── Hourly Stoppage Trend Industrial Controls ── */
+.hourly-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.hourly-legend {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #cbd5e1;
+}
+
+.hourly-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hourly-legend-box {
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.hourly-controls {
+  display: inline-flex;
+  background: rgba(15, 23, 42, 0.85);
+  padding: 3px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  gap: 4px;
+}
+
+.hourly-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: #94a3b8;
+  padding: 5px 14px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.hourly-btn:hover {
+  color: #ffffff;
+}
+
+.hourly-btn.active {
+  background: #1e293b;
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.22);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
 }
 
