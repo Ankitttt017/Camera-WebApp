@@ -228,37 +228,29 @@ RECORDING_CRF = int(os.getenv('RECORDING_CRF', '24'))
 RECORDING_VIDEO_CODEC = os.getenv('RECORDING_VIDEO_CODEC', 'copy').strip()
 RECORDING_PRESET = os.getenv('RECORDING_PRESET', 'ultrafast').strip()
 RECORDING_BITRATE = os.getenv('RECORDING_BITRATE', '2000k').strip()
-RECORDING_AUDIO_FILTER = os.getenv(
-    'RECORDING_AUDIO_FILTER',
-    'highpass=f=220:poles=2,highpass=f=220:poles=2,'
-    'bandreject=f=413:width_type=q:w=4.0,'
-    'afftdn=nr=32:nf=-25:tn=1,'
-    'lowpass=f=3400:poles=2,'
-    'equalizer=f=1600:t=q:w=1.8:g=5,equalizer=f=2600:t=q:w=1.5:g=4,'
-    'agate=threshold=0.06:ratio=25:attack=5:release=120:range=0.02,'
-    'alimiter=limit=0.90',
-).strip()
+DEFAULT_SPEECH_AUDIO_FILTER = (
+    'highpass=f=180:poles=2,'
+    'afftdn=nr=28:nf=-35:tn=1,'
+    'equalizer=f=300:t=q:w=1.5:g=-3,'
+    'equalizer=f=1800:t=q:w=1.2:g=8,'
+    'equalizer=f=2800:t=q:w=1.2:g=6,'
+    'lowpass=f=4200:poles=2,'
+    'speechnorm=e=5.0:r=0.0001:l=1,'
+    'alimiter=limit=0.92'
+)
+RECORDING_AUDIO_FILTER = os.getenv('RECORDING_AUDIO_FILTER', DEFAULT_SPEECH_AUDIO_FILTER).strip()
 LIVE_PREVIEW_MAX_WIDTH = int(os.getenv('LIVE_PREVIEW_MAX_WIDTH', '1280'))
 LIVE_PREVIEW_TARGET_FPS = float(os.getenv('LIVE_PREVIEW_TARGET_FPS', '12'))
 LIVE_PREVIEW_JPEG_QUALITY = int(os.getenv('LIVE_PREVIEW_JPEG_QUALITY', '82'))
 LIVE_PREVIEW_STALE_SECONDS = float(os.getenv('LIVE_PREVIEW_STALE_SECONDS', '3'))
-LIVE_PREVIEW_RTSP_PATH = os.getenv('LIVE_PREVIEW_RTSP_PATH', '').strip()
+LIVE_PREVIEW_RTSP_PATH = os.getenv('LIVE_PREVIEW_RTSP_PATH', '/video/live?channel=1&subtype=0').strip()
 LIVE_VIDEO_MAX_WIDTH = int(os.getenv('LIVE_VIDEO_MAX_WIDTH', str(LIVE_PREVIEW_MAX_WIDTH)))
 LIVE_VIDEO_TARGET_FPS = float(os.getenv('LIVE_VIDEO_TARGET_FPS', str(LIVE_PREVIEW_TARGET_FPS)))
 LIVE_VIDEO_BITRATE = os.getenv('LIVE_VIDEO_BITRATE', '1800k').strip()
 LIVE_VIDEO_MAXRATE = os.getenv('LIVE_VIDEO_MAXRATE', '2200k').strip()
 LIVE_VIDEO_BUFSIZE = os.getenv('LIVE_VIDEO_BUFSIZE', '1000k').strip()
 LIVE_RTSP_TRANSPORT = os.getenv('LIVE_RTSP_TRANSPORT', 'udp').strip().lower() or 'udp'
-LIVE_AUDIO_FILTER = os.getenv(
-    'LIVE_AUDIO_FILTER',
-    'highpass=f=220:poles=2,highpass=f=220:poles=2,'
-    'bandreject=f=413:width_type=q:w=4.0,'
-    'afftdn=nr=32:nf=-25:tn=1,'
-    'lowpass=f=3400:poles=2,'
-    'equalizer=f=1600:t=q:w=1.8:g=5,equalizer=f=2600:t=q:w=1.5:g=4,'
-    'agate=threshold=0.06:ratio=25:attack=5:release=120:range=0.02,'
-    'alimiter=limit=0.90',
-).strip()
+LIVE_AUDIO_FILTER = os.getenv('LIVE_AUDIO_FILTER', DEFAULT_SPEECH_AUDIO_FILTER).strip()
 USE_FFMPEG_RECORDING = True
 RECORDING_START_RETRY_SECONDS = 1.0
 RECORDING_START_STALE_SECONDS = 4.0
@@ -276,7 +268,7 @@ TRANSCRIPTION_VAD_FILTER = os.getenv('TRANSCRIPTION_VAD_FILTER', '1').strip().lo
 TRANSCRIPTION_VAD_THRESHOLD = float(os.getenv('TRANSCRIPTION_VAD_THRESHOLD', '0.40'))
 TRANSCRIPTION_AUDIO_FILTER = os.getenv(
     'TRANSCRIPTION_AUDIO_FILTER',
-    'highpass=f=120,lowpass=f=7500,afftdn=nf=-20:nt=w,speechnorm=e=4.0:r=0.0001:l=1',
+    'highpass=f=180:poles=2,afftdn=nr=28:nf=-35:tn=1,equalizer=f=1800:t=q:w=1.2:g=6,lowpass=f=4200:poles=2,speechnorm=e=5.0:r=0.0001:l=1',
 ).strip()
 TRANSCRIPTION_BEAM_SIZE = int(os.getenv('TRANSCRIPTION_BEAM_SIZE', '1'))
 TRANSCRIPTION_CPU_THREADS = int(os.getenv('TRANSCRIPTION_CPU_THREADS', '1'))
@@ -726,12 +718,13 @@ def rtsp_urls(ip: str, port: int, username: str, password: str, channel_no: int,
 
 
 def live_preview_rtsp_path(rtsp_path: str | None, channel_no: int) -> str | None:
-    if LIVE_PREVIEW_RTSP_PATH:
-        return normalize_rtsp_path(LIVE_PREVIEW_RTSP_PATH, channel_no)
-    normalized = normalize_rtsp_path(rtsp_path, channel_no)
-    if normalized and 'subtype=0' in normalized:
-        return normalized.replace('subtype=0', 'subtype=1')
-    return normalized
+    target_path = LIVE_PREVIEW_RTSP_PATH or rtsp_path or f'/video/live?channel={channel_no}&subtype=0'
+    normalized = normalize_rtsp_path(target_path, channel_no)
+    if normalized:
+        if 'subtype=1' in normalized:
+            normalized = normalized.replace('subtype=1', 'subtype=0')
+        return normalized
+    return f'/video/live?channel={channel_no}&subtype=0'
 
 
 def open_rtsp_capture(url: str, timeout_ms: int = 5000):
@@ -852,7 +845,7 @@ def shared_camera_worker(
                     '-vf',
                     f'scale=min({LIVE_PREVIEW_MAX_WIDTH}\\,iw):-2,fps={LIVE_PREVIEW_TARGET_FPS:g}',
                     '-q:v',
-                    str(max(2, min(31, 31 - LIVE_PREVIEW_JPEG_QUALITY // 4))),
+                    str(max(2, min(8, int(round((100 - LIVE_PREVIEW_JPEG_QUALITY) / 6))))),
                     '-f',
                     'image2pipe',
                     '-vcodec',
