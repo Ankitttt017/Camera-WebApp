@@ -1206,8 +1206,8 @@ function LivePage({
   plc: PlcStatus;
 }) {
   const liveUrl = useMemo(() => mjpegUrl(settings), [settings]);
-  const liveAudioUrl = useMemo(() => audioUrl(settings), [settings]);
-  const displayOnline = online;
+  const [streamLoaded, setStreamLoaded] = useState(false);
+  const displayOnline = online || streamLoaded;
   const liveFrameRef = useRef<HTMLDivElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [audioEnabled, setAudioEnabled] = useState(false);
@@ -1332,7 +1332,12 @@ function LivePage({
               <Icon name={liveFullscreen ? 'minimize' : 'maximize'} />
             </button>
           </div>
-          <img src={liveUrl} alt="Live camera feed" />
+          <img
+            src={liveUrl}
+            alt="Live camera feed"
+            onLoad={() => setStreamLoaded(true)}
+            onError={() => setStreamLoaded(false)}
+          />
           {audioEnabled && (
             <audio
               ref={audioRef}
@@ -3330,7 +3335,11 @@ export function App() {
       }
       previousRecordingRunningRef.current = Boolean(recordingStatus.running);
       setRecording(recordingStatus);
-      setCameraOnline(Boolean(recordingStatus.shared_camera?.has_frame));
+      const isOnline = Boolean(
+        recordingStatus.shared_camera?.has_frame ||
+        (recordingStatus.shared_camera?.running && (recordingStatus.shared_camera?.frame_age_seconds ?? 999) < 6)
+      );
+      setCameraOnline(isOnline);
       setPlc(plcStatus);
       const plcMonitorActive = plcStatus.enabled !== false && plcStatus.running;
       if (plcMonitorActive && typeof plcStatus.capture_video === 'boolean') {
@@ -3359,7 +3368,11 @@ export function App() {
   async function verifyCamera() {
     try {
       const status = await getJson<RecordingStatus>('/recording/status');
-      setCameraOnline(Boolean(status.shared_camera?.has_frame));
+      const isOnline = Boolean(
+        status.shared_camera?.has_frame ||
+        (status.shared_camera?.running && (status.shared_camera?.frame_age_seconds ?? 999) < 6)
+      );
+      setCameraOnline(isOnline);
     } catch {
       setCameraOnline(false);
     }
