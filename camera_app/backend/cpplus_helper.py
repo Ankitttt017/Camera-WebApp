@@ -10,6 +10,12 @@ import re
 
 # Force OpenCV to use TCP for RTSP instead of UDP to prevent packet loss / firewall drops
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
+# Restrict math/AI libraries to prevent maxing out all CPU cores (300%+ load)
+os.environ.setdefault("OMP_NUM_THREADS", "2")
+os.environ.setdefault("MKL_NUM_THREADS", "2")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "2")
+os.environ.setdefault("VECLIB_MAXIMUM_THREADS", "2")
+os.environ.setdefault("NUMEXPR_NUM_THREADS", "2")
 
 import secrets
 import shutil
@@ -157,6 +163,10 @@ from urllib.parse import quote
 from xml.sax.saxutils import escape as xml_escape
 
 import cv2
+try:
+    cv2.setNumThreads(1)
+except Exception:
+    pass
 import numpy as np
 import requests
 import uvicorn
@@ -862,9 +872,11 @@ def shared_camera_worker(
                 opened_any = True
                 buffer = bytearray()
                 last_frame_at = time.monotonic()
+                curr_w = None
+                curr_h = None
                 try:
                     while process.stdout and process.poll() is None and not shared_camera_stop_event.is_set() and is_current_worker():
-                        chunk = os.read(process.stdout.fileno(), 4096)
+                        chunk = os.read(process.stdout.fileno(), 65536)
                         if not chunk:
                             if time.monotonic() - last_frame_at > 8.0:
                                 break
@@ -884,18 +896,22 @@ def shared_camera_worker(
                                 break
                             jpg = bytes(buffer[start:end + 2])
                             del buffer[:end + 2]
-                            image = cv2.imdecode(np.frombuffer(jpg, dtype=np.uint8), cv2.IMREAD_COLOR)
-                            height, width = image.shape[:2] if image is not None else (None, None)
                             last_frame_at = time.monotonic()
+                            
+                            # Cache width/height once without continuous full-frame cv2.imdecode
+                            if curr_w is None or curr_h is None:
+                                img = cv2.imdecode(np.frombuffer(jpg, dtype=np.uint8), cv2.IMREAD_COLOR)
+                                if img is not None:
+                                    curr_h, curr_w = img.shape[:2]
+
                             with shared_camera_lock:
                                 if shared_camera_state.get('worker_id') == worker_id:
                                     shared_camera_state.update(
                                         {
-                                            'frame': image.copy() if image is not None else shared_camera_state.get('frame'),
                                             'frame_jpeg': jpg,
                                             'frame_at': last_frame_at,
-                                            'width': width or shared_camera_state.get('width'),
-                                            'height': height or shared_camera_state.get('height'),
+                                            'width': curr_w or shared_camera_state.get('width'),
+                                            'height': curr_h or shared_camera_state.get('height'),
                                             'last_error': None,
                                         }
                                     )
@@ -958,13 +974,18 @@ def ensure_shared_camera_worker(ip: str, rtsp_port: int, username: str, password
 def latest_shared_frame(max_age_seconds: float = 2.0, include_frame_at: bool = False):
     with shared_camera_lock:
         frame = shared_camera_state.get('frame')
+        frame_jpeg = shared_camera_state.get('frame_jpeg')
         frame_at = shared_camera_state.get('frame_at')
         url = shared_camera_state.get('url')
         fps = shared_camera_state.get('fps') or RECORDING_TARGET_FPS
-    if frame is None or frame_at is None:
-        return (None, None, fps, frame_at) if include_frame_at else (None, None, fps)
-    if time.monotonic() - float(frame_at) > max_age_seconds:
+    if frame_at is None or time.monotonic() - float(frame_at) > max_age_seconds:
         return (None, url, fps, frame_at) if include_frame_at else (None, url, fps)
+    if frame is None and frame_jpeg:
+        frame = cv2.imdecode(np.frombuffer(frame_jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
+        with shared_camera_lock:
+            shared_camera_state['frame'] = frame
+    if frame is None:
+        return (None, None, fps, frame_at) if include_frame_at else (None, None, fps)
     copied = frame.copy()
     return (copied, url, fps, float(frame_at)) if include_frame_at else (copied, url, fps)
 
@@ -1985,10 +2006,17 @@ def get_shared_whisper_model():
     model_size = TRANSCRIPTION_MODEL or 'small'
     device = os.getenv('TRANSCRIPTION_DEVICE', 'cpu')
     compute_type = os.getenv('TRANSCRIPTION_COMPUTE_TYPE', 'int8')
+    cpu_threads = int(os.getenv('TRANSCRIPTION_CPU_THREADS', '2'))
     download_root = str(TRANSCRIPTION_MODEL_CACHE / 'hf_hub') if (TRANSCRIPTION_MODEL_CACHE / 'hf_hub').exists() else None
-    cache_key = (model_size, device, compute_type, download_root)
+    cache_key = (model_size, device, compute_type, download_root, cpu_threads)
     if cache_key not in _WHISPER_MODEL_CACHE:
-        _WHISPER_MODEL_CACHE[cache_key] = WhisperModel(model_size, device=device, compute_type=compute_type, download_root=download_root)
+        _WHISPER_MODEL_CACHE[cache_key] = WhisperModel(
+            model_size,
+            device=device,
+            compute_type=compute_type,
+            cpu_threads=cpu_threads,
+            download_root=download_root,
+        )
     return _WHISPER_MODEL_CACHE[cache_key]
 
 
@@ -2089,43 +2117,46 @@ def transcribe_with_faster_whisper(audio_path: Path) -> str | None:
     return raw_transcript if meaningful_transcript_text(raw_transcript) else None
 
 
+_TRANSCRIPTION_WORKER_LOCK = threading.Lock()
+
 def transcribe_recording_worker(storage_root: str | Path, video_path_text: str) -> None:
     video_path = Path(video_path_text)
     audio_path: Path | None = None
     if not TRANSCRIPTION_ENABLED:
         write_transcription_metadata(storage_root, video_path, None, 'skipped', 'Transcription disabled.')
         return
-    try:
-        write_transcription_metadata(storage_root, video_path, None, 'processing')
-        audio_path = extract_transcription_audio(video_path)
-        transcript = transcribe_with_command(audio_path)
-        provider_name = 'custom command' if transcript is not None else None
-        if transcript is None:
-            provider_name = 'faster-whisper' if faster_whisper_available() else None
-            transcript = transcribe_with_faster_whisper(audio_path)
-        if not transcript:
-            message = (
-                'No operator speech detected in recording audio.'
-                if provider_name
-                else 'No local transcription provider configured. Set TRANSCRIPTION_COMMAND or install faster-whisper.'
-            )
-            write_transcription_metadata(
-                storage_root,
-                video_path,
-                None,
-                'skipped',
-                message,
-            )
-            return
-        write_transcription_metadata(storage_root, video_path, transcript, 'completed')
-    except Exception as exc:
-        write_transcription_metadata(storage_root, video_path, None, 'failed', str(exc))
-    finally:
-        if audio_path and audio_path.exists():
-            try:
-                audio_path.unlink()
-            except Exception:
-                pass
+    with _TRANSCRIPTION_WORKER_LOCK:
+        try:
+            write_transcription_metadata(storage_root, video_path, None, 'processing')
+            audio_path = extract_transcription_audio(video_path)
+            transcript = transcribe_with_command(audio_path)
+            provider_name = 'custom command' if transcript is not None else None
+            if transcript is None:
+                provider_name = 'faster-whisper' if faster_whisper_available() else None
+                transcript = transcribe_with_faster_whisper(audio_path)
+            if not transcript:
+                message = (
+                    'No operator speech detected in recording audio.'
+                    if provider_name
+                    else 'No local transcription provider configured. Set TRANSCRIPTION_COMMAND or install faster-whisper.'
+                )
+                write_transcription_metadata(
+                    storage_root,
+                    video_path,
+                    None,
+                    'skipped',
+                    message,
+                )
+                return
+            write_transcription_metadata(storage_root, video_path, transcript, 'completed')
+        except Exception as exc:
+            write_transcription_metadata(storage_root, video_path, None, 'failed', str(exc))
+        finally:
+            if audio_path and audio_path.exists():
+                try:
+                    audio_path.unlink()
+                except Exception:
+                    pass
 
 
 def schedule_recording_transcription(storage_root: str | Path, video_path: Path) -> None:
