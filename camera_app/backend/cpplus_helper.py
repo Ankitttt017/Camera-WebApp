@@ -229,14 +229,17 @@ RECORDING_VIDEO_CODEC = os.getenv('RECORDING_VIDEO_CODEC', 'copy').strip()
 RECORDING_PRESET = os.getenv('RECORDING_PRESET', 'ultrafast').strip()
 RECORDING_BITRATE = os.getenv('RECORDING_BITRATE', '2000k').strip()
 DEFAULT_SPEECH_AUDIO_FILTER = (
-    'highpass=f=180:poles=2,'
-    'afftdn=nr=28:nf=-35:tn=1,'
-    'equalizer=f=300:t=q:w=1.5:g=-3,'
-    'equalizer=f=1800:t=q:w=1.2:g=8,'
-    'equalizer=f=2800:t=q:w=1.2:g=6,'
-    'lowpass=f=4200:poles=2,'
-    'speechnorm=e=5.0:r=0.0001:l=1,'
-    'alimiter=limit=0.92'
+    'volume=0.30,'
+    'highpass=f=300:poles=2,highpass=f=300:poles=2,'
+    'bandreject=f=411:width_type=q:w=5.0,'
+    'bandreject=f=822:width_type=q:w=5.0,'
+    'lowpass=f=2600:poles=2,lowpass=f=2600:poles=2,'
+    'afftdn=nr=42:nf=-24:tn=1,'
+    'agate=threshold=0.085:ratio=15:knee=1:attack=10:release=220:range=0.005,'
+    'equalizer=f=1200:t=q:w=1.0:g=9,'
+    'equalizer=f=2000:t=q:w=1.0:g=7,'
+    'volume=1.5,'
+    'alimiter=limit=0.85'
 )
 RECORDING_AUDIO_FILTER = os.getenv('RECORDING_AUDIO_FILTER', DEFAULT_SPEECH_AUDIO_FILTER).strip()
 LIVE_PREVIEW_MAX_WIDTH = int(os.getenv('LIVE_PREVIEW_MAX_WIDTH', '1280'))
@@ -268,7 +271,7 @@ TRANSCRIPTION_VAD_FILTER = os.getenv('TRANSCRIPTION_VAD_FILTER', '1').strip().lo
 TRANSCRIPTION_VAD_THRESHOLD = float(os.getenv('TRANSCRIPTION_VAD_THRESHOLD', '0.40'))
 TRANSCRIPTION_AUDIO_FILTER = os.getenv(
     'TRANSCRIPTION_AUDIO_FILTER',
-    'highpass=f=180:poles=2,afftdn=nr=28:nf=-35:tn=1,equalizer=f=1800:t=q:w=1.2:g=6,lowpass=f=4200:poles=2,speechnorm=e=5.0:r=0.0001:l=1',
+    'volume=0.30,highpass=f=300:poles=2,bandreject=f=411:width_type=q:w=5.0,bandreject=f=822:width_type=q:w=5.0,lowpass=f=2600:poles=2,afftdn=nr=42:nf=-24:tn=1,agate=threshold=0.085:ratio=15:knee=1:attack=10:release=220:range=0.005,equalizer=f=1200:t=q:w=1.0:g=9,equalizer=f=2000:t=q:w=1.0:g=7,volume=1.5,alimiter=limit=0.85',
 ).strip()
 TRANSCRIPTION_BEAM_SIZE = int(os.getenv('TRANSCRIPTION_BEAM_SIZE', '1'))
 TRANSCRIPTION_CPU_THREADS = int(os.getenv('TRANSCRIPTION_CPU_THREADS', '1'))
