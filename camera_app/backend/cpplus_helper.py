@@ -87,9 +87,12 @@ class PrefixCursor:
             params = args[0]
             param_names = []
             def repl(m):
-                param_names.append(m.group(1))
-                return '?'
-            q = re.sub(r':([a-zA-Z_0-9]+)', repl, q)
+                name = m.group(1)
+                if name in params:
+                    param_names.append(name)
+                    return '?'
+                return m.group(0)
+            q = re.sub(r':([a-zA-Z_][a-zA-Z_0-9]*)', repl, q)
             new_args = tuple(params[name] for name in param_names)
             return q, new_args
         return q, args[0] if args else ()
@@ -2457,11 +2460,17 @@ def recording_index_where(request: RecordingIndexRequest) -> tuple[str, dict[str
     shift = (request.shift or '').upper()
     event_time_expr = "SUBSTRING(COALESCE(event_started_at, started_at), 12, 8)"
     if shift == 'A':
-        where += f" AND {event_time_expr} >= '06:00:00' AND {event_time_expr} < '14:00:00'"
+        where += f" AND {event_time_expr} >= :shift_start AND {event_time_expr} < :shift_end"
+        params['shift_start'] = '06:00:00'
+        params['shift_end'] = '14:00:00'
     elif shift == 'B':
-        where += f" AND {event_time_expr} >= '14:00:00' AND {event_time_expr} < '22:00:00'"
+        where += f" AND {event_time_expr} >= :shift_start AND {event_time_expr} < :shift_end"
+        params['shift_start'] = '14:00:00'
+        params['shift_end'] = '22:00:00'
     elif shift == 'C':
-        where += f" AND ({event_time_expr} >= '22:00:00' OR {event_time_expr} < '06:00:00')"
+        where += f" AND ({event_time_expr} >= :shift_start OR {event_time_expr} < :shift_end)"
+        params['shift_start'] = '22:00:00'
+        params['shift_end'] = '06:00:00'
     if request.duration_filter == 'under_5':
         where += " AND COALESCE(event_duration_seconds, duration_seconds, 0) <= 300"
     elif request.duration_filter == 'over_5':

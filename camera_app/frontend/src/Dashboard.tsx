@@ -1,9 +1,9 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { RecordingRecord } from './api';
 import {
   PieChart, Pie, Cell, Tooltip as RechartsTooltip,
   BarChart, Bar, XAxis, YAxis, CartesianGrid, ResponsiveContainer,
-  Legend, LabelList, ComposedChart, Line, Area, AreaChart,
+  Legend, LabelList, Area, AreaChart,
 } from 'recharts';
 
 interface DashboardProps {
@@ -12,29 +12,30 @@ interface DashboardProps {
   thresholdSeconds?: number;
 }
 
-/* ─── Executive Industrial Colour Tokens ───────────────────────── */
-const C = {
-  breakdown:   '#f43f5e', // Vibrant coral red
-  minor:       '#f59e0b', // Rich industrial amber
-  operator:    '#38bdf8', // Sky cyan
-  documented:  '#10b981', // Clean emerald green
-  pending:     '#f97316', // Bright safety orange
-  noRca:       '#64748b', // Slate muted
-  shiftA:      '#3b82f6', // Sapphire blue
-  shiftB:      '#10b981', // Emerald green
-  shiftC:      '#8b5cf6', // Violet
+/* ─── Standard Plant Industrial Colors (Rico Auto / TPM Norms) ─── */
+const INDUSTRIAL_COLORS = {
+  breakdown: '#ef4444', // Red - Machine / Critical Breakdown
+  minor:     '#f59e0b', // Amber - Minor Stoppage / Short Idle
+  operator:  '#0284c7', // Sky Blue - Operator Triggered
+  shiftA:    '#3b82f6', // Royal Blue - Shift A
+  shiftB:    '#10b981', // Emerald Green - Shift B
+  shiftC:    '#8b5cf6', // Violet - Shift C
 };
 
 const CATEGORY_COLOR: Record<string, string> = {
-  'Machine Breakdown':        '#ef4444',
-  'Die Breakdown':            '#f97316',
-  'Robot Breakdown':          '#a855f7',
-  'Process Loss':             '#3b82f6',
-  'Management Loss':          '#64748b',
-  'Planned Downtime':         '#22c55e',
-  'HPDC Machine Accessories': '#ec4899',
+  'Machine Breakdown':        '#ef4444', // Red
+  'Die Breakdown':            '#ea580c', // Deep Orange
+  'Minor Stoppage':           '#f59e0b', // Amber
+  'Robot Breakdown':          '#9333ea', // Purple
+  'Process Loss':             '#2563eb', // Blue
+  'HPDC Machine Accessories': '#ec4899', // Pink
+  'Planned Downtime':         '#10b981', // Green
+  'Tool / Die Change':        '#06b6d4', // Cyan
+  'Management Loss':          '#64748b', // Slate
+  'Operator Triggered':       '#0284c7', // Sky Blue
 };
-const catColor = (name: string) => CATEGORY_COLOR[name] || '#6366f1';
+
+const catColor = (name: string) => CATEGORY_COLOR[name] || (name.toLowerCase().includes('minor') ? '#f59e0b' : '#3b82f6');
 
 /* ─── Helpers ─────────────────────────────────────────────────── */
 function fmtShort(sec: number) {
@@ -46,6 +47,7 @@ function fmtShort(sec: number) {
   if (m > 0) return `${m}m ${s}s`;
   return `${s}s`;
 }
+
 function fmtDigital(sec: number) {
   if (!sec || sec < 0) return '0:00';
   const h = Math.floor(sec / 3600);
@@ -54,33 +56,44 @@ function fmtDigital(sec: number) {
   if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   return `${m}:${String(s).padStart(2, '0')}`;
 }
+
 function thresholdLabel(sec?: number) {
   const s = Math.max(1, Number(sec || 300));
   if (s % 60 === 0) return `${s / 60} min`;
   return `${s}s`;
 }
+
 function evtDur(r: RecordingRecord) {
   return r.event_duration_seconds || r.duration_seconds || 0;
 }
+
 function hasRca(r: RecordingRecord) {
   const reason = (r.reason || r.manual_transcript || '').trim();
   return !(!reason || reason.toLowerCase() === 'pending reason');
 }
 
+/* ── Clean Industrial Tooltip ──────────────────────────────────── */
 const ttStyle = {
-  background: '#0f172a',
-  border: '1px solid #334155',
+  background: '#0b1329',
+  border: '1px solid rgba(255, 255, 255, 0.18)',
   borderRadius: '8px',
   color: '#f8fafc',
-  boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
+  padding: '8px 12px',
+  boxShadow: '0 8px 24px rgba(0, 0, 0, 0.6)',
 };
-const ttItemStyle = { color: '#e2e8f0', fontSize: '12px' };
-const ttLabelStyle = { color: '#f8fafc', fontWeight: 600, fontSize: '13px', marginBottom: 4 };
+const ttItemStyle = { color: '#e2e8f0', fontSize: '12px', padding: '2px 0' };
+const ttLabelStyle = { color: '#38bdf8', fontWeight: 700, fontSize: '13px', marginBottom: 4 };
+
+/* ── Custom Pie Slice Label (Direct On-Chart Data Label) ────────── */
+const renderShiftSliceLabel = (entry: any) => {
+  if (!entry || entry.value <= 0) return null;
+  return `${entry.name}: ${entry.value}h (${entry.pct}%)`;
+};
 
 /* ─── Component ───────────────────────────────────────────────── */
 export const Dashboard: React.FC<DashboardProps> = ({ records, businessRange, thresholdSeconds = 300 }) => {
+  const [hourlyViewMode, setHourlyViewMode] = useState<'stacked' | 'sideBySide'>('stacked');
 
-  /* ── computed stats ─────────────────────────────────────────── */
   const stats = useMemo(() => {
     let bdSec = 0, minSec = 0, opSec = 0;
     let bdCnt = 0, minCnt = 0, opCnt = 0;
@@ -89,7 +102,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ records, businessRange, th
     const hourlyMap = Array.from({ length: 24 }, () => ({
       bd: 0, min: 0, op: 0, durSec: 0,
     }));
-    const dailyMap: Record<string, number> = {};
     const shiftMap = { A: 0, B: 0, C: 0 };
     const shiftCntMap = { A: 0, B: 0, C: 0 };
     const reasonDur: Record<string, number> = {};
@@ -133,13 +145,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ records, businessRange, th
       else if (isMin) hourlyMap[h].min++;
       else hourlyMap[h].op++;
 
-      // Production day: before 6am → previous calendar day
-      const pd = new Date(d);
-      if (pd.getHours() < 6) pd.setDate(pd.getDate() - 1);
-      const dk = pd.toLocaleDateString('en-GB');
-      dailyMap[dk] = (dailyMap[dk] || 0) + dur;
-
-      // Reason label
+      // Clean reason label
       let rsn = (r.reason || '').trim();
       if (!rsn || rsn.toLowerCase() === 'pending reason') rsn = 'Pending Reason';
       else if (rsn.includes(' - ')) {
@@ -169,77 +175,72 @@ export const Dashboard: React.FC<DashboardProps> = ({ records, businessRange, th
     const maxSec = valid.reduce((mx, r) => Math.max(mx, evtDur(r)), 0);
     const avgBdSec = bdCnt > 0 ? bdSec / bdCnt : 0;
 
-    // Daily trend
-    let cumAcc = 0;
-    const dailyData = Object.keys(dailyMap)
-      .map(dk => ({ date: dk.substring(0, 5), full: dk, hours: +(dailyMap[dk] / 3600).toFixed(2) }))
-      .sort((a, b) => a.full.localeCompare(b.full))
-      .map(d => { cumAcc += d.hours; return { ...d, cumulative: +cumAcc.toFixed(2) }; });
-
-    const avgDailyHrs = dailyData.length > 0
-      ? +(dailyData.reduce((s, d) => s + d.hours, 0) / dailyData.length).toFixed(2)
-      : 0;
-
-    // Worst day
-    let worstDay = { full: '-', hours: 0 };
-    dailyData.forEach(d => { if (d.hours > worstDay.hours) worstDay = d; });
-
-    // Hourly (factory order 06→05)
+    // Hourly Timeline (Factory order: 06:00 to 05:00 next day)
     const factorySeq = [6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,0,1,2,3,4,5];
     const hourlyData = factorySeq.map(h => {
       const hd = hourlyMap[h];
       const shiftLabel = h >= 6 && h < 14 ? 'A' : h >= 14 && h < 22 ? 'B' : 'C';
+      const total = hd.bd + hd.min;
       return {
-        name: `${String(h).padStart(2,'0')}:00`,
+        name: `${String(h).padStart(2, '0')}:00`,
         shift: shiftLabel,
-        bd: hd.bd, min: hd.min, op: hd.op,
-        total: hd.bd + hd.min + hd.op,
+        bd: hd.bd,
+        min: hd.min,
+        total,
+        bdLabel: hd.bd > 0 ? String(hd.bd) : '',
+        minLabel: hd.min > 0 ? String(hd.min) : '',
+        totalLabel: total > 0 ? String(total) : '',
       };
     });
 
-    // Peak hour
-    const peakHour = hourlyData.reduce((best, d) => d.total > best.total ? d : best, { name: '-', total: 0, shift: '', bd: 0, min: 0, op: 0 });
-
-    // Shift summary & donut
+    // Shift summary with direct display label
     const shiftSummary = [
-      { key: 'A', name: 'Shift A', timing: '06:00 – 14:00', value: +(shiftMap.A / 3600).toFixed(2), fill: C.shiftA, count: shiftCntMap.A, pct: totalSec > 0 ? Math.round((shiftMap.A / totalSec) * 100) : 0 },
-      { key: 'B', name: 'Shift B', timing: '14:00 – 22:00', value: +(shiftMap.B / 3600).toFixed(2), fill: C.shiftB, count: shiftCntMap.B, pct: totalSec > 0 ? Math.round((shiftMap.B / totalSec) * 100) : 0 },
-      { key: 'C', name: 'Shift C', timing: '22:00 – 06:00', value: +(shiftMap.C / 3600).toFixed(2), fill: C.shiftC, count: shiftCntMap.C, pct: totalSec > 0 ? Math.round((shiftMap.C / totalSec) * 100) : 0 },
-    ];
+      { key: 'A', name: 'Shift A', value: +(shiftMap.A / 3600).toFixed(2), sec: shiftMap.A, fill: INDUSTRIAL_COLORS.shiftA, count: shiftCntMap.A, pct: totalSec > 0 ? Math.round((shiftMap.A / totalSec) * 100) : 0 },
+      { key: 'B', name: 'Shift B', value: +(shiftMap.B / 3600).toFixed(2), sec: shiftMap.B, fill: INDUSTRIAL_COLORS.shiftB, count: shiftCntMap.B, pct: totalSec > 0 ? Math.round((shiftMap.B / totalSec) * 100) : 0 },
+      { key: 'C', name: 'Shift C', value: +(shiftMap.C / 3600).toFixed(2), sec: shiftMap.C, fill: INDUSTRIAL_COLORS.shiftC, count: shiftCntMap.C, pct: totalSec > 0 ? Math.round((shiftMap.C / totalSec) * 100) : 0 },
+    ].map(s => ({
+      ...s,
+      displayLabel: `${s.name}: ${s.value}h (${s.pct}%)`,
+    }));
     const shiftData = shiftSummary.filter(d => d.value > 0);
 
-    // Top reasons
+    // Top Stoppage Reasons (Ranked by hours) with direct display label
     const topReasons = Object.keys(reasonDur)
-      .map(k => ({
-        name: k.length > 22 ? k.slice(0,22) + '…' : k,
-        fullName: k,
-        hours: +(reasonDur[k] / 3600).toFixed(2),
-        count: reasonCnt[k],
-        pct: totalSec > 0 ? +((reasonDur[k] / totalSec) * 100).toFixed(1) : 0,
-      }))
+      .map(k => {
+        const hrs = +(reasonDur[k] / 3600).toFixed(2);
+        const cnt = reasonCnt[k];
+        return {
+          name: k.length > 24 ? k.slice(0, 24) + '…' : k,
+          fullName: k,
+          hours: hrs,
+          sec: reasonDur[k],
+          count: cnt,
+          pct: totalSec > 0 ? +((reasonDur[k] / totalSec) * 100).toFixed(1) : 0,
+          displayLabel: `${hrs}h (${cnt} stops)`,
+        };
+      })
       .sort((a, b) => b.hours - a.hours)
       .slice(0, 6);
 
-    // Category data
+    // Category data (Horizontal bars) with direct display label
     const catData = Object.entries(catMap)
-      .map(([name, info]) => ({
-        name: name.length > 24 ? name.slice(0,24)+'…' : name,
-        fullName: name,
-        hours: +(info.sec / 3600).toFixed(2),
-        count: info.count,
-        fill: catColor(name),
-      }))
-      .filter(d => d.hours > 0)
+      .map(([name, info]) => {
+        const hrs = +(info.sec / 3600).toFixed(2);
+        return {
+          name: name.length > 24 ? name.slice(0, 24) + '…' : name,
+          fullName: name,
+          hours: hrs,
+          sec: info.sec,
+          count: info.count,
+          fill: catColor(name),
+          displayLabel: `${hrs}h (${info.count} stops)`,
+        };
+      })
+      .filter(d => d.hours > 0 || d.count > 0)
       .sort((a, b) => b.hours - a.hours)
       .slice(0, 6);
 
-    // RCA data
-    const rcaData = [
-      { name: 'RCA Completed', value: docCnt,  fill: C.documented },
-      { name: 'Pending RCA',   value: pendCnt, fill: docCnt === 0 ? '#ef4444' : C.pending },
-    ].filter(d => d.value > 0);
-
-    // Top 5 records for insight list
+    // Top 5 Longest Stoppages
     const top5 = [...valid]
       .sort((a, b) => evtDur(b) - evtDur(a))
       .slice(0, 5)
@@ -250,445 +251,455 @@ export const Dashboard: React.FC<DashboardProps> = ({ records, businessRange, th
           rank: i + 1,
           duration: fmtShort(sec),
           date: d ? d.toLocaleString('en-GB') : '-',
-          category: r.reason_category || (r.event_type === 'breakdown' ? 'Breakdown' : 'Minor Stoppage'),
+          category: r.reason_category || (r.event_type === 'breakdown' ? 'Machine Breakdown' : 'Minor Stoppage'),
           reason: (r.reason || 'Pending reason').split(' - ').pop() || 'Pending reason',
           rca: hasRca(r),
           isBd: r.event_type === 'breakdown',
         };
       });
 
-    // insights text
-    const top3pct = topReasons.length >= 3
-      ? +(topReasons.slice(0,3).reduce((s,r) => s + r.pct, 0)).toFixed(0)
-      : 0;
-
     return {
       totalSec, totalEvents, bdSec, minSec, opSec,
       bdCnt, minCnt, opCnt,
-      rcaPct, pendCnt, docCnt, maxSec, avgBdSec, avgDailyHrs,
-      dailyData, worstDay, hourlyData, peakHour,
-      shiftData, shiftSummary, topReasons, catData, rcaData, top5,
-      insights: {
-        bdPct: totalSec > 0 ? +((bdSec/totalSec)*100).toFixed(0) : 0,
-        top3pct,
-        pendPct: totalEvents > 0 ? +((pendCnt/totalEvents)*100).toFixed(0) : 0,
-      },
+      rcaPct, pendCnt, docCnt, maxSec, avgBdSec,
+      hourlyData, shiftData, shiftSummary, topReasons, catData, top5,
     };
   }, [records, businessRange]);
 
-  /* ── no-data guard ──────────────────────────────────────────── */
+  /* ── Guard for no data ───────────────────────────────────────── */
   if (stats.totalEvents === 0) {
     return (
-      <div style={{ padding: '60px 0', textAlign: 'center', color: '#475569' }}>
+      <div style={{ padding: '60px 0', textAlign: 'center', color: '#64748b' }}>
         <div style={{ fontSize: '3rem' }}>📋</div>
-        <p style={{ marginTop: '12px', fontSize: '1rem' }}>No records found for the selected period.</p>
+        <p style={{ marginTop: '12px', fontSize: '1.1rem', fontWeight: 600, color: '#94a3b8' }}>
+          No records found for the selected filter period.
+        </p>
       </div>
     );
   }
 
-  /* ── helpers inline ─────────────────────────────────────────── */
   const emptyChart = (h = 240) => (
-    <div style={{ height: h, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b', flexDirection: 'column', gap: 8 }}>
-      <span style={{ fontSize: '2rem' }}>📊</span>
-      <span style={{ fontSize: '0.85rem' }}>No data to display</span>
+    <div style={{ height: h, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b', flexDirection: 'column', gap: 6 }}>
+      <span style={{ fontSize: '1.8rem' }}>📊</span>
+      <span style={{ fontSize: '0.85rem', fontWeight: 500 }}>No stoppage data available</span>
     </div>
   );
 
-  /* ── render ─────────────────────────────────────────────────── */
   return (
     <div className="tpm-dashboard">
 
-      {/* ── Page header ── */}
+      {/* ── Page Header ── */}
       <div className="tpm-header">
         <h1>Machine Stoppage Analytics</h1>
-        <p>Live analysis of {stats.totalEvents} stoppage records — all metrics auto-calculated from event log.</p>
+        <p>Live analysis of {stats.totalEvents} stoppage records · Total Downtime: {fmtShort(stats.totalSec)}</p>
       </div>
 
       {/* ══════════════════════════════════════════════════════
-          KPI CARDS (6 cards)
+          CORE KPI METRICS (Title Upar, Value Niche, No Faltu Comments)
       ══════════════════════════════════════════════════════ */}
       <div className="tpm-kpi-grid">
 
+        {/* 1. Total Events */}
         <div className="kpi-card color-blue">
+          <div className="kpi-label">TOTAL STOPPAGES</div>
           <div className="kpi-val">{stats.totalEvents}</div>
-          <div className="kpi-label">Total Events</div>
-          <div className="kpi-sub">{stats.bdCnt} Breakdown · {stats.minCnt} Minor · {stats.opCnt} Operator</div>
         </div>
 
-        <div className="kpi-card color-red">
-          <div className="kpi-val">{stats.bdCnt}</div>
-          <div className="kpi-label">Breakdown (&gt; {thresholdLabel(thresholdSeconds)})</div>
-          <div className="kpi-sub">{fmtShort(stats.bdSec)} lost · Avg {fmtDigital(stats.avgBdSec)} MTTR</div>
-        </div>
-
-        <div className="kpi-card color-orange">
-          <div className="kpi-val">{stats.minCnt}</div>
-          <div className="kpi-label">Minor Stoppage (&lt; {thresholdLabel(thresholdSeconds)})</div>
-          <div className="kpi-sub">{fmtShort(stats.minSec)} lost duration</div>
-        </div>
-
-        <div className="kpi-card color-red">
+        {/* 2. Total Downtime */}
+        <div className="kpi-card color-flame">
+          <div className="kpi-label">TOTAL DOWNTIME</div>
           <div className="kpi-val">{fmtShort(stats.totalSec)}</div>
-          <div className="kpi-label">Total Downtime</div>
-          <div className="kpi-sub">Avg {stats.avgDailyHrs}h / production day</div>
         </div>
 
+        {/* 3. Breakdown (> threshold) */}
+        <div className="kpi-card color-red">
+          <div className="kpi-label">BREAKDOWN (&gt; {thresholdLabel(thresholdSeconds)})</div>
+          <div className="kpi-val">{stats.bdCnt}</div>
+        </div>
+
+        {/* 4. Minor Stoppage (< threshold) */}
+        <div className="kpi-card color-orange">
+          <div className="kpi-label">MINOR STOPPAGE (&lt; {thresholdLabel(thresholdSeconds)})</div>
+          <div className="kpi-val">{stats.minCnt}</div>
+        </div>
+
+        {/* 5. Longest Stoppage */}
         <div className="kpi-card color-purple">
+          <div className="kpi-label">LONGEST STOPPAGE</div>
           <div className="kpi-val">{fmtShort(stats.maxSec)}</div>
-          <div className="kpi-label">Longest Stoppage</div>
-          <div className="kpi-sub">Worst single incident recorded</div>
         </div>
 
-        <div className="kpi-card color-green">
-          <div className="kpi-val">{stats.rcaPct}%</div>
-          <div className="kpi-label">RCA Completion</div>
-          <div className="kpi-sub">{stats.docCnt} done · {stats.pendCnt} pending action</div>
+        {/* 6. Root Cause Action Status */}
+        <div className={`kpi-card ${stats.rcaPct >= 80 ? 'color-green' : stats.rcaPct >= 50 ? 'color-orange' : 'color-red'}`}>
+          <div className="kpi-label">ROOT CAUSE ACTION (RCA)</div>
+          <div className="kpi-val">{stats.pendCnt} Pending</div>
         </div>
 
       </div>
 
       {/* ══════════════════════════════════════════════════════
-          AUTOMATED INSIGHTS
+          SECTION 1: SABSE PEHLA GRAPH - HOURLY STOPPAGE TREND (24-HOUR FACTORY DAY)
       ══════════════════════════════════════════════════════ */}
-      <div className="tpm-insights-panel">
-        <h3>📊 Key Insights</h3>
-        <ul>
-          <li>
-            <span style={{ color: C.breakdown, fontWeight: 'bold' }}>Breakdown</span> accounts for&nbsp;
-            <strong>{stats.insights.bdPct}%</strong> of total downtime ({fmtShort(stats.bdSec)}) across&nbsp;
-            <strong>{stats.bdCnt}</strong> events.
-          </li>
-          <li>
-            Top 3 stoppage causes contribute <strong>{stats.insights.top3pct}%</strong> of all logged downtime —
-            fixing these root causes will deliver the maximum improvement.
-          </li>
-          <li>
-            <strong>{stats.insights.pendPct}%</strong> of events (<strong>{stats.pendCnt}</strong> of {stats.totalEvents}) have
-            <strong style={{ color: C.pending }}> no RCA completed</strong>. Prioritise investigating high-duration incidents first.
-          </li>
-          {stats.peakHour.total > 0 && (
-            <li>
-              Peak disruption hour: <strong>{stats.peakHour.name}</strong> (Shift {stats.peakHour.shift}) with&nbsp;
-              <strong>{stats.peakHour.total}</strong> stoppages — investigate shift-change activity and loading patterns.
-            </li>
-          )}
-          {stats.worstDay.hours > 0 && (
-            <li>
-              <strong style={{ color: '#ef4444' }}>{stats.worstDay.full}</strong> was the worst production day with&nbsp;
-              <strong>{stats.worstDay.hours}h</strong> of downtime — highlighted in red on the daily chart.
-            </li>
-          )}
-        </ul>
+      <div className="tpm-charts-layout">
+        <div className="chart-box col-12">
+          <div className="hourly-header-row">
+            <div className="hourly-legend">
+              <span className="hourly-legend-item">
+                <span className="hourly-legend-box" style={{ background: '#ef4444' }} />
+                Breakdown
+              </span>
+              <span className="hourly-legend-item">
+                <span className="hourly-legend-box" style={{ background: '#f59e0b' }} />
+                Minor Stoppage
+              </span>
+            </div>
+
+            <div className="hourly-controls">
+              <button
+                type="button"
+                className={`hourly-btn ${hourlyViewMode === 'stacked' ? 'active' : ''}`}
+                onClick={() => setHourlyViewMode('stacked')}
+              >
+                Stacked
+              </button>
+              <button
+                type="button"
+                className={`hourly-btn ${hourlyViewMode === 'sideBySide' ? 'active' : ''}`}
+                onClick={() => setHourlyViewMode('sideBySide')}
+              >
+                Side by side
+              </button>
+            </div>
+          </div>
+
+          <ResponsiveContainer width="100%" height={290}>
+            <BarChart
+              data={stats.hourlyData}
+              margin={{ top: 25, right: 25, left: 10, bottom: 25 }}
+              barGap={hourlyViewMode === 'sideBySide' ? 2 : 0}
+            >
+              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(255, 255, 255, 0.08)" />
+              <XAxis
+                dataKey="name"
+                tick={{ fill: '#94a3b8', fontSize: 11, fontWeight: 500 }}
+                axisLine={{ stroke: '#334155' }}
+                tickLine={false}
+                interval={0}
+                angle={-45}
+                textAnchor="end"
+                height={45}
+              />
+              <YAxis
+                allowDecimals={false}
+                domain={[0, (dataMax: number) => Math.max(4, Math.ceil(dataMax * 1.15))]}
+                tick={{ fill: '#94a3b8', fontSize: 11 }}
+                axisLine={{ stroke: '#334155' }}
+                tickLine={false}
+                label={{ value: 'Incidents', angle: -90, position: 'insideLeft', fill: '#cbd5e1', fontSize: 12, fontWeight: 600, offset: 12 }}
+              />
+
+              <RechartsTooltip
+                contentStyle={ttStyle}
+                itemStyle={ttItemStyle}
+                labelStyle={ttLabelStyle}
+                formatter={(v: any, name: any, item: any) => [
+                  `${v} incidents (Shift ${item?.payload?.shift || ''})`,
+                  name === 'bd' || name === 'Breakdown' ? 'Breakdown (>2m)' : 'Minor Stoppage (<2m)'
+                ]}
+              />
+
+              <Bar
+                isAnimationActive={false}
+                dataKey="bd"
+                name="Breakdown"
+                stackId={hourlyViewMode === 'stacked' ? 'hourlyStack' : undefined}
+                fill="#ef4444"
+                barSize={hourlyViewMode === 'stacked' ? 26 : 14}
+                radius={hourlyViewMode === 'stacked' ? [0, 0, 0, 0] : [4, 4, 0, 0]}
+              >
+                <LabelList
+                  dataKey="bdLabel"
+                  position={hourlyViewMode === 'stacked' ? 'inside' : 'top'}
+                  fill={hourlyViewMode === 'stacked' ? '#ffffff' : '#ef4444'}
+                  fontSize={11}
+                  fontWeight={700}
+                  offset={hourlyViewMode === 'stacked' ? 0 : 4}
+                />
+              </Bar>
+
+              <Bar
+                isAnimationActive={false}
+                dataKey="min"
+                name="Minor Stoppage"
+                stackId={hourlyViewMode === 'stacked' ? 'hourlyStack' : undefined}
+                fill="#f59e0b"
+                barSize={hourlyViewMode === 'stacked' ? 26 : 14}
+                radius={[4, 4, 0, 0]}
+              >
+                <LabelList
+                  dataKey={hourlyViewMode === 'stacked' ? 'totalLabel' : 'minLabel'}
+                  position="top"
+                  fill={hourlyViewMode === 'stacked' ? '#f8fafc' : '#f59e0b'}
+                  fontSize={11}
+                  fontWeight={700}
+                  offset={4}
+                />
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+
+          <div style={{ fontSize: '0.78rem', color: '#64748b', marginTop: '6px', textAlign: 'left', paddingLeft: '8px' }}>
+            Factory day 06:00 to 06:00 next morning. Numbers read from your line graph.
+          </div>
+        </div>
       </div>
 
       {/* ══════════════════════════════════════════════════════
-          CHARTS ROW 1 — Daily Trend + Shift Donut
+          SECTION 2: SHIFT BREAKDOWN + CATEGORY LOSS (Side by Side)
       ══════════════════════════════════════════════════════ */}
       <div className="tpm-charts-layout">
 
-        {/* Daily Trend bar chart */}
-        <div className="chart-box col-7">
+        {/* ── Chart: Downtime by Shift (Direct Data Labels On Graph) ── */}
+        <div className="chart-box col-6">
           <div className="chart-box-header">
-            <h4>Daily Downtime Trend</h4>
-            <p className="chart-sub">
-              Avg: <strong>{stats.avgDailyHrs}h / day</strong>
-              {stats.worstDay.hours > 0 && stats.dailyData.length > 1 && (
-                <span className="chart-worst-badge">
-                  ● Worst: {stats.worstDay.full} ({stats.worstDay.hours}h)
-                </span>
-              )}
-            </p>
+            <h4>Downtime by Shift</h4>
+            <p className="chart-sub">Loss Distribution Across Production Shifts</p>
           </div>
-          {stats.dailyData.length > 0 ? (
-            <ResponsiveContainer width="100%" height={270}>
-              <ComposedChart data={stats.dailyData} margin={{ top: 15, right: 25, left: 10, bottom: 10 }}>
-                <defs>
-                  <linearGradient id="cumGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#38bdf8" stopOpacity={0.35} />
-                    <stop offset="95%" stopColor="#38bdf8" stopOpacity={0.0} />
-                  </linearGradient>
-                  <linearGradient id="barGradDaily" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#fbbf24" stopOpacity={1} />
-                    <stop offset="100%" stopColor="#d97706" stopOpacity={0.85} />
-                  </linearGradient>
-                  <linearGradient id="barGradDailyWorst" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#f43f5e" stopOpacity={1} />
-                    <stop offset="100%" stopColor="#be123c" stopOpacity={0.85} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(255, 255, 255, 0.08)" />
-                <XAxis dataKey="date" tick={{ fill: '#cbd5e1', fontSize: 11, fontWeight: 500 }} axisLine={{ stroke: '#334155' }} tickLine={false} />
-                <YAxis tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={{ stroke: '#334155' }} tickLine={false}
-                  label={{ value: 'Hours (h)', angle: -90, position: 'insideLeft', fill: '#94a3b8', fontSize: 11, offset: 12 }} />
+
+          {stats.shiftSummary.some(s => s.value > 0) ? (
+            <div style={{ position: 'relative', width: '100%', height: 260 }}>
+              <ResponsiveContainer width="100%" height={260}>
+                <PieChart margin={{ top: 10, right: 30, left: 30, bottom: 10 }}>
+                  <Pie
+                    isAnimationActive={false}
+                    data={stats.shiftData}
+                    cx="50%"
+                    cy="48%"
+                    innerRadius={62}
+                    outerRadius={88}
+                    dataKey="value"
+                    nameKey="name"
+                    stroke="#0b1329"
+                    strokeWidth={3}
+                    paddingAngle={stats.shiftData.length > 1 ? 4 : 0}
+                    label={renderShiftSliceLabel}
+                    labelLine={{ stroke: '#64748b', strokeWidth: 1.5 }}
+                  >
+                    {stats.shiftData.map((d, i) => (
+                      <Cell key={i} fill={d.fill} />
+                    ))}
+                  </Pie>
+                  <RechartsTooltip
+                    contentStyle={ttStyle}
+                    itemStyle={ttItemStyle}
+                    labelStyle={ttLabelStyle}
+                    formatter={(v: any, name: any, item: any) => [
+                      `${v}h (${fmtShort(item.payload.sec || Number(v) * 3600)}) · ${item.payload.count || 0} stops`,
+                      item.payload.name || name
+                    ]}
+                  />
+                  <Legend
+                    align="center"
+                    verticalAlign="bottom"
+                    height={32}
+                    iconType="circle"
+                    wrapperStyle={{ fontSize: '12px', color: '#cbd5e1' }}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+
+              {/* Total Loss Centered inside Donut */}
+              <div style={{ position: 'absolute', top: '48%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center', pointerEvents: 'none' }}>
+                <div style={{ fontSize: 9.5, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>
+                  TOTAL LOSS
+                </div>
+                <div style={{ fontSize: 24, fontWeight: 800, color: '#f8fafc', lineHeight: 1.15, marginTop: 2 }}>
+                  {fmtShort(stats.totalSec)}
+                </div>
+              </div>
+            </div>
+          ) : emptyChart(260)}
+        </div>
+
+        {/* ── Chart: Downtime by Loss Category (Direct Values On Bars) ── */}
+        <div className="chart-box col-6">
+          <div className="chart-box-header">
+            <h4>Downtime by Category</h4>
+            <p className="chart-sub">Lost Duration &amp; Event Count per Loss Type</p>
+          </div>
+
+          {stats.catData.length > 0 ? (
+            <ResponsiveContainer width="100%" height={260}>
+              <BarChart
+                data={stats.catData}
+                layout="vertical"
+                margin={{ top: 10, right: 85, left: 15, bottom: 10 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="rgba(255, 255, 255, 0.12)" />
+                <XAxis
+                  type="number"
+                  tick={{ fill: '#cbd5e1', fontSize: 12, fontWeight: 500 }}
+                  axisLine={{ stroke: '#475569' }}
+                  tickLine={false}
+                />
+                <YAxis
+                  dataKey="name"
+                  type="category"
+                  tick={{ fill: '#f8fafc', fontSize: 12, fontWeight: 600 }}
+                  axisLine={{ stroke: '#475569' }}
+                  tickLine={false}
+                  width={150}
+                />
                 <RechartsTooltip
                   contentStyle={ttStyle}
                   itemStyle={ttItemStyle}
                   labelStyle={ttLabelStyle}
-                  formatter={(v: any, name: any) => [`${v}h`, name]}
+                  formatter={(v: any, _: any, item: any) => [
+                    `${v}h (${fmtShort(item.payload.sec || Number(v) * 3600)}) · ${item.payload.count} stops`,
+                    'Downtime Loss'
+                  ]}
+                  labelFormatter={(_: any, payload: readonly any[]) => (payload as any)?.[0]?.payload?.fullName || _}
                 />
-                <Legend align="center" verticalAlign="top" height={32} iconType="circle" wrapperStyle={{ fontSize: '11px', color: '#cbd5e1' }} />
+                <Bar
+                  isAnimationActive={false}
+                  dataKey="hours"
+                  name="Downtime"
+                  radius={[0, 6, 6, 0]}
+                  barSize={stats.catData.length <= 2 ? 32 : stats.catData.length <= 4 ? 24 : 18}
+                >
+                  {stats.catData.map((d, i) => (
+                    <Cell key={i} fill={d.fill} />
+                  ))}
+                  <LabelList
+                    dataKey="displayLabel"
+                    position="right"
+                    fill="#f8fafc"
+                    fontSize={11.5}
+                    fontWeight={700}
+                    offset={10}
+                  />
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          ) : emptyChart(260)}
+        </div>
+
+      </div>
+
+      {/* ══════════════════════════════════════════════════════
+          SECTION 3: TOP STOPPAGE REASONS (Direct Values On Bars)
+      ══════════════════════════════════════════════════════ */}
+      <div className="tpm-charts-layout">
+        <div className="chart-box col-12">
+          <div className="chart-box-header">
+            <h4>Top Stoppage Reasons</h4>
+            <p className="chart-sub">Root Causes Ranked by Lost Hours</p>
+          </div>
+
+          {stats.topReasons.length > 0 ? (
+            <ResponsiveContainer width="100%" height={260}>
+              <BarChart
+                data={stats.topReasons}
+                margin={{ top: 20, right: 30, left: 15, bottom: 40 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(255, 255, 255, 0.12)" />
+
+                <XAxis
+                  dataKey="name"
+                  tick={{ fill: '#e2e8f0', fontSize: 12, fontWeight: 600 }}
+                  axisLine={{ stroke: '#475569' }}
+                  tickLine={false}
+                  interval={0}
+                  angle={-15}
+                  textAnchor="end"
+                  height={45}
+                />
+
+                <YAxis
+                  tick={{ fill: '#f87171', fontSize: 12, fontWeight: 600 }}
+                  axisLine={{ stroke: '#475569' }}
+                  tickLine={false}
+                  label={{ value: 'Hours', angle: -90, position: 'insideLeft', fill: '#f87171', fontSize: 12, fontWeight: 600, offset: 12 }}
+                />
+
+                <RechartsTooltip
+                  contentStyle={ttStyle}
+                  itemStyle={ttItemStyle}
+                  labelStyle={ttLabelStyle}
+                  formatter={(v: any, _: any, item: any) => [
+                    `${v}h (${fmtShort(item.payload.sec || Number(v) * 3600)}) · ${item.payload.count} stops`,
+                    'Downtime Loss'
+                  ]}
+                  labelFormatter={(_: any, payload: readonly any[]) => (payload as any)?.[0]?.payload?.fullName || _}
+                />
+
                 <Bar
                   isAnimationActive={false}
                   dataKey="hours"
                   name="Downtime (h)"
-                  fill="url(#barGradDaily)"
+                  fill="#ef4444"
                   radius={[6, 6, 0, 0]}
-                  barSize={stats.dailyData.length <= 2 ? 48 : stats.dailyData.length <= 6 ? 34 : 22}
+                  barSize={stats.topReasons.length <= 2 ? 52 : 36}
                 >
-                  {stats.dailyData.map((d, i) => (
-                    <Cell
-                      key={i}
-                      fill={d.full === stats.worstDay.full && stats.dailyData.length > 1 ? 'url(#barGradDailyWorst)' : 'url(#barGradDaily)'}
-                    />
-                  ))}
-                  <LabelList dataKey="hours" position="top" fill="#f8fafc" fontSize={11} fontWeight={600} offset={6} formatter={(v: any) => v > 0 ? `${v}h` : ''} />
-                </Bar>
-                <Line
-                  isAnimationActive={false}
-                  type="monotone"
-                  dataKey="cumulative"
-                  name="Cumulative (h)"
-                  stroke="#38bdf8"
-                  strokeWidth={2.5}
-                  dot={{ r: 4, fill: '#0f172a', stroke: '#38bdf8', strokeWidth: 2 }}
-                  activeDot={{ r: 6, fill: '#38bdf8' }}
-                />
-              </ComposedChart>
-            </ResponsiveContainer>
-          ) : emptyChart(270)}
-        </div>
-
-        {/* Shift distribution donut */}
-        <div className="chart-box col-5">
-          <div className="chart-box-header">
-            <h4>Downtime by Shift</h4>
-          </div>
-          {stats.shiftSummary.some(s => s.value > 0) ? (
-            <>
-              <div style={{ position: 'relative' }}>
-                <ResponsiveContainer width="100%" height={190}>
-                  <PieChart>
-                    <Pie
-                      isAnimationActive={false}
-                      data={stats.shiftData}
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={56}
-                      outerRadius={84}
-                      dataKey="value"
-                      stroke="#0f172a"
-                      strokeWidth={2}
-                      paddingAngle={stats.shiftData.length > 1 ? 3 : 0}
-                    >
-                      {stats.shiftData.map((d, i) => <Cell key={i} fill={d.fill} />)}
-                    </Pie>
-                    <RechartsTooltip contentStyle={ttStyle} itemStyle={ttItemStyle} labelStyle={ttLabelStyle} formatter={(v: any, name: any) => [`${v}h`, name]} />
-                  </PieChart>
-                </ResponsiveContainer>
-                <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center', pointerEvents: 'none' }}>
-                  <div style={{ fontSize: 20, fontWeight: 800, color: '#f8fafc', lineHeight: 1 }}>{fmtShort(stats.totalSec)}</div>
-                  <div style={{ fontSize: 9.5, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600, marginTop: 4 }}>Total Loss</div>
-                </div>
-              </div>
-              <div className="shift-pills-row">
-                {stats.shiftSummary.map((s, i) => (
-                  <div key={i} className={`shift-pill-card ${s.value > 0 ? 'active' : 'idle'}`} style={{ borderTop: `2px solid ${s.fill}` }}>
-                    <div className="shift-pill-name" style={{ color: s.fill }}>
-                      <span className="shift-pill-dot" style={{ backgroundColor: s.fill }}></span>
-                      {s.name}
-                    </div>
-                    <div className="shift-pill-val">{s.value > 0 ? `${s.value}h` : '0h'}</div>
-                    <div className="shift-pill-time">{s.count > 0 ? `${s.count} events` : '0 events'}</div>
-                  </div>
-                ))}
-              </div>
-            </>
-          ) : emptyChart(240)}
-        </div>
-
-        {/* ── CHARTS ROW 2 — Top Reasons + Category ── */}
-
-        {/* Top Stoppage Reasons bar */}
-        <div className="chart-box col-7">
-          <div className="chart-box-header">
-            <h4>Top Stoppage Reasons</h4>
-            <p className="chart-sub">Pareto: Downtime Hours vs Incidents</p>
-          </div>
-          {stats.topReasons.length > 0 ? (
-            <ResponsiveContainer width="100%" height={280}>
-              <ComposedChart data={stats.topReasons} margin={{ top: 15, right: 30, left: 10, bottom: 42 }}>
-                <defs>
-                  <linearGradient id="barGradReason" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#f43f5e" stopOpacity={1} />
-                    <stop offset="100%" stopColor="#be123c" stopOpacity={0.85} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(255, 255, 255, 0.08)" />
-                <XAxis dataKey="name" tick={{ fill: '#cbd5e1', fontSize: 10.5, fontWeight: 500 }} axisLine={{ stroke: '#334155' }} tickLine={false}
-                  interval={0} angle={-15} textAnchor="end" height={44} />
-                <YAxis yAxisId="left" tick={{ fill: '#f43f5e', fontSize: 11 }} axisLine={{ stroke: '#334155' }} tickLine={false}
-                  label={{ value: 'Hours', angle: -90, position: 'insideLeft', fill: '#f43f5e', fontSize: 11, offset: 12 }} />
-                <YAxis yAxisId="right" orientation="right" allowDecimals={false} tick={{ fill: '#38bdf8', fontSize: 11 }} axisLine={{ stroke: '#334155' }} tickLine={false}
-                  label={{ value: 'Count', angle: 90, position: 'insideRight', fill: '#38bdf8', fontSize: 11, offset: 12 }} />
-                <RechartsTooltip contentStyle={ttStyle} itemStyle={ttItemStyle} labelStyle={ttLabelStyle} />
-                <Legend align="center" verticalAlign="top" height={32} iconType="circle" wrapperStyle={{ fontSize: '11px', color: '#cbd5e1' }} />
-                <Bar isAnimationActive={false} yAxisId="left" dataKey="hours" name="Downtime (h)" fill="url(#barGradReason)" radius={[6,6,0,0]} barSize={stats.topReasons.length <= 2 ? 48 : 34}>
-                  <LabelList dataKey="hours" position="top" fill="#fecdd3" fontSize={11} fontWeight={600} offset={6} formatter={(v: any) => v > 0 ? `${v}h` : ''} />
-                </Bar>
-                <Line isAnimationActive={false} yAxisId="right" type="monotone" dataKey="count" name="Incidents" stroke="#38bdf8" strokeWidth={2.5}
-                  dot={{ r: 4, fill: '#0f172a', stroke: '#38bdf8', strokeWidth: 2 }} activeDot={{ r: 6, fill: '#38bdf8' }}>
-                  <LabelList dataKey="count" position="top" fill="#bae6fd" fontSize={11} fontWeight={600} offset={8} formatter={(v: any) => v > 0 ? v : ''} />
-                </Line>
-              </ComposedChart>
-            </ResponsiveContainer>
-          ) : emptyChart(280)}
-        </div>
-
-        {/* Loss by Category horizontal bar */}
-        <div className="chart-box col-5">
-          <div className="chart-box-header">
-            <h4>Downtime by Category</h4>
-          </div>
-          {stats.catData.length > 0 ? (
-            <ResponsiveContainer width="100%" height={280}>
-              <BarChart data={stats.catData} layout="vertical" margin={{ top: 15, right: 40, left: 10, bottom: 10 }}>
-                <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="rgba(255, 255, 255, 0.08)" />
-                <XAxis type="number" tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={{ stroke: '#334155' }} tickLine={false} />
-                <YAxis dataKey="name" type="category" tick={{ fill: '#cbd5e1', fontSize: 11, fontWeight: 500 }} axisLine={{ stroke: '#334155' }} tickLine={false} width={145} />
-                <RechartsTooltip contentStyle={ttStyle} itemStyle={ttItemStyle} labelStyle={ttLabelStyle} formatter={(v: any) => [`${v}h`, 'Downtime']} />
-                <Bar isAnimationActive={false} dataKey="hours" radius={[0,6,6,0]} barSize={stats.catData.length <= 2 ? 32 : stats.catData.length <= 4 ? 24 : 18}>
-                  {stats.catData.map((d, i) => <Cell key={i} fill={d.fill} />)}
-                  <LabelList dataKey="hours" position="right" fill="#f8fafc" fontSize={11} fontWeight={700}
-                    formatter={(v: any) => v > 0 ? `${v}h` : ''} />
+                  <LabelList
+                    dataKey="displayLabel"
+                    position="top"
+                    fill="#fca5a5"
+                    fontSize={12}
+                    fontWeight={700}
+                    offset={6}
+                  />
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
-          ) : emptyChart(280)}
+          ) : emptyChart(260)}
         </div>
-
-        {/* ── CHARTS ROW 3 — Hourly rhythm + RCA ── */}
-
-        {/* 24-hour production rhythm */}
-        <div className="chart-box col-7">
-          <div className="chart-box-header">
-            <h4>24-Hour Production Rhythm</h4>
-            <p className="chart-sub">Factory Day (06:00 → 06:00)</p>
-          </div>
-
-          <ResponsiveContainer width="100%" height={260}>
-            <AreaChart data={stats.hourlyData} margin={{ top: 10, right: 25, left: 10, bottom: 10 }}>
-              <defs>
-                <linearGradient id="gradBd" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor={C.breakdown} stopOpacity={0.65} />
-                  <stop offset="95%" stopColor={C.breakdown} stopOpacity={0.02} />
-                </linearGradient>
-                <linearGradient id="gradMin" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor={C.minor} stopOpacity={0.65} />
-                  <stop offset="95%" stopColor={C.minor} stopOpacity={0.02} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(255, 255, 255, 0.08)" />
-              <XAxis dataKey="name" tick={{ fill: '#cbd5e1', fontSize: 10.5, fontWeight: 500 }} axisLine={{ stroke: '#334155' }} tickLine={false} interval={1} />
-              <YAxis allowDecimals={false} tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={{ stroke: '#334155' }} tickLine={false}
-                label={{ value: 'Incidents', angle: -90, position: 'insideLeft', fill: '#94a3b8', fontSize: 11, offset: 12 }} />
-              <RechartsTooltip contentStyle={ttStyle} itemStyle={ttItemStyle} labelStyle={ttLabelStyle} />
-              <Legend align="center" verticalAlign="top" height={30} iconType="circle" wrapperStyle={{ fontSize: '11px', color: '#cbd5e1' }} />
-              <Area isAnimationActive={false} type="monotone" dataKey="bd" name="Breakdown" stroke={C.breakdown} strokeWidth={2.5} fill="url(#gradBd)" dot={{ r: 3, fill: C.breakdown }} activeDot={{ r: 5 }} />
-              <Area isAnimationActive={false} type="monotone" dataKey="min" name="Minor Stoppage" stroke={C.minor} strokeWidth={2.5} fill="url(#gradMin)" dot={{ r: 3, fill: C.minor }} activeDot={{ r: 5 }} />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
-
-        {/* RCA compliance donut */}
-        <div className="chart-box col-5">
-          <div className="chart-box-header">
-            <h4>RCA Compliance</h4>
-            <p className="chart-sub">Benchmark: ≥ 80% Complete</p>
-          </div>
-          <div style={{ position: 'relative' }}>
-            <ResponsiveContainer width="100%" height={180}>
-              <PieChart>
-                <Pie isAnimationActive={false} data={stats.rcaData}
-                  cx="50%" cy="50%" innerRadius={58} outerRadius={84}
-                  paddingAngle={stats.rcaData.length > 1 ? 4 : 0} dataKey="value" labelLine={false}
-                  stroke="#0f172a" strokeWidth={2}
-                >
-                  {stats.rcaData.map((d, i) => <Cell key={i} fill={d.fill} />)}
-                </Pie>
-                <RechartsTooltip contentStyle={ttStyle} itemStyle={ttItemStyle} labelStyle={ttLabelStyle} />
-              </PieChart>
-            </ResponsiveContainer>
-            <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', textAlign: 'center', pointerEvents: 'none' }}>
-              <div style={{ fontSize: 24, fontWeight: 800, color: stats.rcaPct >= 80 ? '#22c55e' : stats.rcaPct >= 50 ? '#f59e0b' : '#ef4444', lineHeight: 1 }}>
-                {stats.rcaPct}%
-              </div>
-              <div style={{ fontSize: 9.5, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700, marginTop: 4 }}>
-                RCA Done
-              </div>
-            </div>
-          </div>
-          <div className="rca-target-banner">
-            <div className="rca-meta-row">
-              <span className="rca-target-label">Target: <strong>80% Complete</strong></span>
-              <span className={`rca-target-badge ${stats.rcaPct >= 80 ? 'achieved' : 'missed'}`}>
-                {stats.rcaPct >= 80 ? '✓ Target Met' : '⚠ Action Needed'}
-              </span>
-            </div>
-            <div className="rca-progress-track">
-              <div
-                className="rca-progress-bar"
-                style={{
-                  width: `${Math.min(100, stats.rcaPct)}%`,
-                  backgroundColor: stats.rcaPct >= 80 ? '#22c55e' : stats.rcaPct >= 50 ? '#f59e0b' : '#ef4444',
-                }}
-              />
-              <div className="rca-progress-target-line" style={{ left: '80%' }} title="Target 80%" />
-            </div>
-            <div className="rca-stats-footer">
-              <span style={{ color: '#10b981', fontWeight: 600 }}>✓ {stats.docCnt} Documented</span>
-              <span style={{ color: '#94a3b8' }}>·</span>
-              <span style={{ color: stats.pendCnt > 0 ? '#f59e0b' : '#94a3b8', fontWeight: 600 }}>⏳ {stats.pendCnt} Pending</span>
-            </div>
-          </div>
-        </div>
-
-      </div>{/* end charts layout */}
+      </div>
 
       {/* ══════════════════════════════════════════════════════
-          TOP 5 CRITICAL INCIDENTS TABLE
+          SECTION 4: TOP 5 LONGEST STOPPAGES (CRITICAL EVENTS TABLE)
       ══════════════════════════════════════════════════════ */}
-      <div className="tpm-table-section" style={{ marginTop: '28px' }}>
-        <div className="tpm-section-header" style={{ justifyContent: 'center', textAlign: 'center', flexDirection: 'column', gap: '4px' }}>
-          <h4 style={{ fontSize: '17px', fontWeight: 700, margin: 0 }}>Top 5 Longest Stoppages</h4>
-          <p className="chart-sub">Ranked by lost duration</p>
+      <div className="tpm-table-section" style={{ marginTop: '16px' }}>
+        <div className="tpm-section-header">
+          <h4 style={{ fontSize: '17px', fontWeight: 700, margin: '0 0 4px 0' }}>Top 5 Longest Stoppages</h4>
+          <p className="chart-sub">Ranked by lost duration · High-priority investigation targets</p>
         </div>
+
         <div className="table-responsive">
           <table className="tpm-table">
             <thead>
               <tr>
-                <th>#</th>
+                <th style={{ width: 50 }}>#</th>
                 <th>Date &amp; Time</th>
                 <th>Category</th>
                 <th>Duration</th>
-                <th>Reason</th>
-                <th>RCA Status</th>
+                <th>Root Cause / Reason</th>
+                <th style={{ width: 140 }}>RCA Status</th>
               </tr>
             </thead>
             <tbody>
               {stats.top5.map(item => (
                 <tr key={item.rank}>
-                  <td><span style={{ fontWeight: 700, color: item.rank === 1 ? '#ef4444' : '#f8fafc' }}>#{item.rank}</span></td>
-                  <td style={{ fontSize: '0.85rem' }}>{item.date}</td>
+                  <td>
+                    <span style={{ fontWeight: 800, color: item.rank === 1 ? '#ef4444' : '#f8fafc', fontSize: '14px' }}>
+                      #{item.rank}
+                    </span>
+                  </td>
+                  <td style={{ fontSize: '13px', fontWeight: 500, color: '#e2e8f0' }}>{item.date}</td>
                   <td>
                     <span className={`tpm-badge ${item.isBd ? 'danger' : 'warning'}`}>
                       {item.category}
                     </span>
                   </td>
-                  <td className="dur" style={{ color: '#f8fafc', fontWeight: 700 }}>{item.duration}</td>
-                  <td className="reason-col" style={{ fontSize: '0.85rem' }}>{item.reason}</td>
+                  <td className="dur" style={{ color: '#f8fafc', fontWeight: 800, fontSize: '14px', fontFamily: 'monospace' }}>
+                    {item.duration}
+                  </td>
+                  <td className="reason-col" style={{ fontSize: '13px', fontWeight: 500 }}>
+                    {item.reason}
+                  </td>
                   <td>
                     <span className={`tpm-badge-outline ${item.rca ? 'success' : 'pending'}`}>
-                      {item.rca ? '✓ RCA Done' : '⏳ Pending'}
+                      {item.rca ? '✓ RCA Done' : '⏳ Action Pending'}
                     </span>
                   </td>
                 </tr>
@@ -696,22 +707,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ records, businessRange, th
             </tbody>
           </table>
         </div>
-      </div>
-
-      {/* ══════════════════════════════════════════════════════
-          METHODOLOGY FOOTNOTE
-      ══════════════════════════════════════════════════════ */}
-      <div className="tpm-methodology">
-        <details>
-          <summary>How these numbers are calculated</summary>
-          <div className="details-content">
-            <p><strong>Production Day:</strong> Runs 06:00 AM → 06:00 AM next morning. Events before 06:00 belong to the previous day.</p>
-            <p><strong>3 Shifts:</strong> Shift A = 06:00–14:00 · Shift B = 14:00–22:00 · Shift C = 22:00–06:00.</p>
-            <p><strong>Total Downtime:</strong> Sum of all event durations in the selected filter period.</p>
-            <p><strong>Avg Breakdown (MTTR):</strong> Average duration of "Breakdown" type events only.</p>
-            <p><strong>RCA Complete:</strong> % of events where the Reason/Action field is filled (not blank or "Pending reason").</p>
-          </div>
-        </details>
       </div>
 
     </div>

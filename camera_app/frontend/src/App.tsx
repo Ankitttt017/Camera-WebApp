@@ -1490,10 +1490,31 @@ function SavedPage({
   function changeDatePreset(value: ReportDatePreset) {
     setDatePreset(value);
     const range = presetDateRange(value, fromDate, toDate);
+    const nFrom = range?.fromDate || fromDate;
+    const nTo = range?.toDate || toDate;
     if (range && value !== 'custom') {
-      setFromDate(range.fromDate);
-      setToDate(range.toDate);
+      setFromDate(nFrom);
+      setToDate(nTo);
+      setAppliedFilters(prev => ({
+        ...prev,
+        datePreset: value,
+        fromDate: nFrom,
+        toDate: nTo,
+      }));
+      setPage(1);
     }
+  }
+
+  function handleCategoryChange(newCat: string) {
+    setCategory(newCat);
+    setAppliedFilters(prev => ({ ...prev, category: newCat }));
+    setPage(1);
+  }
+
+  function handleShiftChange(newShift: ReportShift) {
+    setShift(newShift);
+    setAppliedFilters(prev => ({ ...prev, shift: newShift }));
+    setPage(1);
   }
 
   function applyFilters() {
@@ -1828,7 +1849,7 @@ function SavedPage({
           </label>
           <label>
             Category
-            <select value={category} onChange={(event) => setCategory(event.target.value)}>
+            <select value={category} onChange={(event) => handleCategoryChange(event.target.value)}>
               <option value="all">All</option>
               <option value="minor_stoppage">Minor Stoppage (&lt; {stoppageThresholdLabel(settings.max_record_seconds)})</option>
               <option value="breakdown">Breakdown (&gt; {stoppageThresholdLabel(settings.max_record_seconds)})</option>
@@ -1836,7 +1857,7 @@ function SavedPage({
           </label>
           <label>
             Shift
-            <select value={shift} onChange={(event) => setShift(event.target.value as ReportShift)}>
+            <select value={shift} onChange={(event) => handleShiftChange(event.target.value as ReportShift)}>
               <option value="all">All Shifts</option>
               <option value="A">Shift A</option>
               <option value="B">Shift B</option>
