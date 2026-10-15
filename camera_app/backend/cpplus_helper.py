@@ -10,12 +10,12 @@ import re
 
 # Force OpenCV to use TCP for RTSP instead of UDP to prevent packet loss / firewall drops
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
-# Restrict math/AI libraries to prevent maxing out all CPU cores (300%+ load)
-os.environ.setdefault("OMP_NUM_THREADS", "2")
-os.environ.setdefault("MKL_NUM_THREADS", "2")
-os.environ.setdefault("OPENBLAS_NUM_THREADS", "2")
-os.environ.setdefault("VECLIB_MAXIMUM_THREADS", "2")
-os.environ.setdefault("NUMEXPR_NUM_THREADS", "2")
+# Restrict math/AI libraries to prevent maxing out multiple CPU cores (100% max per task)
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("VECLIB_MAXIMUM_THREADS", "1")
+os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
 
 import secrets
 import shutil
@@ -278,7 +278,8 @@ TRANSCRIPTION_AUDIO_FILTER = os.getenv(
     'TRANSCRIPTION_AUDIO_FILTER',
     'highpass=f=120,lowpass=f=7500,afftdn=nf=-20:nt=w,speechnorm=e=4.0:r=0.0001:l=1',
 ).strip()
-TRANSCRIPTION_BEAM_SIZE = int(os.getenv('TRANSCRIPTION_BEAM_SIZE', '5'))
+TRANSCRIPTION_BEAM_SIZE = int(os.getenv('TRANSCRIPTION_BEAM_SIZE', '1'))
+TRANSCRIPTION_CPU_THREADS = int(os.getenv('TRANSCRIPTION_CPU_THREADS', '1'))
 TRANSCRIPTION_NO_SPEECH_THRESHOLD = float(os.getenv('TRANSCRIPTION_NO_SPEECH_THRESHOLD', '0.60'))
 TRANSCRIPTION_MAX_SEGMENT_NO_SPEECH_PROB = float(os.getenv('TRANSCRIPTION_MAX_SEGMENT_NO_SPEECH_PROB', '0.60'))
 TRANSCRIPTION_MIN_AVG_LOGPROB = float(os.getenv('TRANSCRIPTION_MIN_AVG_LOGPROB', '-1.10'))
@@ -2006,7 +2007,7 @@ def get_shared_whisper_model():
     model_size = TRANSCRIPTION_MODEL or 'small'
     device = os.getenv('TRANSCRIPTION_DEVICE', 'cpu')
     compute_type = os.getenv('TRANSCRIPTION_COMPUTE_TYPE', 'int8')
-    cpu_threads = int(os.getenv('TRANSCRIPTION_CPU_THREADS', '2'))
+    cpu_threads = max(1, TRANSCRIPTION_CPU_THREADS)
     download_root = str(TRANSCRIPTION_MODEL_CACHE / 'hf_hub') if (TRANSCRIPTION_MODEL_CACHE / 'hf_hub').exists() else None
     cache_key = (model_size, device, compute_type, download_root, cpu_threads)
     if cache_key not in _WHISPER_MODEL_CACHE:
@@ -3918,7 +3919,12 @@ def start_recording_internal(request: RecordingRequest):
             status_code=400,
             detail='Only manual and Gate Trigger recordings are allowed.',
         )
-    if recording_state.get('running') or (recording_thread and recording_thread.is_alive()):
+    global recording_thread, recording_process
+    if (
+        recording_state.get('running')
+        or (recording_thread and recording_thread.is_alive())
+        or (recording_process and recording_process.poll() is None)
+    ):
         return recording_state
 
     recording_stop_event.clear()
@@ -3961,9 +3967,18 @@ def start_recording(request: RecordingRequest, x_auth_token: str | None = Header
 
 
 def stop_recording_internal():
+    global recording_process
     recording_stop_event.set()
+    if recording_process and recording_process.poll() is None:
+        try:
+            recording_process.communicate(input=b'q', timeout=1.0)
+        except Exception:
+            try:
+                recording_process.terminate()
+            except Exception:
+                pass
     if recording_thread and recording_thread.is_alive():
-        recording_thread.join(timeout=2)
+        recording_thread.join(timeout=3)
     recording_state['running'] = False
     return recording_state
 
