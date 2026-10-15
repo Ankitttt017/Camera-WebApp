@@ -3891,9 +3891,14 @@ def recording_status():
     status['ffmpeg_available'] = bool(ffmpeg_executable())
     with shared_camera_lock:
         frame_at = shared_camera_state.get('frame_at')
+        has_frame = bool(
+            (shared_camera_state.get('frame_jpeg') is not None or shared_camera_state.get('frame') is not None)
+            and frame_at
+            and (time.monotonic() - float(frame_at) < 6.0)
+        )
         status['shared_camera'] = {
             'running': shared_camera_state.get('running'),
-            'has_frame': shared_camera_state.get('frame') is not None,
+            'has_frame': has_frame,
             'frame_age_seconds': round(time.monotonic() - float(frame_at), 2) if frame_at else None,
             'width': shared_camera_state.get('width'),
             'height': shared_camera_state.get('height'),
