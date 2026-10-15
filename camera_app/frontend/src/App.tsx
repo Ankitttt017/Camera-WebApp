@@ -632,7 +632,7 @@ function friendlyRecordingError(message?: string | null) {
   return 'Recording could not be completed. Check settings and camera connection.';
 }
 
-type IconName = 'live' | 'archive' | 'record' | 'settings' | 'logout' | 'camera' | 'maximize' | 'minimize' | 'fit' | 'audio' | 'storage' | 'activity' | 'power' | 'info' | 'play' | 'pause' | 'stop' | 'chevron' | 'eye' | 'eyeOff' | 'lock' | 'close' | 'chart';
+type IconName = 'live' | 'archive' | 'record' | 'settings' | 'logout' | 'camera' | 'maximize' | 'minimize' | 'fit' | 'audio' | 'volumeOff' | 'storage' | 'activity' | 'power' | 'info' | 'play' | 'pause' | 'stop' | 'chevron' | 'eye' | 'eyeOff' | 'lock' | 'close' | 'chart' | 'reload';
 
 function Icon({ name }: { name: IconName }) {
   const paths: Record<IconName, string> = {
@@ -648,6 +648,7 @@ function Icon({ name }: { name: IconName }) {
     minimize: 'M10 4v6h-6 M14 4v6h6 M10 20v-6h-6 M14 20v-6h6',
     fit: 'M8 5H5v3 M16 5h3v3 M19 16v3h-3 M8 19H5v-3',
     audio: 'M5 10v4h3l4 3V7L8 10z M16 9a4 4 0 0 1 0 6',
+    volumeOff: 'M5 10v4h3l4 3V7L8 10z M17 9l6 6M23 9l-6 6',
     storage: 'M5 6c0-1.1 3.1-2 7-2s7 .9 7 2-3.1 2-7 2-7-.9-7-2z M5 6v6c0 1.1 3.1 2 7 2s7-.9 7-2V6 M5 12v6c0 1.1 3.1 2 7 2s7-.9 7-2v-6',
     activity: 'M4 12h4l2-6 4 12 2-6h4',
     power: 'M12 3v9 M7.1 6.9a7 7 0 1 0 9.8 0',
@@ -659,6 +660,7 @@ function Icon({ name }: { name: IconName }) {
     eye: 'M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6z M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z',
     eyeOff: 'M3 3l18 18 M10.6 10.6A3 3 0 0 0 12 15a3 3 0 0 0 2.4-1.2 M7.1 7.1C4.2 8.8 2.5 12 2.5 12s3.5 6 9.5 6c1.5 0 2.8-.4 4-1 M17.3 14.7c2.6-1.6 4.2-4.7 4.2-4.7s-3.5-6-9.5-6c-1.2 0-2.4.2-3.4.6',
     lock: 'M7 10V8a5 5 0 0 1 10 0v2 M6 10h12v10H6z M12 14v3 M9 10V8a3 3 0 0 1 6 0v2',
+    reload: 'M23 4v6h-6 M1 20v-6h6 M3.51 9a9 9 0 0 1 14.85-3.36L23 10 M1 14l4.64 4.36A9 9 0 0 0 20.49 15',
   };
   return (
     <svg className="icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -1209,7 +1211,6 @@ function LivePage({
   const liveFrameRef = useRef<HTMLDivElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [audioEnabled, setAudioEnabled] = useState(false);
-  const [audioError, setAudioError] = useState('');
   const [nowTick, setNowTick] = useState(Date.now());
   const [activeEvent, setActiveEvent] = useState<{
     type: 'minor_stoppage' | 'breakdown';
@@ -1229,7 +1230,6 @@ function LivePage({
   }
 
   function toggleAudio() {
-    setAudioError('');
     setAudioEnabled((enabled) => !enabled);
   }
 
@@ -1239,7 +1239,8 @@ function LivePage({
       return;
     }
     audioRef.current?.play().catch(() => {
-      setAudioError('Live audio stream could not be started. Check if the camera has audio enabled and FFmpeg is properly configured.');
+      // Silently handle - audio may not be available
+      console.warn('Live audio stream could not be started.');
     });
   }, [audioEnabled, liveAudioUrl]);
 
@@ -1320,11 +1321,12 @@ function LivePage({
           <div className="live-frame-actions">
             <button
               type="button"
-              className={audioEnabled ? 'audio-enabled' : ''}
+              className={`live-audio-pill-btn ${audioEnabled ? 'audio-enabled' : ''}`}
               title={audioEnabled ? 'Mute live audio' : 'Play live audio'}
               onClick={toggleAudio}
             >
-              <Icon name="audio" />
+              <Icon name={audioEnabled ? 'audio' : 'volumeOff'} />
+              <span>{audioEnabled ? 'Audio ON' : 'Audio OFF'}</span>
             </button>
             <button type="button" title={liveFullscreen ? 'Exit Fullscreen' : 'Fullscreen'} onClick={toggleFullscreen}>
               <Icon name={liveFullscreen ? 'minimize' : 'maximize'} />
@@ -1336,11 +1338,10 @@ function LivePage({
               ref={audioRef}
               src={liveAudioUrl}
               autoPlay
-              onError={() => setAudioError('Live audio is unavailable. Check FFmpeg installation path and verify camera audio is enabled.')}
+              onError={() => console.warn('Live audio is unavailable.')}
             />
           )}
         </div>
-        {audioError && <div className="error-banner live-audio-warning">{audioError}</div>}
         {recording.error && recording.running && <div className="error-banner">Recording status: {friendlyRecordingError(recording.error)}</div>}
       </div>
     </section>
@@ -1600,6 +1601,7 @@ function SavedPage({
       if (!document.fullscreenElement) {
         playerRef.current?.pause();
         setPlaybackState('idle');
+        setSelected(null);
       }
     }
     document.addEventListener('fullscreenchange', onFullscreenChange);
@@ -2007,12 +2009,25 @@ function SavedPage({
         <div className="record-player-wrap report-fullscreen-player" ref={playerWrapRef} aria-hidden={!playerFullscreen}>
           <div className="modal-player-card">
             <div className="modal-video-container">
-              <div className="video-player-toolbar close-only">
+              <div className="video-player-toolbar">
+                <button
+                  type="button"
+                  className="toolbar-btn reload-btn"
+                  title="Reload video"
+                  onClick={retrySelectedVideo}
+                >
+                  <Icon name="reload" />
+                </button>
                 <button
                   type="button"
                   className="toolbar-btn close-btn"
-                  title="Close player"
-                  onClick={() => setSelected(null)}
+                  title="Close player (Esc)"
+                  onClick={() => {
+                    if (document.fullscreenElement) {
+                      document.exitFullscreen().catch(() => {});
+                    }
+                    setSelected(null);
+                  }}
                 >
                   <Icon name="close" />
                 </button>
