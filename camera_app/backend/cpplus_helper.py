@@ -229,12 +229,12 @@ RECORDING_VIDEO_CODEC = os.getenv('RECORDING_VIDEO_CODEC', 'copy').strip()
 RECORDING_PRESET = os.getenv('RECORDING_PRESET', 'ultrafast').strip()
 RECORDING_BITRATE = os.getenv('RECORDING_BITRATE', '2000k').strip()
 DEFAULT_SPEECH_AUDIO_FILTER = (
-    'highpass=f=180:poles=2,'
-    'afftdn=nr=28:nf=-35:tn=1,'
-    'equalizer=f=300:t=q:w=1.5:g=-3,'
+    'volume=0.6,'
+    'highpass=f=220:poles=2,highpass=f=220:poles=2,'
+    'lowpass=f=3400:poles=2,lowpass=f=3400:poles=2,'
+    'afftdn=nr=32:nf=-25:tn=1,'
     'equalizer=f=1800:t=q:w=1.2:g=8,'
-    'equalizer=f=2800:t=q:w=1.2:g=6,'
-    'lowpass=f=4200:poles=2,'
+    'agate=threshold=0.025:ratio=15:attack=10:release=300:range=0.01,'
     'speechnorm=e=5.0:r=0.0001:l=1,'
     'alimiter=limit=0.92'
 )
@@ -268,7 +268,7 @@ TRANSCRIPTION_VAD_FILTER = os.getenv('TRANSCRIPTION_VAD_FILTER', '1').strip().lo
 TRANSCRIPTION_VAD_THRESHOLD = float(os.getenv('TRANSCRIPTION_VAD_THRESHOLD', '0.40'))
 TRANSCRIPTION_AUDIO_FILTER = os.getenv(
     'TRANSCRIPTION_AUDIO_FILTER',
-    'highpass=f=180:poles=2,afftdn=nr=28:nf=-35:tn=1,equalizer=f=1800:t=q:w=1.2:g=6,lowpass=f=4200:poles=2,speechnorm=e=5.0:r=0.0001:l=1',
+    'volume=0.6,highpass=f=220:poles=2,lowpass=f=3400:poles=2,afftdn=nr=32:nf=-25:tn=1,equalizer=f=1800:t=q:w=1.2:g=8,agate=threshold=0.025:ratio=15:attack=10:release=300:range=0.01,speechnorm=e=5.0:r=0.0001:l=1',
 ).strip()
 TRANSCRIPTION_BEAM_SIZE = int(os.getenv('TRANSCRIPTION_BEAM_SIZE', '1'))
 TRANSCRIPTION_CPU_THREADS = int(os.getenv('TRANSCRIPTION_CPU_THREADS', '1'))
