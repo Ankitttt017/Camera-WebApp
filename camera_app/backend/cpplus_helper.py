@@ -215,18 +215,18 @@ MAX_GATE_RECORD_SECONDS = 300
 RECORDING_MAX_WIDTH = int(os.getenv('RECORDING_MAX_WIDTH', '1280'))
 RECORDING_TARGET_FPS = float(os.getenv('RECORDING_TARGET_FPS', os.getenv('RECORDING_FPS', '20')))
 RECORDING_CRF = int(os.getenv('RECORDING_CRF', '24'))
-RECORDING_VIDEO_CODEC = os.getenv('RECORDING_VIDEO_CODEC', 'h264_mf' if IS_WINDOWS else 'libx264').strip()
+RECORDING_VIDEO_CODEC = os.getenv('RECORDING_VIDEO_CODEC', 'copy').strip()
 RECORDING_PRESET = os.getenv('RECORDING_PRESET', 'ultrafast').strip()
 RECORDING_BITRATE = os.getenv('RECORDING_BITRATE', '2000k').strip()
 RECORDING_AUDIO_FILTER = os.getenv(
     'RECORDING_AUDIO_FILTER',
-    'highpass=f=300:poles=2,lowpass=f=3000:poles=2,'
-    'afftdn=nf=-20:nt=w:om=o,'
-    'agate=threshold=0.08:ratio=30:attack=3:release=60,'
-    'equalizer=f=800:t=q:w=2.0:g=3,equalizer=f=2200:t=q:w=1.5:g=4,'
-    'acompressor=threshold=0.04:ratio=8:attack=2:release=100:makeup=1,'
-    'speechnorm=e=6.25:r=0.00001:l=1,'
-    'volume=1.5,alimiter=limit=0.95',
+    'highpass=f=220:poles=2,highpass=f=220:poles=2,'
+    'bandreject=f=413:width_type=q:w=4.0,'
+    'afftdn=nr=32:nf=-25:tn=1,'
+    'lowpass=f=3400:poles=2,'
+    'equalizer=f=1600:t=q:w=1.8:g=5,equalizer=f=2600:t=q:w=1.5:g=4,'
+    'agate=threshold=0.06:ratio=25:attack=5:release=120:range=0.02,'
+    'alimiter=limit=0.90',
 ).strip()
 LIVE_PREVIEW_MAX_WIDTH = int(os.getenv('LIVE_PREVIEW_MAX_WIDTH', '1280'))
 LIVE_PREVIEW_TARGET_FPS = float(os.getenv('LIVE_PREVIEW_TARGET_FPS', '15'))
@@ -241,13 +241,13 @@ LIVE_VIDEO_BUFSIZE = os.getenv('LIVE_VIDEO_BUFSIZE', '1000k').strip()
 LIVE_RTSP_TRANSPORT = os.getenv('LIVE_RTSP_TRANSPORT', 'udp').strip().lower() or 'udp'
 LIVE_AUDIO_FILTER = os.getenv(
     'LIVE_AUDIO_FILTER',
-    'highpass=f=300:poles=2,lowpass=f=3000:poles=2,'
-    'afftdn=nf=-20:nt=w:om=o,'
-    'agate=threshold=0.08:ratio=30:attack=3:release=60,'
-    'equalizer=f=800:t=q:w=2.0:g=3,equalizer=f=2200:t=q:w=1.5:g=4,'
-    'acompressor=threshold=0.04:ratio=8:attack=2:release=100:makeup=1,'
-    'speechnorm=e=6.25:r=0.00001:l=1,'
-    'volume=1.5,alimiter=limit=0.95',
+    'highpass=f=220:poles=2,highpass=f=220:poles=2,'
+    'bandreject=f=413:width_type=q:w=4.0,'
+    'afftdn=nr=32:nf=-25:tn=1,'
+    'lowpass=f=3400:poles=2,'
+    'equalizer=f=1600:t=q:w=1.8:g=5,equalizer=f=2600:t=q:w=1.5:g=4,'
+    'agate=threshold=0.06:ratio=25:attack=5:release=120:range=0.02,'
+    'alimiter=limit=0.90',
 ).strip()
 USE_FFMPEG_RECORDING = True
 RECORDING_START_RETRY_SECONDS = 1.0
@@ -817,6 +817,8 @@ def shared_camera_worker(
                     '-hide_banner',
                     '-loglevel',
                     'error',
+                    '-threads',
+                    '1',
                     '-rtsp_transport',
                     LIVE_RTSP_TRANSPORT,
                     '-fflags',
@@ -834,6 +836,8 @@ def shared_camera_worker(
                     '-i',
                     url,
                     '-an',
+                    '-threads',
+                    '1',
                     '-vf',
                     f'scale=min({LIVE_PREVIEW_MAX_WIDTH}\\,iw):-2,fps={LIVE_PREVIEW_TARGET_FPS:g}',
                     '-q:v',
@@ -2007,6 +2011,8 @@ FACTORY_HINDI_CORRECTIONS = [
     (r'(?<!\S)(गेट|गेठ)(?!\S)', 'गेट'),
     (r'(?<!\S)(टूल\s*चेन्ज|तुल\s*चेंज)(?!\S)', 'टूल चेंज'),
     (r'(?<!\S)(हैंड\s*ओवर|हेंडओवर)(?!\S)', 'हैंडओवर'),
+    (r'(?<!\S)(अठो|आठो|अथो)(?!\S)', 'ऑटो'),
+    (r'(?<!\S)(सल|शल)\s+(वाले)(?!\S)', r'सेल \2'),
 ]
 
 
@@ -2222,7 +2228,15 @@ def scan_recording_index(request: RecordingIndexRequest) -> dict:
     return {'db_path': str(db_path), 'indexed': indexed, 'pruned': pruned, **result}
 
 
-def prune_missing_recordings(storage_root: str | Path) -> int:
+_LAST_PRUNE_TIMESTAMP: float = 0.0
+
+
+def prune_missing_recordings(storage_root: str | Path, force: bool = False) -> int:
+    global _LAST_PRUNE_TIMESTAMP
+    now = time.monotonic()
+    if not force and (now - _LAST_PRUNE_TIMESTAMP) < 300.0:
+        return 0
+    _LAST_PRUNE_TIMESTAMP = now
     db_path = init_recording_index(storage_root)
     missing_paths = []
     with get_db_connection() as connection:
@@ -3000,9 +3014,13 @@ def record_camera_ffmpeg_worker(request: RecordingRequest) -> bool:
         '-map',
         '0:a?',
     ]
-    if RECORDING_VIDEO_CODEC == 'copy':
+    codec = RECORDING_VIDEO_CODEC
+    if codec == 'h264_mf' and not IS_WINDOWS:
+        codec = 'copy'
+
+    if codec == 'copy':
         command.extend(['-c:v', 'copy'])
-    elif RECORDING_VIDEO_CODEC == 'h264_mf':
+    elif codec == 'h264_mf':
         command.extend([
             '-c:v',
             'h264_mf',
@@ -3025,6 +3043,8 @@ def record_camera_ffmpeg_worker(request: RecordingRequest) -> bool:
             RECORDING_PRESET,
             '-crf',
             str(RECORDING_CRF),
+            '-threads',
+            str(int(os.getenv('RECORDING_FFMPEG_THREADS', '2'))),
             '-vf',
             f'scale=min({RECORDING_MAX_WIDTH}\\,iw):-2,fps={RECORDING_TARGET_FPS:g}',
             '-fps_mode',
@@ -3651,6 +3671,8 @@ def live_video_response(
         'ultrafast',
         '-tune',
         'zerolatency',
+        '-threads',
+        str(int(os.getenv('RECORDING_FFMPEG_THREADS', '2'))),
         '-pix_fmt',
         'yuv420p',
         '-vf',
