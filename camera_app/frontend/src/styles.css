@@ -1560,21 +1560,25 @@ nav button.active .nav-count {
 .live-workbench {
   display: flex !important;
   flex-direction: column;
-  align-items: center;
+  align-items: stretch;
   justify-content: center;
   height: 100%;
   width: 100%;
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
 }
 
 .feed-column {
   width: 100%;
-  max-width: 1440px;
+  max-width: 100%;
   height: 100%;
   display: flex;
   flex-direction: column;
   justify-content: center;
+  align-items: stretch;
   min-height: 0;
+  flex: 1;
 }
 
 .live-frame {
@@ -1585,11 +1589,13 @@ nav button.active .nav-count {
   box-shadow: var(--shadow-2xl);
   border: 1px solid var(--border-strong);
   width: 100%;
-  height: calc(100vh - 160px);
+  height: calc(100vh - 150px);
+  max-height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
   min-height: 0;
+  flex: 1;
 }
 
 .live-frame img {
