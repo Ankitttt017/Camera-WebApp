@@ -241,7 +241,31 @@ DEFAULT_SPEECH_AUDIO_FILTER = (
     'volume=1.5,'
     'alimiter=limit=0.85'
 )
-RECORDING_AUDIO_FILTER = os.getenv('RECORDING_AUDIO_FILTER', DEFAULT_SPEECH_AUDIO_FILTER).strip()
+
+
+def resolve_speech_audio_filter(env_var_name: str) -> str:
+    val = os.getenv(env_var_name, '').strip()
+    if not val:
+        return DEFAULT_SPEECH_AUDIO_FILTER
+    obsolete_markers = [
+        'speechnorm',
+        'bandreject=f=413',
+        'agate=threshold=0.06',
+        'agate=threshold=0.025',
+        'volume=0.6',
+        'volume=0.35',
+        'highpass=f=220',
+        'highpass=f=180',
+        'lowpass=f=3400',
+        'lowpass=f=4200',
+        'lowpass=f=2800',
+    ]
+    if any(marker in val for marker in obsolete_markers):
+        return DEFAULT_SPEECH_AUDIO_FILTER
+    return val
+
+
+RECORDING_AUDIO_FILTER = resolve_speech_audio_filter('RECORDING_AUDIO_FILTER')
 LIVE_PREVIEW_MAX_WIDTH = int(os.getenv('LIVE_PREVIEW_MAX_WIDTH', '1280'))
 LIVE_PREVIEW_TARGET_FPS = float(os.getenv('LIVE_PREVIEW_TARGET_FPS', '12'))
 LIVE_PREVIEW_JPEG_QUALITY = int(os.getenv('LIVE_PREVIEW_JPEG_QUALITY', '82'))
@@ -253,7 +277,7 @@ LIVE_VIDEO_BITRATE = os.getenv('LIVE_VIDEO_BITRATE', '1800k').strip()
 LIVE_VIDEO_MAXRATE = os.getenv('LIVE_VIDEO_MAXRATE', '2200k').strip()
 LIVE_VIDEO_BUFSIZE = os.getenv('LIVE_VIDEO_BUFSIZE', '1000k').strip()
 LIVE_RTSP_TRANSPORT = os.getenv('LIVE_RTSP_TRANSPORT', 'udp').strip().lower() or 'udp'
-LIVE_AUDIO_FILTER = os.getenv('LIVE_AUDIO_FILTER', DEFAULT_SPEECH_AUDIO_FILTER).strip()
+LIVE_AUDIO_FILTER = resolve_speech_audio_filter('LIVE_AUDIO_FILTER')
 USE_FFMPEG_RECORDING = True
 RECORDING_START_RETRY_SECONDS = 1.0
 RECORDING_START_STALE_SECONDS = 4.0
@@ -269,10 +293,7 @@ TRANSCRIPTION_TMP_DIR = APP_BASE_DIR / 'transcription_tmp'
 TRANSCRIPTION_MODEL_CACHE = Path(os.getenv('TRANSCRIPTION_MODEL_CACHE', APP_BASE_DIR / 'model_cache'))
 TRANSCRIPTION_VAD_FILTER = os.getenv('TRANSCRIPTION_VAD_FILTER', '1').strip().lower() not in {'0', 'false', 'no', 'off'}
 TRANSCRIPTION_VAD_THRESHOLD = float(os.getenv('TRANSCRIPTION_VAD_THRESHOLD', '0.40'))
-TRANSCRIPTION_AUDIO_FILTER = os.getenv(
-    'TRANSCRIPTION_AUDIO_FILTER',
-    'volume=0.30,highpass=f=300:poles=2,bandreject=f=411:width_type=q:w=5.0,bandreject=f=822:width_type=q:w=5.0,lowpass=f=2600:poles=2,afftdn=nr=42:nf=-24:tn=1,agate=threshold=0.085:ratio=15:knee=1:attack=10:release=220:range=0.005,equalizer=f=1200:t=q:w=1.0:g=9,equalizer=f=2000:t=q:w=1.0:g=7,volume=1.5,alimiter=limit=0.85',
-).strip()
+TRANSCRIPTION_AUDIO_FILTER = resolve_speech_audio_filter('TRANSCRIPTION_AUDIO_FILTER')
 TRANSCRIPTION_BEAM_SIZE = int(os.getenv('TRANSCRIPTION_BEAM_SIZE', '1'))
 TRANSCRIPTION_CPU_THREADS = int(os.getenv('TRANSCRIPTION_CPU_THREADS', '1'))
 TRANSCRIPTION_NO_SPEECH_THRESHOLD = float(os.getenv('TRANSCRIPTION_NO_SPEECH_THRESHOLD', '0.60'))
