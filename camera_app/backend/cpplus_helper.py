@@ -232,17 +232,14 @@ RECORDING_VIDEO_CODEC = os.getenv('RECORDING_VIDEO_CODEC', 'copy').strip()
 RECORDING_PRESET = os.getenv('RECORDING_PRESET', 'ultrafast').strip()
 RECORDING_BITRATE = os.getenv('RECORDING_BITRATE', '2000k').strip()
 DEFAULT_SPEECH_AUDIO_FILTER = (
-    'volume=0.30,'
-    'highpass=f=300:poles=2,highpass=f=300:poles=2,'
-    'bandreject=f=411:width_type=q:w=5.0,'
-    'bandreject=f=822:width_type=q:w=5.0,'
-    'lowpass=f=2600:poles=2,lowpass=f=2600:poles=2,'
-    'afftdn=nr=42:nf=-24:tn=1,'
-    'agate=threshold=0.085:ratio=15:knee=1:attack=10:release=220:range=0.005,'
-    'equalizer=f=1200:t=q:w=1.0:g=9,'
-    'equalizer=f=2000:t=q:w=1.0:g=7,'
-    'volume=1.5,'
-    'alimiter=limit=0.85'
+    'highpass=f=260:poles=2,'
+    'lowpass=f=3400:poles=2,'
+    'bandreject=f=411:width_type=q:w=4.0,'
+    'bandreject=f=822:width_type=q:w=4.0,'
+    'afftdn=nr=45:nf=-25:tn=1:gs=4,'
+    'agate=threshold=0.025:range=0.0005:attack=1:release=250:knee=1.5,'
+    'equalizer=f=1800:width_type=q:w=1.2:g=3.5,'
+    'alimiter=limit=0.92'
 )
 
 
@@ -252,16 +249,14 @@ def resolve_speech_audio_filter(env_var_name: str) -> str:
         return DEFAULT_SPEECH_AUDIO_FILTER
     obsolete_markers = [
         'speechnorm',
-        'bandreject=f=413',
+        'agate=threshold=0.085',
         'agate=threshold=0.06',
-        'agate=threshold=0.025',
-        'volume=0.6',
+        'volume=0.30',
         'volume=0.35',
-        'highpass=f=220',
-        'highpass=f=180',
-        'lowpass=f=3400',
-        'lowpass=f=4200',
-        'lowpass=f=2800',
+        'volume=0.6',
+        'bandreject=f=413',
+        'equalizer=f=1200',
+        'equalizer=f=1600',
     ]
     if any(marker in val for marker in obsolete_markers):
         return DEFAULT_SPEECH_AUDIO_FILTER
@@ -1980,7 +1975,10 @@ def extract_transcription_audio(video_path: Path) -> Path:
         '-ar',
         '16000',
     ]
-    if TRANSCRIPTION_AUDIO_FILTER:
+    # If the video already has audio_filter applied during recording, do NOT double-filter it!
+    meta = load_sidecar_metadata(video_path)
+    has_audio_filter = bool(meta.get('compression', {}).get('audio_filter'))
+    if not has_audio_filter and TRANSCRIPTION_AUDIO_FILTER:
         command.extend(['-af', TRANSCRIPTION_AUDIO_FILTER])
     if TRANSCRIPTION_AUDIO_SECONDS > 0:
         command.extend(['-t', str(TRANSCRIPTION_AUDIO_SECONDS)])
