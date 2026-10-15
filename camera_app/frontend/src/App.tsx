@@ -1206,6 +1206,7 @@ function LivePage({
   plc: PlcStatus;
 }) {
   const liveUrl = useMemo(() => mjpegUrl(settings), [settings]);
+  const liveAudioUrl = useMemo(() => audioUrl(settings), [settings]);
   const [streamLoaded, setStreamLoaded] = useState(false);
   const displayOnline = online || streamLoaded;
   const liveFrameRef = useRef<HTMLDivElement | null>(null);
