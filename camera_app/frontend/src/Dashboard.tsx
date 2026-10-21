@@ -3,7 +3,7 @@ import { RecordingRecord } from './api';
 import {
   PieChart, Pie, Cell, Tooltip as RechartsTooltip,
   BarChart, Bar, XAxis, YAxis, CartesianGrid, ResponsiveContainer,
-  Legend, LabelList, Area, AreaChart,
+  Legend, LabelList,
 } from 'recharts';
 
 interface DashboardProps {
@@ -48,15 +48,6 @@ function fmtShort(sec: number) {
   return `${s}s`;
 }
 
-function fmtDigital(sec: number) {
-  if (!sec || sec < 0) return '0:00';
-  const h = Math.floor(sec / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  const s = Math.floor(sec % 60);
-  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-  return `${m}:${String(s).padStart(2, '0')}`;
-}
-
 function thresholdLabel(sec?: number) {
   const s = Math.max(1, Number(sec || 300));
   if (s % 60 === 0) return `${s / 60} min`;
@@ -85,7 +76,7 @@ const ttItemStyle = { color: '#334155', fontSize: '12px', padding: '2px 0', font
 const ttLabelStyle = { color: '#0f172a', fontWeight: 800, fontSize: '13px', marginBottom: 4 };
 
 /* ── Custom Pie Slice Label (Direct On-Chart Data Label) ────────── */
-const renderShiftSliceLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, value, name, pct }: any) => {
+const renderShiftSliceLabel = ({ cx, cy, midAngle, outerRadius, value, name, pct, sec }: any) => {
   if (!value || value <= 0) return null;
   const RADIAN = Math.PI / 180;
   const radius = outerRadius + 22;
@@ -99,10 +90,10 @@ const renderShiftSliceLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, val
       fill="#334155"
       textAnchor={x > cx ? 'start' : 'end'}
       dominantBaseline="central"
-      fontSize={11.5}
-      fontWeight={700}
+      fontSize={12}
+      fontWeight={600}
     >
-      {`${name}: ${value}h (${pct}%)`}
+      {`${name} · ${fmtShort(sec)} (${pct}%)`}
     </text>
   );
 };
@@ -217,7 +208,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ records, businessRange, th
       { key: 'C', name: 'Shift C', value: +(shiftMap.C / 3600).toFixed(2), sec: shiftMap.C, fill: INDUSTRIAL_COLORS.shiftC, count: shiftCntMap.C, pct: totalSec > 0 ? Math.round((shiftMap.C / totalSec) * 100) : 0 },
     ].map(s => ({
       ...s,
-      displayLabel: `${s.name}: ${s.value}h (${s.pct}%)`,
+      displayLabel: `${s.name} · ${fmtShort(s.sec)} (${s.pct}%)`,
     }));
     const shiftData = shiftSummary.filter(d => d.value > 0);
 
@@ -227,13 +218,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ records, businessRange, th
         const hrs = +(reasonDur[k] / 3600).toFixed(2);
         const cnt = reasonCnt[k];
         return {
-          name: k.length > 24 ? k.slice(0, 24) + '…' : k,
+          name: k.length > 34 ? k.slice(0, 34) + '…' : k,
           fullName: k,
           hours: hrs,
           sec: reasonDur[k],
           count: cnt,
           pct: totalSec > 0 ? +((reasonDur[k] / totalSec) * 100).toFixed(1) : 0,
-          displayLabel: `${hrs}h (${cnt} stops)`,
+          mins: +(reasonDur[k] / 60).toFixed(1),
+          displayLabel: `${fmtShort(reasonDur[k])} · ${cnt} ${cnt === 1 ? 'stop' : 'stops'}`,
         };
       })
       .sort((a, b) => b.hours - a.hours)
@@ -250,7 +242,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ records, businessRange, th
           sec: info.sec,
           count: info.count,
           fill: catColor(name),
-          displayLabel: `${hrs}h (${info.count} stops)`,
+          mins: +(info.sec / 60).toFixed(1),
+          displayLabel: `${fmtShort(info.sec)} · ${info.count} ${info.count === 1 ? 'stop' : 'stops'}`,
         };
       })
       .filter(d => d.hours > 0 || d.count > 0)
@@ -283,224 +276,180 @@ export const Dashboard: React.FC<DashboardProps> = ({ records, businessRange, th
     };
   }, [records, businessRange]);
 
+  const threshold = thresholdLabel(thresholdSeconds);
+
   /* ── Guard for no data ───────────────────────────────────────── */
   if (stats.totalEvents === 0) {
     return (
-      <div style={{ padding: '60px 0', textAlign: 'center', color: '#64748b' }}>
-        <div style={{ fontSize: '3rem' }}>📋</div>
-        <p style={{ marginTop: '12px', fontSize: '1.1rem', fontWeight: 600, color: '#94a3b8' }}>
-          No records found for the selected filter period.
-        </p>
+      <div className="er-table-card">
+        <div className="er-empty">
+          <strong>No stoppages in this period</strong>
+          <span>No minor stoppage or breakdown was recorded for the selected filters. Change the date range and apply again.</span>
+        </div>
       </div>
     );
   }
 
   const emptyChart = (h = 240) => (
-    <div style={{ height: h, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b', flexDirection: 'column', gap: 6 }}>
-      <span style={{ fontSize: '1.8rem' }}>📊</span>
-      <span style={{ fontSize: '0.85rem', fontWeight: 500 }}>No stoppage data available</span>
-    </div>
+    <div className="an-chart-empty" style={{ height: h }}>No stoppage data for this chart</div>
   );
 
+  const kpis: { label: string; value: string | number; sub?: string; icon: keyof typeof KPI_ICONS; tone: string }[] = [
+    { label: 'Total stoppages', value: stats.totalEvents, icon: 'list', tone: 'blue' },
+    { label: 'Total downtime', value: fmtShort(stats.totalSec), icon: 'clock', tone: 'violet' },
+    { label: `Breakdowns (> ${threshold})`, value: stats.bdCnt, sub: fmtShort(stats.bdSec), icon: 'alert', tone: 'red' },
+    { label: `Minor stoppages (< ${threshold})`, value: stats.minCnt, sub: fmtShort(stats.minSec), icon: 'pause', tone: 'amber' },
+    { label: 'Longest stoppage', value: fmtShort(stats.maxSec), icon: 'trend', tone: 'slate' },
+    {
+      label: 'Reason pending',
+      value: `${stats.pendCnt} / ${stats.totalEvents}`,
+      sub: `${stats.rcaPct}% reasons filled`,
+      icon: 'check',
+      tone: stats.rcaPct >= 80 ? 'green' : stats.rcaPct >= 50 ? 'amber' : 'red',
+    },
+  ];
+
+  const onlyPendingReasons = stats.topReasons.length === 1 && stats.topReasons[0].fullName === 'Pending Reason';
+
   return (
-    <div className="tpm-dashboard">
+    <div className="an-dashboard">
 
-      {/* ── Page Header ── */}
-      <div className="tpm-header">
-        <h1>Machine Stoppage Analytics</h1>
-        <p>Live analysis of {stats.totalEvents} stoppage records · Total Downtime: {fmtShort(stats.totalSec)}</p>
-      </div>
-
-      {/* ══════════════════════════════════════════════════════
-          CORE KPI METRICS (Title Upar, Value Niche, No Faltu Comments)
-      ══════════════════════════════════════════════════════ */}
-      <div className="tpm-kpi-grid">
-
-        {/* 1. Total Events */}
-        <div className="kpi-card color-blue">
-          <div className="kpi-label">TOTAL STOPPAGES</div>
-          <div className="kpi-val">{stats.totalEvents}</div>
-        </div>
-
-        {/* 2. Total Downtime */}
-        <div className="kpi-card color-flame">
-          <div className="kpi-label">TOTAL DOWNTIME</div>
-          <div className="kpi-val">{fmtShort(stats.totalSec)}</div>
-        </div>
-
-        {/* 3. Breakdown (> threshold) */}
-        <div className="kpi-card color-red">
-          <div className="kpi-label">BREAKDOWN (&gt; {thresholdLabel(thresholdSeconds)})</div>
-          <div className="kpi-val">{stats.bdCnt}</div>
-        </div>
-
-        {/* 4. Minor Stoppage (< threshold) */}
-        <div className="kpi-card color-orange">
-          <div className="kpi-label">MINOR STOPPAGE (&lt; {thresholdLabel(thresholdSeconds)})</div>
-          <div className="kpi-val">{stats.minCnt}</div>
-        </div>
-
-        {/* 5. Longest Stoppage */}
-        <div className="kpi-card color-purple">
-          <div className="kpi-label">LONGEST STOPPAGE</div>
-          <div className="kpi-val">{fmtShort(stats.maxSec)}</div>
-        </div>
-
-        {/* 6. Root Cause Action Status */}
-        <div className={`kpi-card ${stats.rcaPct >= 80 ? 'color-green' : stats.rcaPct >= 50 ? 'color-orange' : 'color-red'}`}>
-          <div className="kpi-label">ROOT CAUSE ACTION (RCA)</div>
-          <div className="kpi-val">{stats.pendCnt} Pending</div>
-        </div>
-
-      </div>
-
-      {/* ══════════════════════════════════════════════════════
-          SECTION 1: SABSE PEHLA GRAPH - HOURLY STOPPAGE TREND (24-HOUR FACTORY DAY)
-      ══════════════════════════════════════════════════════ */}
-      <div className="tpm-charts-layout">
-        <div className="chart-box col-12">
-          <div className="hourly-header-row">
-            <div className="hourly-legend">
-              <span className="hourly-legend-item">
-                <span className="hourly-legend-box" style={{ background: '#ef4444' }} />
-                Breakdown
-              </span>
-              <span className="hourly-legend-item">
-                <span className="hourly-legend-box" style={{ background: '#f59e0b' }} />
-                Minor Stoppage
-              </span>
-            </div>
-
-            <div className="hourly-controls">
-              <button
-                type="button"
-                className={`hourly-btn ${hourlyViewMode === 'stacked' ? 'active' : ''}`}
-                onClick={() => setHourlyViewMode('stacked')}
-              >
-                Stacked
-              </button>
-              <button
-                type="button"
-                className={`hourly-btn ${hourlyViewMode === 'sideBySide' ? 'active' : ''}`}
-                onClick={() => setHourlyViewMode('sideBySide')}
-              >
-                Side by side
-              </button>
+      {/* ── KPI cards ── */}
+      <div className="er-kpis an-kpis">
+        {kpis.map(k => (
+          <div key={k.label} className={`er-kpi er-kpi-${k.tone}`}>
+            <span className="er-kpi-icon">
+              <svg className="icon" viewBox="0 0 24 24" aria-hidden="true"><path d={KPI_ICONS[k.icon]} /></svg>
+            </span>
+            <div>
+              <span className="er-kpi-label">{k.label}</span>
+              <strong className="er-kpi-value">{k.value}</strong>
+              {k.sub && <span className="an-kpi-sub">{k.sub}</span>}
             </div>
           </div>
+        ))}
+      </div>
 
-          <ResponsiveContainer width="100%" height={290}>
-            <BarChart
-              data={stats.hourlyData}
-              margin={{ top: 25, right: 25, left: 10, bottom: 25 }}
-              barGap={hourlyViewMode === 'sideBySide' ? 2 : 0}
+      {/* ── Hourly trend ── */}
+      <section className="an-card">
+        <header className="an-card-head">
+          <div>
+            <h3>Stoppages by hour</h3>
+            <p>Factory day 06:00 to 06:00 next morning</p>
+          </div>
+          <div className="an-card-tools">
+            <span className="an-legend"><i style={{ background: INDUSTRIAL_COLORS.breakdown }} />Breakdown</span>
+            <span className="an-legend"><i style={{ background: INDUSTRIAL_COLORS.minor }} />Minor stoppage</span>
+            <div className="an-toggle" role="group" aria-label="Bar layout">
+              <button type="button" className={hourlyViewMode === 'stacked' ? 'is-active' : undefined} onClick={() => setHourlyViewMode('stacked')}>Stacked</button>
+              <button type="button" className={hourlyViewMode === 'sideBySide' ? 'is-active' : undefined} onClick={() => setHourlyViewMode('sideBySide')}>Side by side</button>
+            </div>
+          </div>
+        </header>
+
+        <ResponsiveContainer width="100%" height={280}>
+          <BarChart
+            data={stats.hourlyData}
+            margin={{ top: 22, right: 16, left: 0, bottom: 4 }}
+            barGap={hourlyViewMode === 'sideBySide' ? 2 : 0}
+          >
+            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+            <XAxis
+              dataKey="name"
+              tick={{ fill: '#64748b', fontSize: 11 }}
+              axisLine={{ stroke: '#cbd5e1' }}
+              tickLine={false}
+              interval={0}
+              angle={-45}
+              textAnchor="end"
+              height={48}
+            />
+            <YAxis
+              allowDecimals={false}
+              domain={[0, (dataMax: number) => Math.max(4, Math.ceil(dataMax * 1.15))]}
+              tick={{ fill: '#64748b', fontSize: 11 }}
+              axisLine={false}
+              tickLine={false}
+              width={40}
+              label={{ value: 'Stoppages', angle: -90, position: 'insideLeft', fill: '#64748b', fontSize: 11, offset: 10 }}
+            />
+            <RechartsTooltip
+              cursor={{ fill: 'rgba(148, 163, 184, 0.12)' }}
+              contentStyle={ttStyle}
+              itemStyle={ttItemStyle}
+              labelStyle={ttLabelStyle}
+              formatter={(v: any, name: any, item: any) => [
+                `${v} (Shift ${item?.payload?.shift || ''})`,
+                name === 'Breakdown' ? `Breakdown (> ${threshold})` : `Minor stoppage (< ${threshold})`,
+              ]}
+            />
+            <Bar
+              isAnimationActive={false}
+              dataKey="bd"
+              name="Breakdown"
+              stackId={hourlyViewMode === 'stacked' ? 'hourlyStack' : undefined}
+              fill={INDUSTRIAL_COLORS.breakdown}
+              barSize={hourlyViewMode === 'stacked' ? 24 : 12}
+              radius={hourlyViewMode === 'stacked' ? [0, 0, 0, 0] : [3, 3, 0, 0]}
             >
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-              <XAxis
-                dataKey="name"
-                tick={{ fill: '#64748b', fontSize: 11, fontWeight: 600 }}
-                axisLine={{ stroke: '#cbd5e1' }}
-                tickLine={false}
-                interval={0}
-                angle={-45}
-                textAnchor="end"
-                height={45}
+              <LabelList
+                dataKey="bdLabel"
+                position={hourlyViewMode === 'stacked' ? 'inside' : 'top'}
+                fill={hourlyViewMode === 'stacked' ? '#ffffff' : '#b91c1c'}
+                fontSize={11}
+                fontWeight={700}
               />
-              <YAxis
-                allowDecimals={false}
-                domain={[0, (dataMax: number) => Math.max(4, Math.ceil(dataMax * 1.15))]}
-                tick={{ fill: '#64748b', fontSize: 11, fontWeight: 600 }}
-                axisLine={{ stroke: '#cbd5e1' }}
-                tickLine={false}
-                label={{ value: 'Incidents', angle: -90, position: 'insideLeft', fill: '#475569', fontSize: 12, fontWeight: 700, offset: 12 }}
+            </Bar>
+            <Bar
+              isAnimationActive={false}
+              dataKey="min"
+              name="Minor Stoppage"
+              stackId={hourlyViewMode === 'stacked' ? 'hourlyStack' : undefined}
+              fill={INDUSTRIAL_COLORS.minor}
+              barSize={hourlyViewMode === 'stacked' ? 24 : 12}
+              radius={[3, 3, 0, 0]}
+            >
+              <LabelList
+                dataKey={hourlyViewMode === 'stacked' ? 'totalLabel' : 'minLabel'}
+                position="top"
+                fill={hourlyViewMode === 'stacked' ? '#0f172a' : '#b45309'}
+                fontSize={11}
+                fontWeight={700}
+                offset={4}
               />
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      </section>
 
-              <RechartsTooltip
-                contentStyle={ttStyle}
-                itemStyle={ttItemStyle}
-                labelStyle={ttLabelStyle}
-                formatter={(v: any, name: any, item: any) => [
-                  `${v} incidents (Shift ${item?.payload?.shift || ''})`,
-                  name === 'bd' || name === 'Breakdown' ? 'Breakdown (>2m)' : 'Minor Stoppage (<2m)'
-                ]}
-              />
-
-              <Bar
-                isAnimationActive={false}
-                dataKey="bd"
-                name="Breakdown"
-                stackId={hourlyViewMode === 'stacked' ? 'hourlyStack' : undefined}
-                fill="#ef4444"
-                barSize={hourlyViewMode === 'stacked' ? 26 : 14}
-                radius={hourlyViewMode === 'stacked' ? [0, 0, 0, 0] : [4, 4, 0, 0]}
-              >
-                <LabelList
-                  dataKey="bdLabel"
-                  position={hourlyViewMode === 'stacked' ? 'inside' : 'top'}
-                  fill={hourlyViewMode === 'stacked' ? '#ffffff' : '#ef4444'}
-                  fontSize={11}
-                  fontWeight={700}
-                  offset={hourlyViewMode === 'stacked' ? 0 : 4}
-                />
-              </Bar>
-
-              <Bar
-                isAnimationActive={false}
-                dataKey="min"
-                name="Minor Stoppage"
-                stackId={hourlyViewMode === 'stacked' ? 'hourlyStack' : undefined}
-                fill="#f59e0b"
-                barSize={hourlyViewMode === 'stacked' ? 26 : 14}
-                radius={[4, 4, 0, 0]}
-              >
-                <LabelList
-                  dataKey={hourlyViewMode === 'stacked' ? 'totalLabel' : 'minLabel'}
-                  position="top"
-                  fill={hourlyViewMode === 'stacked' ? '#0f172a' : '#d97706'}
-                  fontSize={11}
-                  fontWeight={700}
-                  offset={4}
-                />
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-
-          <div style={{ fontSize: '0.8rem', color: '#64748b', marginTop: '8px', textAlign: 'left', paddingLeft: '8px', fontWeight: 500 }}>
-            Factory day 06:00 to 06:00 next morning. Numbers read from your live graph.
-          </div>
-        </div>
-      </div>
-
-      {/* ══════════════════════════════════════════════════════
-          SECTION 2: SHIFT BREAKDOWN + CATEGORY LOSS (Side by Side)
-      ══════════════════════════════════════════════════════ */}
-      <div className="tpm-charts-layout">
-
-        {/* ── Chart: Downtime by Shift (Direct Data Labels On Graph) ── */}
-        <div className="chart-box col-6">
-          <div className="chart-box-header">
-            <h4>Downtime by Shift</h4>
-            <p className="chart-sub">Loss Distribution Across Production Shifts</p>
-          </div>
+      {/* ── Shift + category ── */}
+      <div className="an-grid-2">
+        <section className="an-card">
+          <header className="an-card-head">
+            <div>
+              <h3>Downtime by shift</h3>
+              <p>Share of lost time per production shift</p>
+            </div>
+          </header>
 
           {stats.shiftSummary.some(s => s.value > 0) ? (
             <div style={{ position: 'relative', width: '100%', height: 260 }}>
               <ResponsiveContainer width="100%" height={260}>
-                <PieChart margin={{ top: 10, right: 30, left: 30, bottom: 10 }}>
+                <PieChart margin={{ top: 10, right: 40, left: 40, bottom: 10 }}>
                   <Pie
                     isAnimationActive={false}
                     data={stats.shiftData}
                     cx="50%"
-                    cy="48%"
+                    cy="46%"
                     innerRadius={62}
-                    outerRadius={88}
+                    outerRadius={86}
                     dataKey="value"
                     nameKey="name"
                     stroke="#ffffff"
                     strokeWidth={3}
-                    paddingAngle={stats.shiftData.length > 1 ? 4 : 0}
+                    paddingAngle={stats.shiftData.length > 1 ? 3 : 0}
                     label={renderShiftSliceLabel}
-                    labelLine={{ stroke: '#94a3b8', strokeWidth: 1.5 }}
+                    labelLine={{ stroke: '#94a3b8', strokeWidth: 1 }}
                   >
                     {stats.shiftData.map((d, i) => (
                       <Cell key={i} fill={d.fill} />
@@ -510,213 +459,132 @@ export const Dashboard: React.FC<DashboardProps> = ({ records, businessRange, th
                     contentStyle={ttStyle}
                     itemStyle={ttItemStyle}
                     labelStyle={ttLabelStyle}
-                    formatter={(v: any, name: any, item: any) => [
-                      `${v}h (${fmtShort(item.payload.sec || Number(v) * 3600)}) · ${item.payload.count || 0} stops`,
-                      item.payload.name || name
+                    formatter={(_: any, name: any, item: any) => [
+                      `${fmtShort(item.payload.sec)} · ${item.payload.count || 0} stops`,
+                      item.payload.name || name,
                     ]}
                   />
-                  <Legend
-                    align="center"
-                    verticalAlign="bottom"
-                    height={32}
-                    iconType="circle"
-                    wrapperStyle={{ fontSize: '12px', color: '#475569', fontWeight: 600 }}
-                  />
+                  <Legend align="center" verticalAlign="bottom" height={28} iconType="circle" wrapperStyle={{ fontSize: '12px', color: '#475569' }} />
                 </PieChart>
               </ResponsiveContainer>
-
-              {/* Total Loss Centered inside Donut */}
-              <div style={{ position: 'absolute', top: '48%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center', pointerEvents: 'none' }}>
-                <div style={{ fontSize: 10, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>
-                  TOTAL LOSS
-                </div>
-                <div style={{ fontSize: 24, fontWeight: 800, color: '#0f172a', lineHeight: 1.15, marginTop: 2 }}>
-                  {fmtShort(stats.totalSec)}
-                </div>
+              <div className="an-donut-center">
+                <span>Total loss</span>
+                <strong>{fmtShort(stats.totalSec)}</strong>
               </div>
             </div>
           ) : emptyChart(260)}
-        </div>
+        </section>
 
-        {/* ── Chart: Downtime by Loss Category (Direct Values On Bars) ── */}
-        <div className="chart-box col-6">
-          <div className="chart-box-header">
-            <h4>Downtime by Category</h4>
-            <p className="chart-sub">Lost Duration &amp; Event Count per Loss Type</p>
-          </div>
+        <section className="an-card">
+          <header className="an-card-head">
+            <div>
+              <h3>Downtime by category</h3>
+              <p>Lost time and number of stops per loss type</p>
+            </div>
+          </header>
 
           {stats.catData.length > 0 ? (
             <ResponsiveContainer width="100%" height={260}>
-              <BarChart
-                data={stats.catData}
-                layout="vertical"
-                margin={{ top: 10, right: 85, left: 15, bottom: 10 }}
-              >
-                <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9" />
-                <XAxis
-                  type="number"
-                  tick={{ fill: '#64748b', fontSize: 11, fontWeight: 600 }}
-                  axisLine={{ stroke: '#cbd5e1' }}
-                  tickLine={false}
-                />
-                <YAxis
-                  dataKey="name"
-                  type="category"
-                  tick={{ fill: '#0f172a', fontSize: 12, fontWeight: 700 }}
-                  axisLine={{ stroke: '#cbd5e1' }}
-                  tickLine={false}
-                  width={150}
-                />
+              <BarChart data={stats.catData} layout="vertical" margin={{ top: 10, right: 110, left: 0, bottom: 10 }}>
+                <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
+                <XAxis type="number" tick={{ fill: '#64748b', fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={(v: number) => `${v}m`} dataKey="mins" />
+                <YAxis dataKey="name" type="category" tick={{ fill: '#0f172a', fontSize: 12, fontWeight: 600 }} axisLine={{ stroke: '#cbd5e1' }} tickLine={false} width={160} />
                 <RechartsTooltip
+                  cursor={{ fill: 'rgba(148, 163, 184, 0.12)' }}
                   contentStyle={ttStyle}
                   itemStyle={ttItemStyle}
                   labelStyle={ttLabelStyle}
-                  formatter={(v: any, _: any, item: any) => [
-                    `${v}h (${fmtShort(item.payload.sec || Number(v) * 3600)}) · ${item.payload.count} stops`,
-                    'Downtime Loss'
-                  ]}
+                  formatter={(_: any, __: any, item: any) => [item.payload.displayLabel, 'Downtime']}
                   labelFormatter={(_: any, payload: readonly any[]) => (payload as any)?.[0]?.payload?.fullName || _}
                 />
-                <Bar
-                  isAnimationActive={false}
-                  dataKey="hours"
-                  name="Downtime"
-                  radius={[0, 6, 6, 0]}
-                  barSize={stats.catData.length <= 2 ? 32 : stats.catData.length <= 4 ? 24 : 18}
-                >
+                <Bar isAnimationActive={false} dataKey="mins" name="Downtime" radius={[0, 4, 4, 0]} barSize={stats.catData.length <= 2 ? 28 : 20}>
                   {stats.catData.map((d, i) => (
                     <Cell key={i} fill={d.fill} />
                   ))}
-                  <LabelList
-                    dataKey="displayLabel"
-                    position="right"
-                    fill="#0f172a"
-                    fontSize={11.5}
-                    fontWeight={700}
-                    offset={10}
-                  />
+                  <LabelList dataKey="displayLabel" position="right" fill="#334155" fontSize={12} fontWeight={600} offset={8} />
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
           ) : emptyChart(260)}
-        </div>
-
+        </section>
       </div>
 
-      {/* ══════════════════════════════════════════════════════
-          SECTION 3: TOP STOPPAGE REASONS (Direct Values On Bars)
-      ══════════════════════════════════════════════════════ */}
-      <div className="tpm-charts-layout">
-        <div className="chart-box col-12">
-          <div className="chart-box-header">
-            <h4>Top Stoppage Reasons</h4>
-            <p className="chart-sub">Root Causes Ranked by Lost Hours</p>
+      {/* ── Top reasons ── */}
+      <section className="an-card">
+        <header className="an-card-head">
+          <div>
+            <h3>Top stoppage reasons</h3>
+            <p>Root causes ranked by lost time</p>
           </div>
+        </header>
 
-          {stats.topReasons.length > 0 ? (
-            <ResponsiveContainer width="100%" height={260}>
-              <BarChart
-                data={stats.topReasons}
-                margin={{ top: 20, right: 30, left: 15, bottom: 40 }}
-              >
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+        {onlyPendingReasons && (
+          <div className="an-notice">
+            No downtime reason has been filled for this period yet. Add reasons in the Event Report so this chart can show real root causes.
+          </div>
+        )}
 
-                <XAxis
-                  dataKey="name"
-                  tick={{ fill: '#0f172a', fontSize: 12, fontWeight: 600 }}
-                  axisLine={{ stroke: '#cbd5e1' }}
-                  tickLine={false}
-                  interval={0}
-                  angle={-15}
-                  textAnchor="end"
-                  height={45}
-                />
+        {stats.topReasons.length > 0 ? (
+          <ResponsiveContainer width="100%" height={Math.max(120, stats.topReasons.length * 46 + 30)}>
+            <BarChart data={stats.topReasons} layout="vertical" margin={{ top: 6, right: 120, left: 0, bottom: 6 }}>
+              <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
+              <XAxis type="number" dataKey="mins" tick={{ fill: '#64748b', fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={(v: number) => `${v}m`} />
+              <YAxis dataKey="name" type="category" tick={{ fill: '#0f172a', fontSize: 12, fontWeight: 600 }} axisLine={{ stroke: '#cbd5e1' }} tickLine={false} width={230} />
+              <RechartsTooltip
+                cursor={{ fill: 'rgba(148, 163, 184, 0.12)' }}
+                contentStyle={ttStyle}
+                itemStyle={ttItemStyle}
+                labelStyle={ttLabelStyle}
+                formatter={(_: any, __: any, item: any) => [`${item.payload.displayLabel} · ${item.payload.pct}% of downtime`, 'Lost time']}
+                labelFormatter={(_: any, payload: readonly any[]) => (payload as any)?.[0]?.payload?.fullName || _}
+              />
+              <Bar isAnimationActive={false} dataKey="mins" name="Lost time" radius={[0, 4, 4, 0]} barSize={22}>
+                {stats.topReasons.map((d, i) => (
+                  <Cell key={i} fill={d.fullName === 'Pending Reason' ? '#94a3b8' : INDUSTRIAL_COLORS.breakdown} />
+                ))}
+                <LabelList dataKey="displayLabel" position="right" fill="#334155" fontSize={12} fontWeight={600} offset={8} />
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        ) : emptyChart(200)}
+      </section>
 
-                <YAxis
-                  tick={{ fill: '#dc2626', fontSize: 11, fontWeight: 700 }}
-                  axisLine={{ stroke: '#cbd5e1' }}
-                  tickLine={false}
-                  label={{ value: 'Hours', angle: -90, position: 'insideLeft', fill: '#dc2626', fontSize: 12, fontWeight: 700, offset: 12 }}
-                />
-
-                <RechartsTooltip
-                  contentStyle={ttStyle}
-                  itemStyle={ttItemStyle}
-                  labelStyle={ttLabelStyle}
-                  formatter={(v: any, _: any, item: any) => [
-                    `${v}h (${fmtShort(item.payload.sec || Number(v) * 3600)}) · ${item.payload.count} stops`,
-                    'Downtime Loss'
-                  ]}
-                  labelFormatter={(_: any, payload: readonly any[]) => (payload as any)?.[0]?.payload?.fullName || _}
-                />
-
-                <Bar
-                  isAnimationActive={false}
-                  dataKey="hours"
-                  name="Downtime (h)"
-                  fill="#ef4444"
-                  radius={[6, 6, 0, 0]}
-                  barSize={stats.topReasons.length <= 2 ? 52 : 36}
-                >
-                  <LabelList
-                    dataKey="displayLabel"
-                    position="top"
-                    fill="#dc2626"
-                    fontSize={12}
-                    fontWeight={700}
-                    offset={6}
-                  />
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          ) : emptyChart(260)}
-        </div>
-      </div>
-
-      {/* ══════════════════════════════════════════════════════
-          SECTION 4: TOP 5 LONGEST STOPPAGES (CRITICAL EVENTS TABLE)
-      ══════════════════════════════════════════════════════ */}
-      <div className="tpm-table-section" style={{ marginTop: '16px' }}>
-        <div className="tpm-section-header">
-          <h4 style={{ fontSize: '17px', fontWeight: 800, margin: '0 0 4px 0' }}>Top 5 Longest Stoppages</h4>
-          <p className="chart-sub">Ranked by lost duration · High-priority investigation targets</p>
-        </div>
-
-        <div className="table-responsive">
-          <table className="tpm-table">
+      {/* ── Top 5 longest ── */}
+      <section className="an-card an-card-flush">
+        <header className="an-card-head">
+          <div>
+            <h3>Top 5 longest stoppages</h3>
+            <p>Ranked by lost time — investigate these first</p>
+          </div>
+        </header>
+        <div className="er-table-scroll">
+          <table className="an-table">
             <thead>
               <tr>
-                <th style={{ width: 50 }}>#</th>
-                <th>Date &amp; Time</th>
+                <th>#</th>
+                <th>Date &amp; time</th>
                 <th>Category</th>
                 <th>Duration</th>
-                <th>Root Cause / Reason</th>
-                <th style={{ width: 140 }}>RCA Status</th>
+                <th>Root cause / reason</th>
+                <th>Reason status</th>
               </tr>
             </thead>
             <tbody>
               {stats.top5.map(item => (
-                <tr key={item.rank}>
+                <tr key={item.rank} className={item.isBd ? 'is-breakdown' : undefined}>
+                  <td className="an-rank">{item.rank}</td>
+                  <td className="an-nowrap">{item.date}</td>
                   <td>
-                    <span style={{ fontWeight: 800, color: item.rank === 1 ? '#dc2626' : '#0f172a', fontSize: '14px' }}>
-                      #{item.rank}
-                    </span>
-                  </td>
-                  <td style={{ fontSize: '13px', fontWeight: 500, color: '#475569' }}>{item.date}</td>
-                  <td>
-                    <span className={`tpm-badge ${item.isBd ? 'danger' : 'warning'}`}>
+                    <span className={item.isBd ? 'er-badge er-badge-red' : 'er-badge er-badge-amber'}>
+                      <i aria-hidden="true" />
                       {item.category}
                     </span>
                   </td>
-                  <td className="dur" style={{ color: '#0f172a', fontWeight: 800, fontSize: '14px', fontFamily: 'monospace' }}>
-                    {item.duration}
-                  </td>
-                  <td className="reason-col" style={{ fontSize: '13px', fontWeight: 600, color: '#0f172a' }}>
-                    {item.reason}
-                  </td>
+                  <td className="an-strong an-nowrap">{item.duration}</td>
+                  <td className={item.rca ? undefined : 'er-muted'}>{item.rca ? item.reason : 'Not filled yet'}</td>
                   <td>
-                    <span className={`tpm-badge-outline ${item.rca ? 'success' : 'pending'}`}>
-                      {item.rca ? '✓ RCA Done' : '⏳ Action Pending'}
+                    <span className={item.rca ? 'er-status er-status-green' : 'er-status er-status-amber'}>
+                      {item.rca ? 'Reason added' : 'Reason pending'}
                     </span>
                   </td>
                 </tr>
@@ -724,8 +592,16 @@ export const Dashboard: React.FC<DashboardProps> = ({ records, businessRange, th
             </tbody>
           </table>
         </div>
-      </div>
-
+      </section>
     </div>
   );
+};
+
+const KPI_ICONS = {
+  list: 'M8 6h12 M8 12h12 M8 18h12 M4 6h.01 M4 12h.01 M4 18h.01',
+  clock: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z M12 7v5l3 2',
+  alert: 'M12 4l9 16H3z M12 10v4 M12 17h.01',
+  pause: 'M7 5h4v14H7z M13 5h4v14h-4z',
+  trend: 'M3 17l6-6 4 4 8-8 M15 7h6v6',
+  check: 'M4 12l5 5L20 6',
 };

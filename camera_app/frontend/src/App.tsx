@@ -182,7 +182,26 @@ function formatDateTime(value?: string | null) {
   if (!value) return '-';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value.replace('T', ' ');
-  return date.toLocaleString([], { hour12: false });
+  return date.toLocaleString('en-GB', { hour12: false });
+}
+
+function formatDateOnly(value?: string | null) {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value.split('T')[0];
+  return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+function paginationItems(current: number, total: number): (number | 'gap')[] {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  const pages = new Set([1, total, current - 1, current, current + 1]);
+  const sorted = [...pages].filter((p) => p >= 1 && p <= total).sort((a, b) => a - b);
+  const items: (number | 'gap')[] = [];
+  sorted.forEach((p, i) => {
+    if (i > 0 && p - sorted[i - 1] > 1) items.push('gap');
+    items.push(p);
+  });
+  return items;
 }
 
 function formatTimeOnly(value?: string | null) {
@@ -378,180 +397,28 @@ function statsFromRecords(records: RecordingRecord[]): RecordingStats {
 }
 
 function KpiCards({ stats, thresholdSeconds }: { stats: RecordingStats; thresholdSeconds: number }) {
-  const averageDuration = stats.today.total_events
-    ? stats.today.recorded_duration_seconds / stats.today.total_events
-    : 0;
+  const totalEvents = stats.today.total_events || 0;
+  const averageDuration = totalEvents ? stats.today.recorded_duration_seconds / totalEvents : 0;
   const threshold = stoppageThresholdLabel(thresholdSeconds);
+  const cards: { label: string; value: string | number; icon: IconName; tone: string }[] = [
+    { label: 'Total events', value: totalEvents, icon: 'calendar', tone: 'blue' },
+    { label: `Minor stoppage (< ${threshold})`, value: stats.today.minor_stoppage_count || 0, icon: 'pause', tone: 'amber' },
+    { label: `Breakdown (> ${threshold})`, value: stats.today.breakdown_count || 0, icon: 'alert', tone: 'red' },
+    { label: 'Storage used', value: stats.today.storage_used ? formatSize(stats.today.storage_used) : '—', icon: 'storage', tone: 'slate' },
+    { label: 'Avg event duration', value: averageDuration > 0 ? formatDuration(averageDuration) : '—', icon: 'clock', tone: 'violet' },
+  ];
 
   return (
-    <div style={{
-      display: 'grid',
-      gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-      gap: '14px',
-      margin: '12px 0 16px 0'
-    }}>
-      {/* 1. Total Events */}
-      <div style={{
-        background: '#ffffff',
-        borderRadius: '10px',
-        padding: '12px 18px',
-        border: '1px solid #e2e8f0',
-        borderLeft: '4px solid #2563eb',
-        boxShadow: '0 1px 4px rgba(0,0,0,0.03)',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '14px'
-      }}>
-        <div style={{
-          width: '38px',
-          height: '38px',
-          borderRadius: '50%',
-          background: '#eff6ff',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          fontSize: '1.15rem',
-          color: '#2563eb'
-        }}>
-          📅
-        </div>
-        <div>
-          <div style={{ fontSize: '0.74rem', fontWeight: 600, color: '#64748b' }}>Total Events</div>
-          <div style={{ fontSize: '1.45rem', fontWeight: 800, color: '#0f172a', lineHeight: 1.1, marginTop: '2px' }}>
-            {stats.today.total_events || 0}
+    <div className="er-kpis">
+      {cards.map((card) => (
+        <div key={card.label} className={`er-kpi er-kpi-${card.tone}`}>
+          <span className="er-kpi-icon"><Icon name={card.icon} /></span>
+          <div>
+            <span className="er-kpi-label">{card.label}</span>
+            <strong className="er-kpi-value">{card.value}</strong>
           </div>
         </div>
-      </div>
-
-      {/* 2. Minor Stoppage (< 2 min) */}
-      <div style={{
-        background: '#ffffff',
-        borderRadius: '10px',
-        padding: '12px 18px',
-        border: '1px solid #e2e8f0',
-        borderLeft: '4px solid #f59e0b',
-        boxShadow: '0 1px 4px rgba(0,0,0,0.03)',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '14px'
-      }}>
-        <div style={{
-          width: '38px',
-          height: '38px',
-          borderRadius: '50%',
-          background: '#fffbeb',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          fontSize: '1.15rem',
-          color: '#d97706'
-        }}>
-          ⏸️
-        </div>
-        <div>
-          <div style={{ fontSize: '0.74rem', fontWeight: 600, color: '#64748b' }}>Minor Stoppage (&lt; {threshold})</div>
-          <div style={{ fontSize: '1.45rem', fontWeight: 800, color: '#0f172a', lineHeight: 1.1, marginTop: '2px' }}>
-            {stats.today.minor_stoppage_count ?? 2}
-          </div>
-        </div>
-      </div>
-
-      {/* 3. Breakdown (> 2 min) */}
-      <div style={{
-        background: '#ffffff',
-        borderRadius: '10px',
-        padding: '12px 18px',
-        border: '1px solid #e2e8f0',
-        borderLeft: '4px solid #ef4444',
-        boxShadow: '0 1px 4px rgba(0,0,0,0.03)',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '14px'
-      }}>
-        <div style={{
-          width: '38px',
-          height: '38px',
-          borderRadius: '50%',
-          background: '#fef2f2',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          fontSize: '1.15rem',
-          color: '#dc2626'
-        }}>
-          ⚠️
-        </div>
-        <div>
-          <div style={{ fontSize: '0.74rem', fontWeight: 600, color: '#64748b' }}>Breakdown (&gt; {threshold})</div>
-          <div style={{ fontSize: '1.45rem', fontWeight: 800, color: '#0f172a', lineHeight: 1.1, marginTop: '2px' }}>
-            {stats.today.breakdown_count ?? 2}
-          </div>
-        </div>
-      </div>
-
-      {/* 4. Storage Used */}
-      <div style={{
-        background: '#ffffff',
-        borderRadius: '10px',
-        padding: '12px 18px',
-        border: '1px solid #e2e8f0',
-        boxShadow: '0 1px 4px rgba(0,0,0,0.03)',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '14px'
-      }}>
-        <div style={{
-          width: '38px',
-          height: '38px',
-          borderRadius: '50%',
-          background: '#f1f5f9',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          fontSize: '1.15rem',
-          color: '#475569'
-        }}>
-          🗄️
-        </div>
-        <div>
-          <div style={{ fontSize: '0.74rem', fontWeight: 600, color: '#64748b' }}>Storage Used</div>
-          <div style={{ fontSize: '1.45rem', fontWeight: 800, color: '#0f172a', lineHeight: 1.1, marginTop: '2px' }}>
-            {stats.today.storage_used ? formatSize(stats.today.storage_used) : '-'}
-          </div>
-        </div>
-      </div>
-
-      {/* 5. Avg Duration */}
-      <div style={{
-        background: '#ffffff',
-        borderRadius: '10px',
-        padding: '12px 18px',
-        border: '1px solid #e2e8f0',
-        boxShadow: '0 1px 4px rgba(0,0,0,0.03)',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '14px'
-      }}>
-        <div style={{
-          width: '38px',
-          height: '38px',
-          borderRadius: '50%',
-          background: '#f1f5f9',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          fontSize: '1.15rem',
-          color: '#475569'
-        }}>
-          ⏱️
-        </div>
-        <div>
-          <div style={{ fontSize: '0.74rem', fontWeight: 600, color: '#64748b' }}>Avg Duration</div>
-          <div style={{ fontSize: '1.45rem', fontWeight: 800, color: '#0f172a', lineHeight: 1.1, marginTop: '2px' }}>
-            {averageDuration > 0 ? formatDuration(averageDuration) : '38:20'}
-          </div>
-        </div>
-      </div>
+      ))}
     </div>
   );
 }
@@ -832,7 +699,7 @@ function friendlyRecordingError(message?: string | null) {
   return 'Recording could not be completed. Check settings and camera connection.';
 }
 
-type IconName = 'live' | 'archive' | 'record' | 'settings' | 'logout' | 'camera' | 'maximize' | 'minimize' | 'fit' | 'audio' | 'volumeOff' | 'storage' | 'activity' | 'power' | 'info' | 'play' | 'pause' | 'stop' | 'chevron' | 'eye' | 'eyeOff' | 'lock' | 'close' | 'chart' | 'reload';
+type IconName = 'live' | 'archive' | 'record' | 'settings' | 'logout' | 'camera' | 'maximize' | 'minimize' | 'fit' | 'audio' | 'volumeOff' | 'storage' | 'activity' | 'power' | 'info' | 'play' | 'pause' | 'stop' | 'chevron' | 'eye' | 'eyeOff' | 'lock' | 'close' | 'chart' | 'reload' | 'download' | 'edit' | 'mic' | 'filter' | 'file' | 'calendar' | 'alert' | 'clock';
 
 function Icon({ name }: { name: IconName }) {
   const paths: Record<IconName, string> = {
@@ -861,6 +728,14 @@ function Icon({ name }: { name: IconName }) {
     eyeOff: 'M3 3l18 18 M10.6 10.6A3 3 0 0 0 12 15a3 3 0 0 0 2.4-1.2 M7.1 7.1C4.2 8.8 2.5 12 2.5 12s3.5 6 9.5 6c1.5 0 2.8-.4 4-1 M17.3 14.7c2.6-1.6 4.2-4.7 4.2-4.7s-3.5-6-9.5-6c-1.2 0-2.4.2-3.4.6',
     lock: 'M7 10V8a5 5 0 0 1 10 0v2 M6 10h12v10H6z M12 14v3 M9 10V8a3 3 0 0 1 6 0v2',
     reload: 'M23 4v6h-6 M1 20v-6h6 M3.51 9a9 9 0 0 1 14.85-3.36L23 10 M1 14l4.64 4.36A9 9 0 0 0 20.49 15',
+    download: 'M12 4v11 M7 10l5 5 5-5 M5 20h14',
+    edit: 'M4 20h4L19 9l-4-4L4 16z M13.5 6.5l4 4',
+    mic: 'M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z M5 11a7 7 0 0 0 14 0 M12 18v3',
+    filter: 'M4 5h16l-6 7.5V19l-4 1v-7.5z',
+    file: 'M6 3h8l4 4v14H6z M14 3v4h4 M9 12h6 M9 16h6',
+    calendar: 'M4 6h16v14H4z M4 10h16 M8 3v4 M16 3v4',
+    alert: 'M12 4l9 16H3z M12 10v4 M12 17h.01',
+    clock: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z M12 7v5l3 2',
   };
   return (
     <svg className="icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -2141,34 +2016,8 @@ function LivePage({
                   );
                 }
 
-                return (
-                  <div style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    background: 'rgba(15, 23, 42, 0.88)',
-                    border: '1.5px solid rgba(34, 197, 94, 0.6)',
-                    padding: '5px 12px',
-                    borderRadius: '8px',
-                    backdropFilter: 'blur(8px)',
-                    boxShadow: '0 2px 10px rgba(0, 0, 0, 0.4)'
-                  }}>
-                    <span style={{
-                      width: '8px',
-                      height: '8px',
-                      borderRadius: '50%',
-                      background: '#22c55e',
-                      boxShadow: '0 0 8px #22c55e'
-                    }}></span>
-                    <span style={{ fontSize: '0.78rem', fontWeight: 800, color: '#86efac', letterSpacing: '0.04em' }}>
-                      RUNNING
-                    </span>
-                    <span style={{ fontSize: '0.78rem', color: '#94a3b8' }}>•</span>
-                    <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#f1f5f9', fontFamily: 'monospace' }}>
-                      ⏱ {timerText}
-                    </span>
-                  </div>
-                );
+                // Machine running: no status badge, only stoppage/breakdown are shown here
+                return null;
               })()}
             </div>
 
@@ -2738,160 +2587,73 @@ function SavedPage({
   return (
     <section className={selected ? 'workbench saved-workbench active-player' : 'workbench saved-workbench'} style={{ padding: '12px 28px 24px', background: '#f8fafc' }}>
       <div className="library-column" style={{ width: '100%' }}>
-        {activeAppPage !== 'analytics' && (
-          <>
-            {/* Header Document Lockup + Action Buttons */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '4px 0 16px', flexWrap: 'wrap', gap: '14px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-                <div style={{
-                  width: '44px',
-                  height: '44px',
-                  borderRadius: '10px',
-                  border: '1.5px solid #cbd5e1',
-                  background: '#ffffff',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontSize: '1.35rem',
-                  boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
-                  color: '#1e40af'
-                }}>
-                  📄
-                </div>
-                <div>
-                  <h1 style={{ fontSize: '1.55rem', fontWeight: 800, color: '#0f172a', margin: 0, letterSpacing: '-0.02em' }}>
-                    Incident & Event Reports
-                  </h1>
-                  <p style={{ margin: '2px 0 0', fontSize: '0.85rem', color: '#64748b', fontWeight: 500 }}>
-                    View and manage machine incidents, stoppages and events with detailed logs and AI insights.
-                  </p>
-                </div>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <a
-                  className="download-button"
-                  href={exportUrl}
-                  download
-                  style={{
-                    background: '#059669',
-                    color: '#ffffff',
-                    border: 'none',
-                    borderRadius: '8px',
-                    padding: '9px 18px',
-                    fontWeight: 700,
-                    fontSize: '0.84rem',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    cursor: 'pointer',
-                    boxShadow: '0 2px 6px rgba(5, 150, 105, 0.25)',
-                    textDecoration: 'none'
-                  }}
-                >
-                  📥 Download Report
-                </a>
-                <button
-                  type="button"
-                  onClick={() => load(true)}
-                  style={{
-                    background: '#ffffff',
-                    color: '#334155',
-                    border: '1px solid #cbd5e1',
-                    borderRadius: '8px',
-                    padding: '9px 18px',
-                    fontWeight: 600,
-                    fontSize: '0.84rem',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    cursor: 'pointer',
-                    boxShadow: '0 1px 2px rgba(0,0,0,0.04)'
-                  }}
-                >
-                  🔄 Refresh
-                </button>
-              </div>
+        <header className="er-header">
+          <div className="er-title">
+            <span className="er-title-icon"><Icon name={activeAppPage === 'analytics' ? 'chart' : 'file'} /></span>
+            <div>
+              <h1>{activeAppPage === 'analytics' ? 'Machine Stoppage Analytics' : 'Incident & Event Report'}</h1>
+              <p>
+                {activeAppPage === 'analytics'
+                  ? `Downtime by hour, shift, category and reason · ${reportRangeSummary(appliedFilters)}`
+                  : 'Machine stoppages and breakdowns with video, downtime reason and voice notes.'}
+              </p>
             </div>
+          </div>
+          <div className="er-header-actions">
+            <button type="button" className="er-btn er-btn-secondary" onClick={() => load(true)} disabled={loading}>
+              <Icon name="reload" /> {loading ? 'Refreshing…' : 'Refresh'}
+            </button>
+            <a className="er-btn er-btn-primary" href={exportUrl} download>
+              <Icon name="download" /> Export Excel
+            </a>
+          </div>
+        </header>
 
-            {/* 5 KPI Stat Cards */}
-            <KpiCards stats={reportStats} thresholdSeconds={settings.max_record_seconds} />
-          </>
+        {activeAppPage !== 'analytics' && (
+          <KpiCards stats={reportStats} thresholdSeconds={settings.max_record_seconds} />
         )}
 
-        {/* Filter Bar: Clean Enterprise Light Card */}
-        <div className="filter-card compact-filter" style={{
-          background: '#ffffff',
-          borderRadius: '12px',
-          border: '1px solid #e2e8f0',
-          padding: '16px 20px',
-          boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
-          marginBottom: '18px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '16px',
-          flexWrap: 'wrap'
-        }}>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '0.78rem', fontWeight: 700, color: '#475569' }}>
-            <span>📅 Date Range</span>
-            <select value={datePreset} onChange={(event) => changeDatePreset(event.target.value as ReportDatePreset)} style={{ padding: '8px 12px', fontSize: '0.86rem', background: '#ffffff', border: '1px solid #cbd5e1', color: '#0f172a', borderRadius: '8px', outline: 'none' }}>
+        <div className="er-filters">
+          <label className="er-field">
+            <span>Date range</span>
+            <select value={datePreset} onChange={(event) => changeDatePreset(event.target.value as ReportDatePreset)}>
               <option value="today">Today</option>
               <option value="yesterday">Yesterday</option>
-              <option value="last_7">Last 7 Days</option>
-              <option value="last_15">Last 15 Days</option>
-              <option value="custom">Custom Range</option>
-              <option value="all">All Time</option>
+              <option value="last_7">Last 7 days</option>
+              <option value="last_15">Last 15 days</option>
+              <option value="custom">Custom range</option>
+              <option value="all">All time</option>
             </select>
           </label>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '0.78rem', fontWeight: 700, color: '#475569' }}>
+          <label className="er-field">
             <span>From</span>
             <DateInputDDMMYYYY disabled={datePreset !== 'custom'} value={fromDate} onChange={setFromDate} />
           </label>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '0.78rem', fontWeight: 700, color: '#475569' }}>
+          <label className="er-field">
             <span>To</span>
             <DateInputDDMMYYYY disabled={datePreset !== 'custom'} value={toDate} onChange={setToDate} />
           </label>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '0.78rem', fontWeight: 700, color: '#475569' }}>
-            <span>⊞ Category</span>
-            <select value={category} onChange={(event) => handleCategoryChange(event.target.value)} style={{ padding: '8px 12px', fontSize: '0.86rem', background: '#ffffff', border: '1px solid #cbd5e1', color: '#0f172a', borderRadius: '8px', outline: 'none' }}>
-              <option value="all">All</option>
-              <option value="minor_stoppage">Minor Stoppage (&lt; {stoppageThresholdLabel(settings.max_record_seconds)})</option>
+          <label className="er-field">
+            <span>Category</span>
+            <select value={category} onChange={(event) => handleCategoryChange(event.target.value)}>
+              <option value="all">All categories</option>
+              <option value="minor_stoppage">Minor stoppage (&lt; {stoppageThresholdLabel(settings.max_record_seconds)})</option>
               <option value="breakdown">Breakdown (&gt; {stoppageThresholdLabel(settings.max_record_seconds)})</option>
             </select>
           </label>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '0.78rem', fontWeight: 700, color: '#475569' }}>
-            <span>👤 Shift</span>
-            <select value={shift} onChange={(event) => handleShiftChange(event.target.value as ReportShift)} style={{ padding: '8px 12px', fontSize: '0.86rem', background: '#ffffff', border: '1px solid #cbd5e1', color: '#0f172a', borderRadius: '8px', outline: 'none' }}>
-              <option value="all">All Shifts</option>
+          <label className="er-field">
+            <span>Shift</span>
+            <select value={shift} onChange={(event) => handleShiftChange(event.target.value as ReportShift)}>
+              <option value="all">All shifts</option>
               <option value="A">Shift A</option>
               <option value="B">Shift B</option>
               <option value="C">Shift C</option>
             </select>
           </label>
-          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '10px', marginTop: '12px' }}>
+          <div className="er-filter-actions">
             <button
               type="button"
-              onClick={applyFilters}
-              disabled={!filtersDirty || loading}
-              style={{
-                background: '#059669',
-                color: '#ffffff',
-                border: 'none',
-                borderRadius: '8px',
-                padding: '9px 22px',
-                fontWeight: 700,
-                fontSize: '0.86rem',
-                cursor: filtersDirty ? 'pointer' : 'default',
-                opacity: filtersDirty ? 1 : 0.6,
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '6px',
-                boxShadow: '0 2px 6px rgba(5, 150, 105, 0.25)'
-              }}
-            >
-              <span>🌪️</span> Apply
-            </button>
-            <button
-              type="button"
+              className="er-btn er-btn-secondary"
               onClick={() => {
                 setDatePreset('today');
                 setFromDate(todayInputValue());
@@ -2907,21 +2669,11 @@ function SavedPage({
                 });
                 load(true);
               }}
-              style={{
-                background: '#ffffff',
-                color: '#475569',
-                border: '1px solid #cbd5e1',
-                borderRadius: '8px',
-                padding: '9px 18px',
-                fontWeight: 600,
-                fontSize: '0.86rem',
-                cursor: 'pointer',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '6px'
-              }}
             >
-              <span>🔄</span> Reset
+              Reset
+            </button>
+            <button type="button" className="er-btn er-btn-primary" onClick={applyFilters} disabled={!filtersDirty || loading}>
+              <Icon name="filter" /> Apply filters
             </button>
           </div>
         </div>
@@ -2932,434 +2684,148 @@ function SavedPage({
           <>
             {error && <div className="error-banner">{error}</div>}
 
-            {!loading && list.records.length === 0 && (
-              <div className="empty-state" style={{ background: '#ffffff', borderRadius: '12px', border: '1px solid #e2e8f0', padding: '40px', textAlign: 'center' }}>
-                <strong style={{ fontSize: '1.2rem', color: '#0f172a' }}>No events found</strong>
-                <span style={{ display: 'block', color: '#64748b', marginTop: '6px', fontSize: '0.88rem' }}>Refresh the report after a gate event, or adjust the date/category filter.</span>
+            <section className="er-table-card">
+              <div className="er-table-toolbar">
+                <strong>Events</strong>
+                <span>{reportRangeSummary(appliedFilters)} · {list.total} {list.total === 1 ? 'event' : 'events'}</span>
               </div>
-            )}
 
-            {list.records.length > 0 && (
-              <div className="record-list" style={{ background: '#ffffff', borderRadius: '14px', border: '1.5px solid #e2e8f0', boxShadow: '0 1px 4px rgba(0,0,0,0.04)', overflowX: 'auto', width: '100%' }}>
-                {/* 11 Columns matching Image 2 */}
-                <div className="record-list-head" style={{ background: '#ffffff', borderBottom: '1.5px solid #e2e8f0', color: '#64748b', fontWeight: 800, fontSize: '0.78rem', letterSpacing: '0.05em', padding: '16px 24px' }}>
-                  <span>S.NO</span>
-                  <span>START DATE & TIME ⇅</span>
-                  <span>END TIME ↓</span>
-                  <span>VIDEO DURATION ⇅</span>
-                  <span>EVENT DURATION ↑</span>
-                  <span>CATEGORY ⇅</span>
-                  <span>REASON ↓</span>
-                  <span>AI VOICE TRANSCRIPT ⇅</span>
-                  <span>MANUAL CORRECTION ⇅</span>
-                  <span>STATUS ⇅</span>
-                  <span style={{ textAlign: 'center' }}>ACTIONS</span>
+              {!loading && list.records.length === 0 ? (
+                <div className="er-empty">
+                  <strong>No events found</strong>
+                  <span>No stoppage was recorded for the selected filters. Change the date range or category and apply again.</span>
                 </div>
-                {list.records.map((record, index) => {
-                  const status = liveStatus(record);
-                  const videoAvailable = hasVideo(record);
-                  const readyForVideo = videoReady(record);
-                  const canPlay = readyForVideo || videoAvailable;
-                  const serialNumber = (page - 1) * PAGE_SIZE + index + 1;
-                  const isBreakdown = record.event_type === 'breakdown';
-                  const hasReason = Boolean(record.reason_submitted_by && record.reason_submitted_by !== 'Voice Transcript');
+              ) : (
+                <div className="er-table-scroll">
+                  <div className="er-table" role="table" aria-label="Machine events">
+                    <div className="er-row er-head" role="row">
+                      <span role="columnheader">#</span>
+                      <span role="columnheader">Event time</span>
+                      <span role="columnheader">Duration</span>
+                      <span role="columnheader">Category</span>
+                      <span role="columnheader">Downtime reason</span>
+                      <span role="columnheader">Voice note</span>
+                      <span role="columnheader">Status</span>
+                      <span role="columnheader" className="er-col-actions">Actions</span>
+                    </div>
 
-                  return (
-                    <article
-                      className="record-row"
-                      key={record.file_path}
-                      style={{
-                        background: '#ffffff',
-                        borderBottom: '1px solid #f1f5f9',
-                        padding: '15px 24px',
-                        alignItems: 'center',
-                        transition: 'background 0.15s ease'
-                      }}
-                    >
-                      {/* 1. S.NO */}
-                      <span className="record-index" style={{ fontWeight: 700, color: '#475569', fontSize: '0.92rem' }}>{serialNumber}</span>
+                    {list.records.map((record, index) => {
+                      const status = liveStatus(record);
+                      const canPlay = videoReady(record) || hasVideo(record);
+                      const serialNumber = (page - 1) * PAGE_SIZE + index + 1;
+                      const isBreakdown = record.event_type === 'breakdown';
+                      const hasReason = Boolean(record.reason_submitted_by && record.reason_submitted_by !== 'Voice Transcript');
+                      const inProgress = status === 'Running';
+                      const endText = liveEventEnd(record) === 'Running' ? 'In progress' : formatTimeOnly(eventEnd(record));
+                      const voiceText = record.manual_transcript || record.transcript;
 
-                      {/* 2. START DATE & TIME */}
-                      <span className="record-time" title={record.file_name} style={{ color: '#0f172a', fontWeight: 700, fontSize: '0.92rem', whiteSpace: 'nowrap' }}>
-                        {formatDateTime(record.started_at)}
-                      </span>
+                      return (
+                        <div className={isBreakdown ? 'er-row er-row-breakdown' : 'er-row'} role="row" key={record.file_path}>
+                          <span className="er-serial">{serialNumber}</span>
 
-                      {/* 3. END TIME */}
-                      <span className="record-duration" style={{ color: '#475569', fontWeight: 600, fontSize: '0.9rem', whiteSpace: 'nowrap' }}>
-                        {formatTimeOnly(liveEventEnd(record))}
-                      </span>
-
-                      {/* 4. VIDEO DURATION */}
-                      <span className="record-duration" style={{ color: '#475569', fontWeight: 600, fontSize: '0.9rem' }}>
-                        {record.duration_seconds ? formatDuration(record.duration_seconds) : '-'}
-                      </span>
-
-                      {/* 5. EVENT DURATION */}
-                      <span className="record-duration" style={{ fontWeight: 800, color: '#0f172a', fontSize: '0.94rem' }}>
-                        {formatDuration(liveBreakdownDuration(record))}
-                      </span>
-
-                      {/* 6. CATEGORY: Exact match to Image 2 */}
-                      <span>
-                        {isBreakdown ? (
-                          <span style={{
-                            background: '#fee2e2',
-                            color: '#dc2626',
-                            border: '1px solid #fecaca',
-                            padding: '5px 14px',
-                            borderRadius: '9999px',
-                            fontSize: '0.78rem',
-                            fontWeight: 800,
-                            letterSpacing: '0.04em',
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '6px',
-                            whiteSpace: 'nowrap'
-                          }}>
-                            ⚠️ BREAKDOWN
+                          <span className="er-time" title={record.file_name}>
+                            <strong>{formatDateOnly(eventStart(record))}</strong>
+                            <small>{formatTimeOnly(eventStart(record))} → {endText}</small>
                           </span>
-                        ) : (
-                          <span style={{
-                            background: '#d1fae5',
-                            color: '#059669',
-                            border: '1px solid #a7f3d0',
-                            padding: '5px 14px',
-                            borderRadius: '9999px',
-                            fontSize: '0.78rem',
-                            fontWeight: 800,
-                            letterSpacing: '0.04em',
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '6px',
-                            whiteSpace: 'nowrap'
-                          }}>
-                            ⏸ MINOR STOPPAGE
-                          </span>
-                        )}
-                      </span>
 
-                      {/* 7. REASON: Exact match to Image 2 with edit icon next to reason badge */}
-                      <span>
-                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
-                          {hasReason ? (
-                            <button
-                              type="button"
-                              onClick={(e) => { e.stopPropagation(); editRecord(record, false); }}
-                              style={{
-                                background: '#eff6ff',
-                                border: '1px solid #bfdbfe',
-                                color: '#1d4ed8',
-                                padding: '5px 14px',
-                                borderRadius: '9999px',
-                                fontSize: '0.78rem',
-                                fontWeight: 700,
-                                cursor: 'pointer',
-                                whiteSpace: 'nowrap',
-                                maxWidth: '130px',
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis'
-                              }}
-                              title={record.reason || undefined}
-                            >
-                              {record.reason?.split(' - ')[0] || 'Verify'}
-                            </button>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={(e) => { e.stopPropagation(); editRecord(record, false); }}
-                              style={{
-                                background: '#ffedd5',
-                                border: '1px solid #fed7aa',
-                                color: '#c2410c',
-                                padding: '5px 16px',
-                                borderRadius: '9999px',
-                                fontSize: '0.78rem',
-                                fontWeight: 700,
-                                cursor: 'pointer',
-                                whiteSpace: 'nowrap'
-                              }}
-                              title="Click to fill downtime reason"
-                            >
-                              Pending reason
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            onClick={(e) => { e.stopPropagation(); editRecord(record, false); }}
-                            title="Fill / Edit Downtime Reason"
-                            style={{
-                              background: '#eff6ff',
-                              border: '1.5px solid #3b82f6',
-                              color: '#2563eb',
-                              width: '30px',
-                              height: '30px',
-                              borderRadius: '50%',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              cursor: 'pointer',
-                              fontSize: '0.85rem',
-                              padding: 0,
-                              transition: 'all 0.15s ease',
-                              boxShadow: '0 1px 3px rgba(59, 130, 246, 0.15)',
-                              flexShrink: 0
-                            }}
-                          >
-                            ✏️
-                          </button>
+                          <span className="er-duration">
+                            <strong>{formatDuration(liveBreakdownDuration(record))}</strong>
+                            <small>Video {record.duration_seconds ? formatDuration(record.duration_seconds) : '—'}</small>
+                          </span>
+
+                          <span>
+                            <span className={isBreakdown ? 'er-badge er-badge-red' : 'er-badge er-badge-amber'}>
+                              <i aria-hidden="true" />
+                              {isBreakdown ? 'Breakdown' : 'Minor stoppage'}
+                            </span>
+                          </span>
+
+                          <span>
+                            {hasReason ? (
+                              <button type="button" className="er-reason" onClick={() => editRecord(record, false)} title={`${record.reason || ''} — click to edit`}>
+                                <span>{record.reason?.split(' - ').pop() || record.reason}</span>
+                                <Icon name="edit" />
+                              </button>
+                            ) : (
+                              <button type="button" className="er-reason er-reason-pending" onClick={() => editRecord(record, false)} title="Add downtime reason">
+                                <Icon name="edit" />
+                                <span>Add reason</span>
+                              </button>
+                            )}
+                          </span>
+
+                          <span className="er-voice" title={voiceText || undefined}>
+                            {voiceText ? (
+                              <>
+                                <Icon name="mic" />
+                                <span>{voiceText}</span>
+                                {record.manual_transcript && <em>Edited</em>}
+                              </>
+                            ) : (
+                              <span className="er-muted">No speech detected</span>
+                            )}
+                          </span>
+
+                          <span>
+                            <span className={inProgress ? 'er-status er-status-amber' : record.error ? 'er-status er-status-red' : 'er-status er-status-green'}>
+                              {inProgress ? 'In progress' : record.error ? 'Error' : 'Completed'}
+                            </span>
+                          </span>
+
+                          <span className="er-actions er-col-actions">
+                            {canPlay ? (
+                              <>
+                                <button type="button" className="er-btn er-btn-play" onClick={() => playRecord(record)} title="Play event video">
+                                  <Icon name="play" /> <span className="er-play-label">Play</span>
+                                </button>
+                                <a
+                                  className="er-icon-btn"
+                                  href={recordingFileUrl(recordStorageRoot(record), record.file_path)}
+                                  download={record.file_name || 'event_recording.mp4'}
+                                  title="Download video"
+                                  aria-label="Download video"
+                                >
+                                  <Icon name="download" />
+                                </a>
+                              </>
+                            ) : (
+                              <span className="er-muted">No video</span>
+                            )}
+                          </span>
                         </div>
-                      </span>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
-                      {/* 8. AI VOICE TRANSCRIPT: Exact match to Image 2 */}
-                      <span>
-                        {record.transcript ? (
-                          <span
-                            title={record.transcript}
-                            style={{
-                              background: '#eff6ff',
-                              border: '1px solid #dbeafe',
-                              color: '#2563eb',
-                              padding: '5px 14px',
-                              borderRadius: '9999px',
-                              fontSize: '0.78rem',
-                              fontWeight: 600,
-                              whiteSpace: 'nowrap',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '6px',
-                              maxWidth: '190px',
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis'
-                            }}
-                          >
-                            🎙️ {record.transcript}
-                          </span>
-                        ) : (
-                          <span style={{
-                            background: '#f8fafc',
-                            border: '1px solid #e2e8f0',
-                            color: '#64748b',
-                            padding: '5px 14px',
-                            borderRadius: '9999px',
-                            fontSize: '0.78rem',
-                            fontWeight: 600,
-                            whiteSpace: 'nowrap',
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '6px'
-                          }}>
-                            🎙️ No voice detected
-                          </span>
-                        )}
-                      </span>
-
-                      {/* 9. MANUAL CORRECTION: Exact match to Image 2 */}
-                      <span>
-                        {record.manual_transcript ? (
-                          <span
-                            title={record.manual_transcript}
-                            style={{
-                              background: '#f1f5f9',
-                              border: '1px solid #cbd5e1',
-                              color: '#0f172a',
-                              padding: '5px 14px',
-                              borderRadius: '9999px',
-                              fontSize: '0.78rem',
-                              fontWeight: 600,
-                              whiteSpace: 'nowrap',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '6px',
-                              maxWidth: '180px',
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis'
-                            }}
-                          >
-                            ✏️ {record.manual_transcript}
-                          </span>
-                        ) : (
-                          <span style={{
-                            background: '#f8fafc',
-                            border: '1px dashed #cbd5e1',
-                            color: '#64748b',
-                            padding: '5px 14px',
-                            borderRadius: '9999px',
-                            fontSize: '0.78rem',
-                            fontWeight: 500,
-                            whiteSpace: 'nowrap',
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '6px'
-                          }}>
-                            ✏️ No manual correction
-                          </span>
-                        )}
-                      </span>
-
-                      {/* 10. STATUS: Exact match to Image 2 */}
-                      <span>
-                        <span style={{
-                          background: status === 'Running' ? '#fef3c7' : (record.error ? '#fee2e2' : '#dcfce7'),
-                          border: `1px solid ${status === 'Running' ? '#fde68a' : (record.error ? '#fecaca' : '#bbf7d0')}`,
-                          color: status === 'Running' ? '#b45309' : (record.error ? '#dc2626' : '#15803d'),
-                          padding: '5px 18px',
-                          borderRadius: '9999px',
-                          fontSize: '0.78rem',
-                          fontWeight: 800,
-                          letterSpacing: '0.04em',
-                          whiteSpace: 'nowrap'
-                        }}>
-                          {status === 'Running' ? 'IN PROGRESS' : (record.error ? 'PENDING' : 'COMPLETED')}
-                        </span>
-                      </span>
-
-                      {/* 11. ACTIONS: Exact match to Image 2 (Play + Download + More) */}
-                      <div className="row-actions" style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', whiteSpace: 'nowrap' }}>
-                        {canPlay ? (
-                          <>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                playRecord(record);
-                              }}
-                              style={{
-                                background: '#eff6ff',
-                                color: '#1d4ed8',
-                                border: '1.5px solid #3b82f6',
-                                padding: '6px 18px',
-                                borderRadius: '8px',
-                                fontSize: '0.82rem',
-                                fontWeight: 700,
-                                cursor: 'pointer',
-                                transition: 'all 0.15s ease'
-                              }}
-                              title="Play Event Video"
-                            >
-                              Play
-                            </button>
-                            <a
-                              href={recordingFileUrl(recordStorageRoot(record), record.file_path)}
-                              download={record.file_name || 'event_recording.mp4'}
-                              onClick={(e) => e.stopPropagation()}
-                              style={{
-                                background: '#ecfdf5',
-                                border: '1.5px solid #10b981',
-                                color: '#047857',
-                                padding: '5px 14px',
-                                borderRadius: '8px',
-                                fontSize: '0.82rem',
-                                fontWeight: 700,
-                                cursor: 'pointer',
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: '5px',
-                                textDecoration: 'none',
-                                transition: 'all 0.15s ease'
-                              }}
-                              title="Download Video File"
-                            >
-                              <span>📥</span> Download
-                            </a>
-                          </>
-                        ) : (
-                          <span style={{ color: '#94a3b8', fontSize: '0.86rem', fontWeight: 600, whiteSpace: 'nowrap' }}>
-                            No video
-                          </span>
-                        )}
+              {list.records.length > 0 && (
+                <footer className="er-pagination">
+                  <span>
+                    Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, list.total)} of {list.total}
+                  </span>
+                  <nav aria-label="Pagination">
+                    <button type="button" disabled={page <= 1} onClick={() => setPage(page - 1)} aria-label="Previous page">‹</button>
+                    {paginationItems(page, totalPages).map((item, i) =>
+                      item === 'gap' ? (
+                        <span key={`gap-${i}`} className="er-page-gap">…</span>
+                      ) : (
                         <button
                           type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            editRecord(record, false);
-                          }}
-                          title="More Options"
-                          style={{
-                            background: 'transparent',
-                            border: 'none',
-                            color: '#94a3b8',
-                            fontSize: '1.15rem',
-                            cursor: 'pointer',
-                            padding: '4px 6px',
-                            borderRadius: '6px',
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            lineHeight: 1
-                          }}
+                          key={item}
+                          className={item === page ? 'is-active' : undefined}
+                          aria-current={item === page ? 'page' : undefined}
+                          onClick={() => setPage(item)}
                         >
-                          ⋮
+                          {item}
                         </button>
-                      </div>
-                    </article>
-                  );
-                })}
-              </div>
-            )}
-
-            {/* Bottom Pagination matching Image 2 */}
-            {list.records.length > 0 && (
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '8px', marginTop: '16px', padding: '8px 2px' }}>
-                <button
-                  disabled={page <= 1}
-                  onClick={() => setPage(page - 1)}
-                  style={{
-                    width: '32px',
-                    height: '32px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    border: '1px solid #cbd5e1',
-                    borderRadius: '6px',
-                    background: '#ffffff',
-                    color: page <= 1 ? '#cbd5e1' : '#334155',
-                    cursor: page <= 1 ? 'not-allowed' : 'pointer',
-                    fontSize: '0.85rem'
-                  }}
-                >
-                  &lt;
-                </button>
-                <button
-                  style={{
-                    width: '32px',
-                    height: '32px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    border: 'none',
-                    borderRadius: '6px',
-                    background: '#1d4ed8',
-                    color: '#ffffff',
-                    fontWeight: 700,
-                    fontSize: '0.85rem'
-                  }}
-                >
-                  {page}
-                </button>
-                <button
-                  disabled={page >= totalPages}
-                  onClick={() => setPage(page + 1)}
-                  style={{
-                    width: '32px',
-                    height: '32px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    border: '1px solid #cbd5e1',
-                    borderRadius: '6px',
-                    background: '#ffffff',
-                    color: page >= totalPages ? '#cbd5e1' : '#334155',
-                    cursor: page >= totalPages ? 'not-allowed' : 'pointer',
-                    fontSize: '0.85rem'
-                  }}
-                >
-                  &gt;
-                </button>
-                <span style={{ fontSize: '0.86rem', color: '#475569', fontWeight: 600, marginLeft: '8px' }}>
-                  {`${(page - 1) * PAGE_SIZE + 1} - ${Math.min(page * PAGE_SIZE, list.total)} of ${list.total}`}
-                </span>
-              </div>
-            )}
+                      )
+                    )}
+                    <button type="button" disabled={page >= totalPages} onClick={() => setPage(page + 1)} aria-label="Next page">›</button>
+                  </nav>
+                </footer>
+              )}
+            </section>
           </>
         )}
       </div>

@@ -23,16 +23,17 @@ def get_db_connection():
     server_target = server if server.startswith("tcp:") else f"tcp:{server}"
     if "," not in server_target and port:
         server_target = f"{server_target},{port}"
-    conn_str = f"DRIVER={{{driver}}};SERVER={server_target};DATABASE={db};UID={uid};PWD={pwd};TrustServerCertificate=yes;Encrypt=optional;Connection Timeout=10;"
+    encrypt_opt = os.environ.get("DB_ENCRYPT", "no")
+    conn_str = f"DRIVER={{{driver}}};SERVER={server_target};DATABASE={db};UID={uid};PWD={pwd};TrustServerCertificate=yes;Encrypt={encrypt_opt};Connection Timeout=15;"
     conn = None
-    for attempt in range(3):
+    for attempt in range(4):
         try:
-            conn = pyodbc.connect(conn_str, timeout=10)
+            conn = pyodbc.connect(conn_str, timeout=15)
             break
         except Exception:
-            if attempt == 2:
+            if attempt == 3:
                 raise
-            time.sleep(0.5)
+            time.sleep(1.0 * (attempt + 1))
     try:
         yield conn
         conn.commit()

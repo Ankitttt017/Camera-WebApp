@@ -1844,7 +1844,11 @@ def write_transcription_metadata(
         )
 
     atomic_write_json(metadata_path_for(video_path), metadata)
-    record = index_recording_file(storage_root, video_path, metadata)
+    try:
+        record = index_recording_file(storage_root, video_path, metadata)
+    except Exception as db_err:
+        print(f"[Warning] Indexing metadata to SQL Server deferred/failed: {db_err}")
+        record = metadata
 
     with threading.Lock():
         if str(recording_state.get('path') or '') == str(video_path):
@@ -2088,7 +2092,10 @@ def transcribe_recording_worker(storage_root: str | Path, video_path_text: str) 
                 return
             write_transcription_metadata(storage_root, video_path, transcript, 'completed')
         except Exception as exc:
-            write_transcription_metadata(storage_root, video_path, None, 'failed', str(exc))
+            try:
+                write_transcription_metadata(storage_root, video_path, None, 'failed', str(exc))
+            except Exception as inner_err:
+                print(f"[Warning] Failed to write transcription failure state: {inner_err}")
         finally:
             if audio_path and audio_path.exists():
                 try:
@@ -4884,4 +4891,5 @@ async def camera_asset_proxy(request: Request, asset_path: str = ''):
 
 
 if __name__ == '__main__':
-    uvicorn.run(app, host='127.0.0.1', port=8010, reload=False, log_config=None)
+    host = os.getenv('HELPER_HOST', '0.0.0.0')
+    uvicorn.run(app, host=host, port=8010, reload=False, log_config=None)
