@@ -3,6 +3,8 @@
 > **Enterprise Machine Event Monitoring, AI Video Diagnostics, and Downtime Tracking System**  
 > Designed for real-time monitoring of industrial machinery (e.g. Die Casting machines, CNC lines), automated PLC-triggered event recording, root cause analysis (5-Whys / TPM), and predictive downtime analytics.
 
+📖 **For complete technical architecture, API references, SQL Server database schemas, and PM2 deployment guide, see the [Comprehensive Project Documentation](PROJECT_DOCUMENTATION.md).**
+
 ---
 
 ## 📁 Project Architecture & Directory Structure
