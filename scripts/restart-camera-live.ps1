@@ -23,9 +23,11 @@ function Stop-PortProcess {
 Stop-PortProcess -Port 8010
 Start-Sleep -Seconds 1
 
+$PythonExe = if (Test-Path "$AppRoot\.venv\Scripts\python.exe") { "$AppRoot\.venv\Scripts\python.exe" } else { "python" }
+
 Start-Process `
     -WindowStyle Hidden `
-    -FilePath python `
+    -FilePath $PythonExe `
     -ArgumentList @('-m', 'uvicorn', 'backend.cpplus_helper:app', '--host', '0.0.0.0', '--port', '8010') `
     -WorkingDirectory $AppRoot
 

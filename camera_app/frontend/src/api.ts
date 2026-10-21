@@ -341,3 +341,303 @@ export function recordingExportUrl(params: {
 }) {
   return queryUrl('/recording-index/export.xlsx', params);
 }
+
+/* ─────────────────────────────────────────────────────────────
+   Plant ➔ Department ➔ Line ➔ Machine ➔ Camera Hierarchy APIs
+   ───────────────────────────────────────────────────────────── */
+
+export type HierarchyCamera = {
+  id: number;
+  machine_id: number;
+  name: string;
+  camera_ip: string;
+  http_port: number;
+  rtsp_port: number;
+  username: string;
+  password?: string;
+  channel: number;
+  rtsp_path: string;
+  sub_rtsp_path?: string;
+  is_active: boolean;
+};
+
+export type HierarchyMachine = {
+  id: number;
+  line_id: number;
+  code: string;
+  name: string;
+  plc_enabled: boolean;
+  plc_host?: string;
+  plc_port: number;
+  plc_device: string;
+  plc_address: string;
+  is_active: boolean;
+  cameras: HierarchyCamera[];
+};
+
+export type HierarchyLine = {
+  id: number;
+  department_id: number;
+  code: string;
+  name: string;
+  is_active: boolean;
+  machines: HierarchyMachine[];
+};
+
+export type HierarchyDepartment = {
+  id: number;
+  plant_id: number;
+  code: string;
+  name: string;
+  is_active: boolean;
+  lines: HierarchyLine[];
+};
+
+export type HierarchyPlant = {
+  id: number;
+  code: string;
+  name: string;
+  location?: string;
+  is_active: boolean;
+  departments: HierarchyDepartment[];
+};
+
+export type FlatCamera = {
+  id: number;
+  name: string;
+  camera_ip: string;
+  http_port: number;
+  rtsp_port: number;
+  username: string;
+  password?: string;
+  channel: number;
+  rtsp_path: string;
+  sub_rtsp_path?: string;
+  is_active: boolean;
+  machine_id: number;
+  machine_name: string;
+  machine_code: string;
+  plc_enabled: boolean;
+  plc_host?: string;
+  plc_port: number;
+  plc_device: string;
+  plc_address: string;
+  line_id: number;
+  line_name: string;
+  line_code: string;
+  department_id: number;
+  department_name: string;
+  department_code: string;
+  plant_id: number;
+  plant_name: string;
+  plant_code: string;
+};
+
+export async function fetchHierarchy(): Promise<HierarchyPlant[]> {
+  return getJson<HierarchyPlant[]>('/api/hierarchy');
+}
+
+export async function fetchFlatCameras(params?: {
+  plant_id?: number;
+  department_id?: number;
+  line_id?: number;
+  machine_id?: number;
+}): Promise<FlatCamera[]> {
+  const query = new URLSearchParams();
+  if (params?.plant_id) query.set('plant_id', String(params.plant_id));
+  if (params?.department_id) query.set('department_id', String(params.department_id));
+  if (params?.line_id) query.set('line_id', String(params.line_id));
+  if (params?.machine_id) query.set('machine_id', String(params.machine_id));
+  const qs = query.toString();
+  return getJson<FlatCamera[]>(`/api/hierarchy/cameras${qs ? `?${qs}` : ''}`);
+}
+
+export async function createPlant(data: { code: string; name: string; location?: string; is_active?: boolean }) {
+  return postJson('/api/hierarchy/plants', data);
+}
+
+export async function updatePlant(id: number, data: Partial<{ code: string; name: string; location?: string; is_active?: boolean }>) {
+  const res = await fetch(`${API_BASE}/api/hierarchy/plants/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...(AUTH_TOKEN ? { 'x-auth-token': AUTH_TOKEN } : {}) },
+    body: JSON.stringify(data),
+  });
+  return res.json();
+}
+
+export async function deletePlant(id: number) {
+  const res = await fetch(`${API_BASE}/api/hierarchy/plants/${id}`, {
+    method: 'DELETE',
+    headers: AUTH_TOKEN ? { 'x-auth-token': AUTH_TOKEN } : {},
+  });
+  return res.json();
+}
+
+export async function createDepartment(data: { plant_id: number; code: string; name: string; is_active?: boolean }) {
+  return postJson('/api/hierarchy/departments', data);
+}
+
+export async function updateDepartment(id: number, data: Partial<{ plant_id?: number; code?: string; name?: string; is_active?: boolean }>) {
+  const res = await fetch(`${API_BASE}/api/hierarchy/departments/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...(AUTH_TOKEN ? { 'x-auth-token': AUTH_TOKEN } : {}) },
+    body: JSON.stringify(data),
+  });
+  return res.json();
+}
+
+export async function deleteDepartment(id: number) {
+  const res = await fetch(`${API_BASE}/api/hierarchy/departments/${id}`, {
+    method: 'DELETE',
+    headers: AUTH_TOKEN ? { 'x-auth-token': AUTH_TOKEN } : {},
+  });
+  return res.json();
+}
+
+export async function createLine(data: { department_id: number; code: string; name: string; is_active?: boolean }) {
+  return postJson('/api/hierarchy/lines', data);
+}
+
+export async function updateLine(id: number, data: Partial<{ department_id?: number; code?: string; name?: string; is_active?: boolean }>) {
+  const res = await fetch(`${API_BASE}/api/hierarchy/lines/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...(AUTH_TOKEN ? { 'x-auth-token': AUTH_TOKEN } : {}) },
+    body: JSON.stringify(data),
+  });
+  return res.json();
+}
+
+export async function deleteLine(id: number) {
+  const res = await fetch(`${API_BASE}/api/hierarchy/lines/${id}`, {
+    method: 'DELETE',
+    headers: AUTH_TOKEN ? { 'x-auth-token': AUTH_TOKEN } : {},
+  });
+  return res.json();
+}
+
+export async function createMachine(data: {
+  line_id: number;
+  code: string;
+  name: string;
+  plc_enabled?: boolean;
+  plc_host?: string;
+  plc_port?: number;
+  plc_device?: string;
+  plc_address?: string;
+  is_active?: boolean;
+}) {
+  return postJson('/api/hierarchy/machines', data);
+}
+
+export async function updateMachine(id: number, data: Partial<{
+  line_id?: number;
+  code?: string;
+  name?: string;
+  plc_enabled?: boolean;
+  plc_host?: string;
+  plc_port?: number;
+  plc_device?: string;
+  plc_address?: string;
+  is_active?: boolean;
+}>) {
+  const res = await fetch(`${API_BASE}/api/hierarchy/machines/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...(AUTH_TOKEN ? { 'x-auth-token': AUTH_TOKEN } : {}) },
+    body: JSON.stringify(data),
+  });
+  return res.json();
+}
+
+export async function deleteMachine(id: number) {
+  const res = await fetch(`${API_BASE}/api/hierarchy/machines/${id}`, {
+    method: 'DELETE',
+    headers: AUTH_TOKEN ? { 'x-auth-token': AUTH_TOKEN } : {},
+  });
+  return res.json();
+}
+
+export async function createCamera(data: {
+  machine_id: number;
+  name: string;
+  camera_ip: string;
+  http_port?: number;
+  rtsp_port?: number;
+  username?: string;
+  password?: string;
+  channel?: number;
+  rtsp_path?: string;
+  sub_rtsp_path?: string;
+  is_active?: boolean;
+}) {
+  return postJson('/api/hierarchy/cameras', data);
+}
+
+export async function updateCamera(id: number, data: Partial<{
+  machine_id?: number;
+  name?: string;
+  camera_ip?: string;
+  http_port?: number;
+  rtsp_port?: number;
+  username?: string;
+  password?: string;
+  channel?: number;
+  rtsp_path?: string;
+  sub_rtsp_path?: string;
+  is_active?: boolean;
+}>) {
+  const res = await fetch(`${API_BASE}/api/hierarchy/cameras/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...(AUTH_TOKEN ? { 'x-auth-token': AUTH_TOKEN } : {}) },
+    body: JSON.stringify(data),
+  });
+  return res.json();
+}
+
+export async function deleteCamera(id: number) {
+  const res = await fetch(`${API_BASE}/api/hierarchy/cameras/${id}`, {
+    method: 'DELETE',
+    headers: AUTH_TOKEN ? { 'x-auth-token': AUTH_TOKEN } : {},
+  });
+  return res.json();
+}
+
+export async function testCameraConnection(data: {
+  camera_ip: string;
+  http_port?: number;
+  rtsp_port?: number;
+  username?: string;
+  password?: string;
+  channel?: number;
+  rtsp_path?: string;
+}) {
+  return postJson<{
+    ip: string;
+    ping: boolean;
+    http_open: boolean;
+    rtsp_open: boolean;
+    rtsp_stream_ok: boolean;
+    message: string;
+  }>('/api/hierarchy/test-camera', data);
+}
+
+export async function testPlcConnection(data: {
+  plc_host: string;
+  plc_port?: number;
+  plc_device?: string;
+  plc_address?: string;
+}) {
+  return postJson<{ ok: boolean; message: string }>('/api/hierarchy/test-plc', data);
+}
+
+export function hierarchyCameraSnapshotUrl(cameraId: number) {
+  return `${API_BASE}/api/hierarchy/cameras/${cameraId}/live.jpg?t=${Date.now()}`;
+}
+
+export function hierarchyCameraMjpegUrl(cameraId: number) {
+  return `${API_BASE}/api/hierarchy/cameras/${cameraId}/mjpeg`;
+}
+
+export function hierarchyCameraAudioUrl(cameraId: number): string {
+  return `${API_BASE}/api/hierarchy/cameras/${cameraId}/audio.mp3?t=${Date.now()}`;
+}
+

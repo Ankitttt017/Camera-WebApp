@@ -18,22 +18,6 @@ from .detector import MotionDetector
 from .stream import CameraStream
 
 
-@asynccontextmanager
-async def _lifespan(app: FastAPI):
-    Base.metadata.create_all(bind=config.engine)
-    task = asyncio.get_event_loop().create_task(connection_health_check())
-    yield
-    task.cancel()
-
-app = FastAPI(title='CP Plus Camera Integration', version='1.0', lifespan=_lifespan)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=['*'],
-    allow_credentials=True,
-    allow_methods=['*'],
-    allow_headers=['*'],
-)
-
 status_cache: Dict[str, Optional[object]] = {
     'connected': False,
     'protocol': None,
@@ -63,6 +47,24 @@ async def connection_health_check():
             status_cache['connected'] = False
             status_cache['last_error'] = str(exc)
         await asyncio.sleep(config.RECONNECT_INTERVAL)
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    Base.metadata.create_all(bind=config.engine)
+    task = asyncio.create_task(connection_health_check())
+    yield
+    task.cancel()
+
+
+app = FastAPI(title='CP Plus Camera Integration', version='1.0', lifespan=_lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=['*'],
+    allow_credentials=True,
+    allow_methods=['*'],
+    allow_headers=['*'],
+)
 
 
 @app.get('/scan')
@@ -169,4 +171,4 @@ async def serve_snapshot(filename: str):
 
 
 if __name__ == '__main__':
-    uvicorn.run('backend.main:app', host='0.0.0.0', port=8000, reload=True)
+    uvicorn.run('backend.main:app', host='127.0.0.1', port=8000, reload=True)

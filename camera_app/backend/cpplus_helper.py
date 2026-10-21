@@ -27,126 +27,17 @@ import re
 from pathlib import Path
 from dotenv import load_dotenv
 
-APP_BASE_DIR = Path(__file__).resolve().parents[1]
-load_dotenv(APP_BASE_DIR / '.env')
-load_dotenv()
+import sys
+_cur_dir = str(Path(__file__).resolve().parent)
+_root_dir = str(Path(__file__).resolve().parent.parent)
+for _p in (_cur_dir, _root_dir):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
-@contextlib.contextmanager
-def get_db_connection():
-    env = os.environ.get("ENVIRONMENT", "development")
-    server = os.environ.get("DB_SERVER", "192.168.100.46")
-    port = os.environ.get("DB_PORT", "1433")
-    db = os.environ.get("DB_NAME_PROD", "RICO_IOT") if env == "production" else os.environ.get("DB_NAME_DEV", "RICO_IOT")
-    uid = os.environ.get("DB_USER", "automation")
-    pwd = os.environ.get("DB_PASSWORD", "Autoiot@3869")
-    drivers = [d for d in pyodbc.drivers() if "SQL Server" in d]
-    driver = drivers[-1] if drivers else "ODBC Driver 17 for SQL Server"
-    server_target = server if server.startswith("tcp:") else f"tcp:{server}"
-    if "," not in server_target and port:
-        server_target = f"{server_target},{port}"
-    conn_str = f"DRIVER={{{driver}}};SERVER={server_target};DATABASE={db};UID={uid};PWD={pwd};TrustServerCertificate=yes;Encrypt=optional;Connection Timeout=10;"
-    conn = None
-    for attempt in range(3):
-        try:
-            conn = pyodbc.connect(conn_str, timeout=10)
-            break
-        except Exception:
-            if attempt == 2:
-                raise
-            import time
-            time.sleep(0.5)
-    try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        if conn:
-            conn.close()
-
-
-class PrefixCursor:
-    def __init__(self, cursor):
-        self.cursor = cursor
-        env = os.environ.get('ENVIRONMENT', 'development')
-        self.prefix = os.environ.get('DB_TABLE_PREFIX_DEV', 'dev_') if env == 'development' else ''
-        
-    def _rewrite_and_bind(self, query, args):
-        q = query
-        if self.prefix:
-            q = re.sub(r'\brecordings\b', self.prefix + 'recordings', q)
-            q = re.sub(r'\breason_options\b', self.prefix + 'reason_options', q)
-            q = re.sub(r'\bidx_recordings_', 'idx_' + self.prefix + 'recordings_', q)
-            
-        q = re.sub(r'LIMIT\s+:limit\s+OFFSET\s+:offset', 'OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY', q, flags=re.IGNORECASE)
-        q = re.sub(r'LIMIT\s+(\?)\s+OFFSET\s+(\?)', r'OFFSET \2 ROWS FETCH NEXT \1 ROWS ONLY', q, flags=re.IGNORECASE)
-        q = re.sub(r'LIMIT\s+(\d+)\b', r'OFFSET 0 ROWS FETCH NEXT \1 ROWS ONLY', q, flags=re.IGNORECASE)
-        
-        if args and isinstance(args[0], dict):
-            params = args[0]
-            param_names = []
-            def repl(m):
-                name = m.group(1)
-                if name in params:
-                    param_names.append(name)
-                    return '?'
-                return m.group(0)
-            q = re.sub(r':([a-zA-Z_][a-zA-Z_0-9]*)', repl, q)
-            new_args = tuple(params[name] for name in param_names)
-            return q, new_args
-        return q, args[0] if args else ()
-        
-    class RowAdapter:
-        def __init__(self, description, row):
-            self._row = row
-            self._cols = [c[0] for c in description]
-            self._dict = dict(zip(self._cols, row))
-        def __getitem__(self, key):
-            if isinstance(key, int): return self._row[key]
-            return self._dict[key]
-        def keys(self):
-            return self._dict.keys()
-        def __iter__(self):
-            return iter(self._row)
-        def get(self, key, default=None):
-            return self._dict.get(key, default)
-
-    def _wrap(self, row):
-        if not row: return row
-        if type(row).__name__ == 'RowAdapter': return row
-        return self.RowAdapter(self.cursor.description, row)
-
-    def execute(self, query, *args, **kwargs):
-        q, new_args = self._rewrite_and_bind(query, args)
-        if new_args:
-            self.cursor.execute(q, new_args)
-        else:
-            self.cursor.execute(q)
-        return self
-        
-    def executemany(self, query, *args, **kwargs):
-        q, new_args = self._rewrite_and_bind(query, args)
-        if new_args:
-             self.cursor.executemany(q, new_args)
-        else:
-             self.cursor.executemany(q)
-        return self
-
-    @property
-    def rowcount(self):
-        return self.cursor.rowcount
-
-    def fetchall(self):
-        rows = self.cursor.fetchall()
-        return [self._wrap(r) for r in rows]
-        
-    def fetchone(self):
-        return self._wrap(self.cursor.fetchone())
-        
-    @property
-    def description(self):
-        return self.cursor.description
+try:
+    from .db import get_db_connection, PrefixCursor
+except (ImportError, ValueError):
+    from db import get_db_connection, PrefixCursor
 
 def get_table_name(base_name):
     env = os.environ.get("ENVIRONMENT", "development")
@@ -211,6 +102,17 @@ app.add_middleware(
     allow_headers=['*'],
 )
 
+try:
+    from .hierarchy_api import router as hierarchy_router
+except (ImportError, ValueError):
+    import sys
+    from pathlib import Path
+    _backend_dir = str(Path(__file__).resolve().parent)
+    if _backend_dir not in sys.path:
+        sys.path.insert(0, _backend_dir)
+    from hierarchy_api import router as hierarchy_router
+app.include_router(hierarchy_router)
+
 VIDEO_FILE_EXTENSIONS = {'.mp4', '.webm', '.mov', '.m4v', '.avi', '.mkv', '.dav'}
 DEFAULT_CAMERA_IP = '192.168.119.205'
 DEFAULT_CAMERA_USER = 'admin'
@@ -236,8 +138,8 @@ DEFAULT_SPEECH_AUDIO_FILTER = (
     'lowpass=f=3400:poles=2,'
     'bandreject=f=411:width_type=q:w=4.0,'
     'bandreject=f=822:width_type=q:w=4.0,'
-    'afftdn=nr=45:nf=-25:tn=1:gs=4,'
-    'agate=threshold=0.025:range=0.0005:attack=1:release=250:knee=1.5,'
+    'afftdn=nr=40:nf=-25:tn=1:gs=4,'
+    'agate=threshold=0.08:range=0.001:attack=1:release=220:knee=1.5,'
     'equalizer=f=1800:width_type=q:w=1.2:g=3.5,'
     'alimiter=limit=0.92'
 )
@@ -249,6 +151,7 @@ def resolve_speech_audio_filter(env_var_name: str) -> str:
         return DEFAULT_SPEECH_AUDIO_FILTER
     obsolete_markers = [
         'speechnorm',
+        'agate=threshold=0.025',
         'agate=threshold=0.085',
         'agate=threshold=0.06',
         'volume=0.30',
@@ -274,8 +177,12 @@ LIVE_VIDEO_TARGET_FPS = float(os.getenv('LIVE_VIDEO_TARGET_FPS', str(LIVE_PREVIE
 LIVE_VIDEO_BITRATE = os.getenv('LIVE_VIDEO_BITRATE', '1800k').strip()
 LIVE_VIDEO_MAXRATE = os.getenv('LIVE_VIDEO_MAXRATE', '2200k').strip()
 LIVE_VIDEO_BUFSIZE = os.getenv('LIVE_VIDEO_BUFSIZE', '1000k').strip()
-LIVE_RTSP_TRANSPORT = os.getenv('LIVE_RTSP_TRANSPORT', 'udp').strip().lower() or 'udp'
-LIVE_AUDIO_FILTER = resolve_speech_audio_filter('LIVE_AUDIO_FILTER')
+LIVE_RTSP_TRANSPORT = os.getenv('LIVE_RTSP_TRANSPORT', 'tcp').strip().lower() or 'tcp'
+DEFAULT_LIVE_AUDIO_FILTER = os.getenv(
+    'DEFAULT_LIVE_AUDIO_FILTER',
+    'volume=2.2,highpass=f=120:poles=2,lowpass=f=4200:poles=2,alimiter=limit=0.95',
+).strip()
+LIVE_AUDIO_FILTER = os.getenv('LIVE_AUDIO_FILTER', DEFAULT_LIVE_AUDIO_FILTER).strip() or DEFAULT_LIVE_AUDIO_FILTER
 USE_FFMPEG_RECORDING = True
 RECORDING_START_RETRY_SECONDS = 1.0
 RECORDING_START_STALE_SECONDS = 4.0
@@ -2060,6 +1967,14 @@ FACTORY_HINDI_CORRECTIONS = [
     (r'(?<!\S)(हैंड\s*ओवर|हेंडओवर)(?!\S)', 'हैंडओवर'),
     (r'(?<!\S)(अठो|आठो|अथो)(?!\S)', 'ऑटो'),
     (r'(?<!\S)(सल|शल)\s+(वाले)(?!\S)', r'सेल \2'),
+    (r'(?<!\S)(हाइड्रोलिक|हाईड्रोलिक|हाईड्रॉलिक|हाइड्रो)(?!\S)', 'हाइड्रोलिक'),
+    (r'(?<!\S)(प्रेशर|प्रेसर|प्रेस्सर)(?!\S)', 'प्रेशर'),
+    (r'(?<!\S)(टेंपरेचर|टेम्परेचर|तापमान)(?!\S)', 'टेम्परेचर'),
+    (r'(?<!\S)(प्लंजर|प्लन्जर|प्लंज़र)(?!\S)', 'प्लंजर'),
+    (r'(?<!\S)(इजेक्टर|इजैक्टर|इजेकटर)(?!\S)', 'इजेक्टर'),
+    (r'(?<!\S)(लीकेज|लिकेज|लीकिज)(?!\S)', 'लीकेज'),
+    (r'(?<!\S)(मोल्ड|मोलड)(?!\S)', 'मोल्ड'),
+    (r'(?<!\S)(डाई|डाइ|दाई)(?!\S)', 'डाई'),
 ]
 
 
@@ -2068,6 +1983,7 @@ def clean_factory_hindi_text(text: str) -> str:
     if not cleaned:
         return ''
     cleaned = re.sub(r'[,.\-_/\\;:!?।]+', ' ', cleaned)
+    cleaned = re.sub(r'\b(la|lila|dara|kanya|blindness|of the day|of the ending|from a technician of the village)\b', '', cleaned, flags=re.IGNORECASE)
     cleaned = ' '.join(cleaned.split())
     for pattern, replacement in FACTORY_HINDI_CORRECTIONS:
         cleaned = re.sub(pattern, replacement, cleaned, flags=re.IGNORECASE)
@@ -2109,9 +2025,12 @@ def transcribe_with_faster_whisper(audio_path: Path) -> str | None:
         str(audio_path),
         language=TRANSCRIPTION_LANGUAGE,
         initial_prompt=TRANSCRIPTION_INITIAL_PROMPT,
+        hotwords="डाई कास्टिंग ब्रेकडाउन स्टॉपेज हाइड्रोलिक प्रेशर टेम्परेचर डाई प्लंजर इजेक्टर मेंटेनेंस प्रॉब्लम टूल चेंज मोल्ड लीकेज",
         vad_filter=TRANSCRIPTION_VAD_FILTER,
         vad_parameters=vad_params,
         beam_size=TRANSCRIPTION_BEAM_SIZE,
+        repetition_penalty=1.2,
+        no_repeat_ngram_size=3,
         no_speech_threshold=TRANSCRIPTION_NO_SPEECH_THRESHOLD,
         condition_on_previous_text=False,
         compression_ratio_threshold=2.2,
@@ -3130,20 +3049,24 @@ def record_camera_ffmpeg_worker(request: RecordingRequest) -> bool:
         recording_process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         while not recording_stop_event.is_set() and recording_process.poll() is None:
             time.sleep(0.25)
-        if recording_stop_event.is_set() and recording_process.poll() is None:
+        if recording_process.poll() is None:
             try:
-                recording_process.communicate(input=b'q', timeout=2)
-            except subprocess.TimeoutExpired:
-                recording_process.terminate()
+                recording_process.communicate(input=b'q', timeout=3)
+            except Exception:
                 try:
-                    recording_process.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    recording_process.kill()
+                    recording_process.terminate()
+                    recording_process.wait(timeout=5)
+                except Exception:
+                    try:
+                        recording_process.kill()
+                    except Exception:
+                        pass
         stderr = b''
-        if recording_process and recording_process.returncode not in (0, None) and (not output_path.exists() or output_path.stat().st_size == 0):
+        if recording_process and recording_process.returncode not in (0, None, 255) and (not output_path.exists() or output_path.stat().st_size == 0):
             recording_state['error'] = stderr.decode(errors='ignore') or f'FFmpeg exited with {recording_process.returncode}'
     except Exception as exc:
-        recording_state['error'] = str(exc)
+        if not (output_path.exists() and output_path.stat().st_size > 50000):
+            recording_state['error'] = str(exc)
     finally:
         ended_at = datetime.now()
         duration_seconds = max((ended_at - started_at).total_seconds(), 0)
@@ -3183,7 +3106,11 @@ def record_camera_ffmpeg_worker(request: RecordingRequest) -> bool:
             'transcript_error': recording_state.get('transcript_error'),
             'transcribed_at': recording_state.get('transcribed_at'),
         }
-        if output_path.exists() and output_path.stat().st_size > 0 and not recording_state.get('error'):
+        has_valid_video = output_path.exists() and output_path.stat().st_size > 0
+        if has_valid_video and recording_state.get('error') and 'Cannot send input' in str(recording_state.get('error')):
+            recording_state['error'] = None
+
+        if has_valid_video and not recording_state.get('error'):
             end_suffix = ended_at.strftime('%H%M%S')
             target_path = final_path.with_name(f'{final_path.stem}_to_{end_suffix}{final_path.suffix}')
             if target_path.exists():
@@ -3823,14 +3750,18 @@ def live_audio_response(
         '-hide_banner',
         '-loglevel',
         'error',
+        '-rtsp_transport',
+        'tcp',
+        '-probesize',
+        '65536',
+        '-analyzeduration',
+        '200000',
         '-fflags',
         '+genpts+nobuffer',
         '-flags',
         'low_delay',
         '-use_wallclock_as_timestamps',
         '1',
-        '-rtsp_transport',
-        LIVE_RTSP_TRANSPORT,
         '-i',
         working_url,
         '-vn',
@@ -3855,7 +3786,7 @@ def live_audio_response(
             if not process.stdout:
                 return
             while True:
-                chunk = process.stdout.read(1024)
+                chunk = process.stdout.read(4096)
                 if not chunk:
                     break
                 yield chunk
@@ -3870,8 +3801,32 @@ def live_audio_response(
     return StreamingResponse(
         stream_audio(),
         media_type='audio/mpeg',
-        headers={'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no'},
+        headers={
+            'Cache-Control': 'no-store, no-cache, must-revalidate',
+            'Pragma': 'no-cache',
+            'X-Accel-Buffering': 'no',
+            'Accept-Ranges': 'none',
+        },
     )
+
+
+@app.get('/api/hierarchy/cameras/{camera_id}/audio.mp3')
+def camera_hierarchy_audio_stream(camera_id: int):
+    """Streams live MP3 audio from the microphone of a specific camera in the hierarchy."""
+    env = os.environ.get('ENVIRONMENT', 'development')
+    prefix = os.environ.get('DB_TABLE_PREFIX_DEV', 'dev_') if env == 'development' else ''
+    t_cameras = f"{prefix}cam_cameras"
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"SELECT camera_ip, rtsp_port, username, password, channel, rtsp_path FROM {t_cameras} WHERE id = ?",
+            (camera_id,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail='Camera not found')
+        ip, rtsp_port, username, password, channel, rtsp_path = row
+    return live_audio_response(ip, rtsp_port, username, password or '', channel, rtsp_path)
 
 
 @app.get('/audio.mp3')
@@ -3940,7 +3895,7 @@ def recording_status():
 
 
 def start_recording_internal(request: RecordingRequest):
-    global recording_thread
+    global recording_thread, recording_process
     if request.event_type == 'manual':
         request.event_type = 'self_capture'
     if request.event_type not in {'minor_stoppage', 'breakdown', 'self_capture'}:
@@ -3948,7 +3903,6 @@ def start_recording_internal(request: RecordingRequest):
             status_code=400,
             detail='Only manual and Gate Trigger recordings are allowed.',
         )
-    global recording_thread, recording_process
     if (
         recording_state.get('running')
         or (recording_thread and recording_thread.is_alive())
@@ -3998,16 +3952,17 @@ def start_recording(request: RecordingRequest, x_auth_token: str | None = Header
 def stop_recording_internal():
     global recording_process
     recording_stop_event.set()
+    if recording_thread and recording_thread.is_alive():
+        recording_thread.join(timeout=5)
     if recording_process and recording_process.poll() is None:
         try:
-            recording_process.communicate(input=b'q', timeout=1.0)
+            recording_process.terminate()
+            recording_process.wait(timeout=3)
         except Exception:
             try:
-                recording_process.terminate()
+                recording_process.kill()
             except Exception:
                 pass
-    if recording_thread and recording_thread.is_alive():
-        recording_thread.join(timeout=3)
     recording_state['running'] = False
     return recording_state
 
@@ -4929,4 +4884,4 @@ async def camera_asset_proxy(request: Request, asset_path: str = ''):
 
 
 if __name__ == '__main__':
-    uvicorn.run(app, host='0.0.0.0', port=8010, reload=False, log_config=None)
+    uvicorn.run(app, host='127.0.0.1', port=8010, reload=False, log_config=None)

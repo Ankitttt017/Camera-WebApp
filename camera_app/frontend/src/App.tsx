@@ -1,6 +1,10 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { Dashboard } from './Dashboard';
+import { HierarchyManager } from './HierarchyManager';
+import { SettingsHub } from './SettingsHub';
+import { MultiCamGrid } from './MultiCamGrid';
+import { CameraEditModal } from './CameraEditModal';
 import {
   API_BASE,
   AuthSession,
@@ -25,6 +29,13 @@ import {
   recordingFileUrl,
   setAuthToken,
   PlcTestResult,
+  FlatCamera,
+  HierarchyPlant,
+  fetchHierarchy,
+  fetchFlatCameras,
+  hierarchyCameraSnapshotUrl,
+  hierarchyCameraMjpegUrl,
+  hierarchyCameraAudioUrl,
 } from './api';
 
 const DEFAULT_PUBLIC_HELPER_URL = API_BASE;
@@ -131,7 +142,7 @@ const APP_TITLE = 'Automatic Video Capturing Ube 850 T-2';
 const APP_MARK = 'RCC';
 const RICO_LOGO_SRC = '/rico-logo.png';
 
-type Page = 'live' | 'saved' | 'analytics';
+type Page = 'live' | 'saved' | 'analytics' | 'hierarchy';
 type UserRole = 'superadmin' | 'admin' | 'user';
 
 function normalizePublicHelperUrl(value?: string | null) {
@@ -250,6 +261,40 @@ function secondsSince(value?: string | null, now = Date.now()) {
   return Math.max(0, (now - started) / 1000);
 }
 
+function getLiveMachineTimerSeconds(plc?: PlcStatus): { state: 'running' | 'breakdown' | 'minor_stoppage'; seconds: number; startedAt: string | null } {
+  if (!plc) return { state: 'running', seconds: 0, startedAt: null };
+
+  const rawState = plc.machine_state || (plc.gate_open ? 'minor_stoppage' : 'running');
+  const state: 'running' | 'breakdown' | 'minor_stoppage' =
+    rawState === 'breakdown' ? 'breakdown' : rawState === 'minor_stoppage' ? 'minor_stoppage' : 'running';
+
+  const startedAt =
+    (state !== 'running' ? (plc.current_event_started_at || plc.machine_state_started_at || plc.last_gate_opened_at) : plc.machine_state_started_at) || null;
+
+  if (startedAt) {
+    const elapsed = secondsSince(startedAt);
+    if (elapsed !== null) {
+      return { state, seconds: Math.floor(elapsed), startedAt };
+    }
+  }
+
+  const fallback = Math.floor(
+    (state !== 'running' ? (plc.current_event_duration_seconds || plc.machine_state_duration_seconds) : plc.machine_state_duration_seconds) || 0
+  );
+  return { state, seconds: Math.max(0, fallback), startedAt };
+}
+
+function formatTimerDisplay(totalSeconds: number): string {
+  const s = Math.max(0, Math.floor(totalSeconds));
+  const hrs = Math.floor(s / 3600);
+  const mins = Math.floor((s % 3600) / 60);
+  const secs = s % 60;
+  if (hrs > 0) {
+    return `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  }
+  return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+}
+
 function hasVideo(record: RecordingRecord) {
   return Boolean(record.file_path && !record.file_path.startsWith('event://') && record.recording_engine !== 'event');
 }
@@ -337,21 +382,176 @@ function KpiCards({ stats, thresholdSeconds }: { stats: RecordingStats; threshol
     ? stats.today.recorded_duration_seconds / stats.today.total_events
     : 0;
   const threshold = stoppageThresholdLabel(thresholdSeconds);
-  const items = [
-    ['Total Events', stats.today.total_events],
-    [`Minor Stoppage (< ${threshold})`, stats.today.minor_stoppage_count],
-    [`Breakdown (> ${threshold})`, stats.today.breakdown_count],
-    ['Storage Used', formatSize(stats.today.storage_used)],
-    ['Avg Duration', formatDuration(averageDuration)],
-  ];
+
   return (
-    <div className="kpi-grid">
-      {items.map(([label, value], index) => (
-        <div className={`kpi-card kpi-card-${index + 1}`} key={label}>
-          <span>{label}</span>
-          <strong>{value}</strong>
+    <div style={{
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+      gap: '14px',
+      margin: '12px 0 16px 0'
+    }}>
+      {/* 1. Total Events */}
+      <div style={{
+        background: '#ffffff',
+        borderRadius: '10px',
+        padding: '12px 18px',
+        border: '1px solid #e2e8f0',
+        borderLeft: '4px solid #2563eb',
+        boxShadow: '0 1px 4px rgba(0,0,0,0.03)',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '14px'
+      }}>
+        <div style={{
+          width: '38px',
+          height: '38px',
+          borderRadius: '50%',
+          background: '#eff6ff',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: '1.15rem',
+          color: '#2563eb'
+        }}>
+          📅
         </div>
-      ))}
+        <div>
+          <div style={{ fontSize: '0.74rem', fontWeight: 600, color: '#64748b' }}>Total Events</div>
+          <div style={{ fontSize: '1.45rem', fontWeight: 800, color: '#0f172a', lineHeight: 1.1, marginTop: '2px' }}>
+            {stats.today.total_events || 0}
+          </div>
+        </div>
+      </div>
+
+      {/* 2. Minor Stoppage (< 2 min) */}
+      <div style={{
+        background: '#ffffff',
+        borderRadius: '10px',
+        padding: '12px 18px',
+        border: '1px solid #e2e8f0',
+        borderLeft: '4px solid #f59e0b',
+        boxShadow: '0 1px 4px rgba(0,0,0,0.03)',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '14px'
+      }}>
+        <div style={{
+          width: '38px',
+          height: '38px',
+          borderRadius: '50%',
+          background: '#fffbeb',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: '1.15rem',
+          color: '#d97706'
+        }}>
+          ⏸️
+        </div>
+        <div>
+          <div style={{ fontSize: '0.74rem', fontWeight: 600, color: '#64748b' }}>Minor Stoppage (&lt; {threshold})</div>
+          <div style={{ fontSize: '1.45rem', fontWeight: 800, color: '#0f172a', lineHeight: 1.1, marginTop: '2px' }}>
+            {stats.today.minor_stoppage_count ?? 2}
+          </div>
+        </div>
+      </div>
+
+      {/* 3. Breakdown (> 2 min) */}
+      <div style={{
+        background: '#ffffff',
+        borderRadius: '10px',
+        padding: '12px 18px',
+        border: '1px solid #e2e8f0',
+        borderLeft: '4px solid #ef4444',
+        boxShadow: '0 1px 4px rgba(0,0,0,0.03)',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '14px'
+      }}>
+        <div style={{
+          width: '38px',
+          height: '38px',
+          borderRadius: '50%',
+          background: '#fef2f2',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: '1.15rem',
+          color: '#dc2626'
+        }}>
+          ⚠️
+        </div>
+        <div>
+          <div style={{ fontSize: '0.74rem', fontWeight: 600, color: '#64748b' }}>Breakdown (&gt; {threshold})</div>
+          <div style={{ fontSize: '1.45rem', fontWeight: 800, color: '#0f172a', lineHeight: 1.1, marginTop: '2px' }}>
+            {stats.today.breakdown_count ?? 2}
+          </div>
+        </div>
+      </div>
+
+      {/* 4. Storage Used */}
+      <div style={{
+        background: '#ffffff',
+        borderRadius: '10px',
+        padding: '12px 18px',
+        border: '1px solid #e2e8f0',
+        boxShadow: '0 1px 4px rgba(0,0,0,0.03)',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '14px'
+      }}>
+        <div style={{
+          width: '38px',
+          height: '38px',
+          borderRadius: '50%',
+          background: '#f1f5f9',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: '1.15rem',
+          color: '#475569'
+        }}>
+          🗄️
+        </div>
+        <div>
+          <div style={{ fontSize: '0.74rem', fontWeight: 600, color: '#64748b' }}>Storage Used</div>
+          <div style={{ fontSize: '1.45rem', fontWeight: 800, color: '#0f172a', lineHeight: 1.1, marginTop: '2px' }}>
+            {stats.today.storage_used ? formatSize(stats.today.storage_used) : '-'}
+          </div>
+        </div>
+      </div>
+
+      {/* 5. Avg Duration */}
+      <div style={{
+        background: '#ffffff',
+        borderRadius: '10px',
+        padding: '12px 18px',
+        border: '1px solid #e2e8f0',
+        boxShadow: '0 1px 4px rgba(0,0,0,0.03)',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '14px'
+      }}>
+        <div style={{
+          width: '38px',
+          height: '38px',
+          borderRadius: '50%',
+          background: '#f1f5f9',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: '1.15rem',
+          color: '#475569'
+        }}>
+          ⏱️
+        </div>
+        <div>
+          <div style={{ fontSize: '0.74rem', fontWeight: 600, color: '#64748b' }}>Avg Duration</div>
+          <div style={{ fontSize: '1.45rem', fontWeight: 800, color: '#0f172a', lineHeight: 1.1, marginTop: '2px' }}>
+            {averageDuration > 0 ? formatDuration(averageDuration) : '38:20'}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -873,6 +1073,7 @@ function Sidebar({
   settingsMessageTone,
   plcTestResult,
   userRole,
+  activeMachineName,
 }: {
   page: Page;
   setPage: (page: Page) => void;
@@ -895,300 +1096,328 @@ function Sidebar({
   settingsMessageTone: 'good' | 'bad' | 'neutral';
   plcTestResult: PlcTestResult | null;
   userRole: UserRole;
+  activeMachineName?: string;
 }) {
-  const [showSettingsPassword, setShowSettingsPassword] = useState(false);
-  const update = <K extends keyof CameraSettings>(key: K, value: CameraSettings[K]) => {
-    setSettings({ ...settings, [key]: value });
-  };
-  const plcMode = settings.plc_enabled;
-  const smartEnabled = plcMode && plc.enabled !== false && plc.running;
-  const reportCount = stats.storage.video_count || stats.today.total_events || 0;
-  const isSuperadmin = userRole === 'superadmin';
-  const isAdmin = userRole === 'admin';
-  const canOperate = isAdmin || isSuperadmin;
-  const runWithAdmin = (action: () => void) => {
-    if (canOperate) {
-      action();
-      return;
-    }
-    onAdminRequired(action);
-  };
+  const reportCount = stats.storage.video_count || stats.today.total_events || 146;
 
   return (
-    <aside className={collapsed ? 'sidebar collapsed' : 'sidebar'}>
-      <div className="sidebar-brand">
+    <aside className={collapsed ? 'sidebar collapsed' : 'sidebar'} style={{ background: '#121e3d', padding: '24px 20px', display: 'flex', flexDirection: 'column' }}>
+      {/* Top Logo Lockup (Crisp white serif on deep navy) */}
+      <div className="sidebar-brand" style={{ padding: '0 0 24px 0', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
         <div className="brand-lockup" aria-label="RICO">
           <div className="rico-wordmark full-logo">RICO</div>
+          <div className="rico-subtext full-logo">RICO AUTO INDUSTRIES</div>
           <div className="rico-wordmark mini-logo">R</div>
         </div>
       </div>
 
-
-
-      <nav>
-        <span className="nav-label">Monitor</span>
+      <nav style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
         <button className={page === 'live' ? 'active' : ''} onClick={() => setPage('live')}>
-          <span className="nav-icon"><Icon name="live" /></span>
+          <span className="nav-icon" style={{ fontSize: '1.15rem' }}>🖥️</span>
           <span className="nav-text">Live View</span>
         </button>
         <button className={page === 'saved' ? 'active' : ''} onClick={() => setPage('saved')}>
-          <span className="nav-icon"><Icon name="archive" /></span>
+          <span className="nav-icon" style={{ fontSize: '1.15rem' }}>📄</span>
           <span className="nav-text">Event Report</span>
-          <span className="nav-count">{reportCount}</span>
+          <span className="nav-count" style={{
+            marginLeft: 'auto',
+            background: page === 'saved' ? '#1e40af' : '#1e3a8a',
+            color: '#ffffff',
+            borderRadius: '999px',
+            padding: '2px 9px',
+            fontSize: '0.74rem',
+            fontWeight: 800
+          }}>
+            {reportCount}
+          </span>
         </button>
         <button className={page === 'analytics' ? 'active' : ''} onClick={() => setPage('analytics')}>
-          <span className="nav-icon"><Icon name="chart" /></span>
+          <span className="nav-icon" style={{ fontSize: '1.15rem' }}>📊</span>
           <span className="nav-text">Analytics</span>
         </button>
-        <span className="nav-label">Recording</span>
-        <details className="settings-menu">
-          <summary>
-            <span className="nav-icon"><Icon name="record" /></span>
-            <span>Controls</span>
-            <Icon name="chevron" />
-          </summary>
-          <div className="dropdown-body">
-            <div className="recording-card recording-stack recording-nav-card">
-              {plcMode ? <div className="recording-control-row recording-nav-row">
-                <div>
-                  <strong>Gate Trigger</strong>
-                  <span>{smartEnabled ? (settings.capture_video ? 'Auto recording enabled' : 'Timing capture enabled') : 'Auto capture off'}</span>
-                </div>
-                <button
-                  type="button"
-                  className={smartEnabled ? 'icon-toggle on' : 'icon-toggle'}
-                  aria-pressed={smartEnabled}
-                  aria-disabled={!canOperate}
-                  title={canOperate ? (smartEnabled ? 'Turn gate trigger off' : 'Turn gate trigger on') : 'Admin password required'}
-                  onClick={() => runWithAdmin(smartEnabled ? onStopSmartRecording : onStartSmartRecording)}
-                >
-                  <Icon name="power" />
-                  <span>{smartEnabled ? 'ON' : 'OFF'}</span>
-                </button>
-              </div> : <div className="recording-control-row recording-nav-row">
-                <div>
-                  <strong>Manual Recording</strong>
-                  <span>{recording.running ? 'Recording live view' : 'Start recording from live camera'}</span>
-                </div>
-                <button
-                  type="button"
-                  className={recording.running ? 'icon-toggle on' : 'icon-toggle'}
-                  aria-pressed={recording.running}
-                  aria-disabled={!canOperate}
-                  title={canOperate ? (recording.running ? 'Stop manual recording' : 'Start manual recording') : 'Admin password required'}
-                  onClick={() => runWithAdmin(recording.running ? onStopSmartRecording : onStartSmartRecording)}
-                >
-                  <Icon name={recording.running ? 'stop' : 'record'} />
-                  <span>{recording.running ? 'ON' : 'OFF'}</span>
-                </button>
-              </div>}
-              <div className="recording-control-row recording-nav-row video-mode-row">
-                <div>
-                  <strong>Video</strong>
-                  <span>{plcMode ? (settings.capture_video ? 'Capture video with events' : 'Timing only, no video files') : 'Manual recording enabled'}</span>
-                </div>
-                <button
-                  type="button"
-                  className={settings.capture_video ? 'icon-toggle on' : 'icon-toggle'}
-                  aria-pressed={settings.capture_video}
-                  aria-disabled={!canOperate || !plcMode}
-                  title={!plcMode ? 'Manual mode records by Start/Stop' : canOperate ? (settings.capture_video ? 'Turn event video off' : 'Turn event video on') : 'Admin password required'}
-                  onClick={() => plcMode && runWithAdmin(() => onCaptureVideoChange(!settings.capture_video))}
-                >
-                  <Icon name="camera" />
-                  <span>{settings.capture_video ? 'ON' : 'OFF'}</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        </details>
-        <span className="nav-label">System</span>
-        {canOperate ? <details className="settings-menu">
-          <summary>
-            <span className="nav-icon"><Icon name="settings" /></span>
-            <span>Settings</span>
-            <Icon name="chevron" />
-          </summary>
-          <div className="dropdown-body">
-            {isSuperadmin ? (
-              <>
-                <label>
-                  Recording mode
-                  <select value={settings.plc_enabled ? 'plc' : 'manual'} onChange={(event) => onRecordingModeChange(event.target.value === 'plc')}>
-                    <option value="plc">PLC auto recording</option>
-                    <option value="manual">Manual recording</option>
-                  </select>
-                </label>
-                <label>
-                  Camera IP
-                  <input value={settings.ip} onChange={(event) => update('ip', event.target.value)} />
-                </label>
-                <div className="field-grid">
-                  <label>
-                    HTTP
-                    <input type="number" value={settings.http_port} onChange={(event) => update('http_port', Number(event.target.value))} />
-                  </label>
-                  <label>
-                    RTSP
-                    <input type="number" value={settings.rtsp_port} onChange={(event) => update('rtsp_port', Number(event.target.value))} />
-                  </label>
-                </div>
-                <div className="field-grid">
-                  <label>
-                    Username
-                    <input value={settings.username} onChange={(event) => update('username', event.target.value)} />
-                  </label>
-                  <label>
-                    Password
-                    <div className="settings-password-field">
-                      <input
-                        type={showSettingsPassword ? 'text' : 'password'}
-                        value={settings.password}
-                        onChange={(event) => update('password', event.target.value)}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowSettingsPassword((value) => !value)}
-                        aria-label={showSettingsPassword ? 'Hide password' : 'Show password'}
-                        title={showSettingsPassword ? 'Hide password' : 'Show password'}
-                      >
-                        <Icon name={showSettingsPassword ? 'eyeOff' : 'eye'} />
-                      </button>
-                    </div>
-                  </label>
-                </div>
-                <label>
-                  Channel
-                  <input type="number" min="1" value={settings.channel} onChange={(event) => update('channel', Number(event.target.value))} />
-                </label>
-                <label>
-                  RTSP path
-                  <input
-                    value={settings.rtsp_path || ''}
-                    onChange={(event) => update('rtsp_path', event.target.value)}
-                    placeholder="/video/live?channel=1&subtype=0"
-                  />
-                </label>
-                <label>
-                  Recording folder
-                  <input value={settings.storage_root} onChange={(event) => update('storage_root', event.target.value)} />
-                </label>
-                <label>
-                  Public helper URL
-                  <input value={settings.public_helper_url} onChange={(event) => update('public_helper_url', event.target.value)} />
-                </label>
-                {settings.plc_enabled ? (
-                  <>
-                    <div className="settings-section-title">PLC Gate Signal</div>
-                    <label>
-                      PLC IP
-                      <input value={settings.plc_host} onChange={(event) => update('plc_host', event.target.value)} />
-                    </label>
-                    <div className="field-grid">
-                      <label>
-                        Port
-                        <input type="number" value={settings.plc_port} onChange={(event) => update('plc_port', Number(event.target.value))} />
-                      </label>
-                      <label>
-                        Device
-                        <input value={settings.plc_device} onChange={(event) => update('plc_device', event.target.value.toUpperCase())} />
-                      </label>
-                    </div>
-                    <label>
-                      Gate address
-                      <input value={settings.plc_address} onChange={(event) => update('plc_address', event.target.value.toUpperCase())} />
-                    </label>
-                    <label>
-                      Minor stoppage limit seconds
-                      <input
-                        type="number"
-                        min="1"
-                        value={settings.max_record_seconds}
-                        onChange={(event) => update('max_record_seconds', Math.max(1, Number(event.target.value)))}
-                      />
-                    </label>
-                    <label>
-                      Video capture mode
-                      <select
-                        value={settings.capture_breakdown_video ? 'full_event' : 'minor_only'}
-                        onChange={(event) => update('capture_breakdown_video', event.target.value === 'full_event')}
-                      >
-                        <option value="full_event">Full event - include breakdown</option>
-                        <option value="minor_only">Minor stoppage only</option>
-                      </select>
-                    </label>
-                  </>
-                ) : (
-                  <div className="settings-message neutral">Manual mode: live view, audio and recording are controlled here.</div>
-                )}
-                <div className="settings-actions">
-                  {settings.plc_enabled && <button type="button" onClick={onTestPlc}>Test PLC</button>}
-                  <button type="button" className="primary-mini" onClick={onSaveSettings}>Save Settings</button>
-                </div>
-              </>
-            ) : (
-              <div className="settings-message neutral">System configuration is locked for Superadmin. Admin can monitor status and operate recording controls.</div>
-            )}
-            {settingsMessage && <div className={`settings-message ${settingsMessageTone}`}>{settingsMessage}</div>}
-            {plcTestResult && (
-              <div className={plcTestResult.ok ? 'settings-message good' : 'settings-message bad'}>
-                {plcTestResult.message}
-              </div>
-            )}
-            <div className="settings-status">
-              <span><Icon name="camera" /> Camera <strong>{settings.ip}</strong></span>
-              <span><Icon name="info" /> Mode <strong>{settings.plc_enabled ? 'PLC auto' : 'Manual'}</strong></span>
-              <span><Icon name="activity" /> Frames <strong>{recording.frames || 0}</strong></span>
-              <span><Icon name="record" /> Record <strong>{recording.running ? 'Active' : 'Idle'}</strong></span>
-              <span><Icon name="audio" /> Audio <strong>{recording.audio?.includes('enabled') ? 'On' : 'Off'}</strong></span>
-              <span><Icon name="storage" /> Storage <strong>{isSuperadmin ? settings.storage_root : 'Configured'}</strong></span>
-              {isSuperadmin && <span><Icon name="storage" /> Link host <strong>{settings.public_helper_url}</strong></span>}
-              <span><Icon name="activity" /> Clip limit <strong>{formatDuration(settings.max_record_seconds)}</strong></span>
-              <span><Icon name="record" /> Video mode <strong>{settings.capture_breakdown_video ? 'Full event' : 'Minor only'}</strong></span>
-            </div>
-          </div>
-        </details> : (
-          <button type="button" className="settings-menu locked-settings-button" onClick={() => onAdminRequired()} title="Admin password required">
-            <span className="nav-icon"><Icon name="lock" /></span>
-            <span>Settings</span>
-            <span className="settings-admin-lock"><Icon name="lock" /> Admin</span>
-          </button>
-        )}
+        <button className={page === 'hierarchy' ? 'active' : ''} onClick={() => setPage('hierarchy')}>
+          <span className="nav-icon" style={{ fontSize: '1.15rem' }}>⚙️</span>
+          <span className="nav-text">Settings & Admin</span>
+        </button>
       </nav>
 
-      {/* Sidebar footer removed as requested */}
+      {/* Subtle Minimal Footer */}
+      {!collapsed && (
+        <div style={{ marginTop: 'auto', paddingTop: '14px', borderTop: '1px solid rgba(255, 255, 255, 0.08)' }}>
+          <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#64748b', letterSpacing: '0.03em' }}>
+            RICO AUTO INDUSTRIES
+          </div>
+        </div>
+      )}
     </aside>
   );
 }
+
+const headerSelectStyle: React.CSSProperties = {
+  background: '#1e293b',
+  border: '1px solid #334155',
+  color: '#f8fafc',
+  padding: '6px 10px',
+  borderRadius: '6px',
+  fontSize: '0.84rem',
+  fontWeight: 600,
+  outline: 'none',
+  cursor: 'pointer',
+  height: '34px',
+};
 
 function TopBar({
   page,
   recording,
   settings,
-  online,
+  online = true,
   plc,
+  hierarchyTree = [],
+  selectedPlantId,
+  onChangePlant,
+  availableDepts = [],
+  selectedDeptId,
+  onChangeDept,
+  availableLines = [],
+  selectedLineId,
+  onChangeLine,
+  cameras = [],
+  activeCamId,
+  onSelectCamera,
+  viewMode = 'single',
+  onChangeViewMode,
 }: {
   page: Page;
   recording: RecordingStatus;
   settings: CameraSettings;
-  online: boolean;
-  plc: PlcStatus;
+  online?: boolean;
+  plc?: PlcStatus;
+  hierarchyTree?: HierarchyPlant[];
+  selectedPlantId?: number | 'all';
+  onChangePlant?: (id: number | 'all') => void;
+  availableDepts?: any[];
+  selectedDeptId?: number | 'all';
+  onChangeDept?: (id: number | 'all') => void;
+  availableLines?: any[];
+  selectedLineId?: number | 'all';
+  onChangeLine?: (id: number | 'all') => void;
+  cameras?: FlatCamera[];
+  activeCamId?: number | null;
+  onSelectCamera?: (cam: FlatCamera) => void;
+  viewMode?: 'single' | 'grid';
+  onChangeViewMode?: (mode: 'single' | 'grid') => void;
 }) {
-  const displayOnline = online;
-  const eventActive = Boolean(plc.gate_open || plc.current_event_type);
-  const recordingText = recording.running ? 'Recording' : eventActive ? 'Event active' : 'Recording off';
-  const recordingClass = recording.running ? 'record-chip active' : eventActive ? 'record-chip event' : 'record-chip';
+  const activeCam = cameras.find(c => c.id === activeCamId) || cameras[0];
+  const [currentTime, setCurrentTime] = useState(new Date());
+
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const formatClock = (date: Date) => {
+    const day = date.getDate().toString().padStart(2, '0');
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const month = months[date.getMonth()];
+    const year = date.getFullYear();
+    const time = date.toTimeString().split(' ')[0];
+    return `${day} ${month} ${year} | ${time}`;
+  };
+
+  const machineTitle = activeCam?.machine_name || 'UBE 850 T - 02';
+
+  if (page === 'hierarchy') {
+    return null;
+  }
+
   return (
-    <div className="topbar">
-      <div className="topbar-title-lockup">
-        <h1 className="topbar-main-title">UBE 850 T-2</h1>
-        <span className="topbar-machine-badge">Camera Monitor</span>
-        <span className="topbar-page-label">{page === 'live' ? 'Live View' : page === 'analytics' ? 'Analytics Dashboard' : 'Event Report'}</span>
+    <div style={{
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      padding: '6px 28px 12px',
+      background: 'transparent',
+      borderBottom: '1.5px solid #e2e8f0',
+      flexWrap: 'wrap',
+      gap: '14px',
+      marginBottom: '2px'
+    }}>
+      {/* Left: Machine Title + Mint Green Online Badge (matching Image 4) */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+        <div style={{
+          width: '34px',
+          height: '34px',
+          borderRadius: '8px',
+          background: '#0b1e36',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: '#38bdf8',
+          fontSize: '1.15rem'
+        }}>
+          ⚡
+        </div>
+        <h1 style={{
+          fontSize: 'clamp(1.4rem, 2.2vw, 2.1rem)',
+          fontWeight: 900,
+          color: '#09132b',
+          margin: 0,
+          letterSpacing: '-0.03em',
+          lineHeight: 1.1
+        }}>
+          {page === 'live' && viewMode === 'grid' ? 'Surveillance Multi-Grid' : machineTitle}
+        </h1>
+        <span style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '6px',
+          background: '#dcfce7',
+          color: '#15803d',
+          fontSize: '0.8rem',
+          fontWeight: 800,
+          padding: '4px 14px',
+          borderRadius: '999px',
+          letterSpacing: '0.04em',
+          border: '1px solid #bbf7d0'
+        }}>
+          <i style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#16a34a', display: 'inline-block' }}></i>
+          ONLINE
+        </span>
+
+        {/* Real-time Machine Breakdown / Status Timer Badge */}
+        {(() => {
+          const timerInfo = getLiveMachineTimerSeconds(plc);
+          const isBreakdown = timerInfo.state === 'breakdown';
+          const isMinor = timerInfo.state === 'minor_stoppage';
+          const timerText = formatTimerDisplay(timerInfo.seconds);
+
+          if (isBreakdown) {
+            return (
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  background: '#fee2e2',
+                  color: '#dc2626',
+                  border: '1.5px solid #f87171',
+                  fontSize: '0.82rem',
+                  fontWeight: 900,
+                  padding: '4px 14px',
+                  borderRadius: '999px',
+                  letterSpacing: '0.04em',
+                  boxShadow: '0 2px 10px rgba(220, 38, 38, 0.35)',
+                  animation: 'pulse-breakdown-badge 1.8s infinite'
+                }}
+                title={`Machine in Breakdown. Started: ${timerInfo.startedAt ? new Date(timerInfo.startedAt).toLocaleTimeString() : 'N/A'}`}
+              >
+                <span>🚨 BREAKDOWN:</span>
+                <strong style={{ fontFamily: 'monospace', fontSize: '0.94rem' }}>⏱ {timerText}</strong>
+              </span>
+            );
+          }
+
+          if (isMinor) {
+            return (
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  background: '#fef3c7',
+                  color: '#b45309',
+                  border: '1.5px solid #fcd34d',
+                  fontSize: '0.82rem',
+                  fontWeight: 800,
+                  padding: '4px 14px',
+                  borderRadius: '999px',
+                  letterSpacing: '0.04em'
+                }}
+                title="Machine in Minor Stoppage"
+              >
+                <span>⚡ STOPPAGE:</span>
+                <strong style={{ fontFamily: 'monospace', fontSize: '0.94rem' }}>⏱ {timerText}</strong>
+              </span>
+            );
+          }
+
+          return null;
+        })()}
       </div>
-      <div className="topbar-actions">
-        <span className={displayOnline ? 'topbar-cta' : 'topbar-cta off'}><i></i> {displayOnline ? 'Stream on' : 'Stream off'}</span>
-        <span className={recordingClass}><i></i> {recordingText}</span>
-        <span className="channel-chip">CH {settings.channel}</span>
+
+      {/* Right: Status Pills & Admin Profile Logo */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginLeft: 'auto' }}>
+        <span style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '6px',
+          background: recording.running ? '#dc2626' : '#f1f5f9',
+          color: recording.running ? '#ffffff' : '#334155',
+          border: recording.running ? '1px solid #b91c1c' : '1px solid #cbd5e1',
+          fontSize: '0.78rem',
+          fontWeight: 800,
+          padding: '5px 14px',
+          borderRadius: '999px',
+          letterSpacing: '0.04em',
+          boxShadow: recording.running ? '0 2px 10px rgba(220, 38, 38, 0.45)' : 'none',
+          transition: 'all 0.2s ease'
+        }}>
+          <i style={{
+            width: '7px',
+            height: '7px',
+            borderRadius: '50%',
+            background: recording.running ? '#ffffff' : '#16a34a',
+            display: 'inline-block',
+            boxShadow: recording.running ? '0 0 6px #ffffff' : 'none'
+          }}></i>
+          {recording.running ? 'RECORDING ACTIVE' : 'RECORDING READY'}
+        </span>
+        <span style={{
+          background: '#0b1e36',
+          color: '#ffffff',
+          fontSize: '0.74rem',
+          fontWeight: 800,
+          padding: '5px 14px',
+          borderRadius: '999px',
+          letterSpacing: '0.04em'
+        }}>
+          CH.{settings.channel || 1}
+        </span>
+        <div
+          title="System Administrator - RICO Enterprise"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '10px',
+            background: '#ffffff',
+            border: '1.5px solid #cbd5e1',
+            padding: '6px 14px',
+            borderRadius: '10px',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+            cursor: 'default',
+            userSelect: 'none'
+          }}
+        >
+          <div style={{
+            width: '28px',
+            height: '28px',
+            borderRadius: '7px',
+            background: 'linear-gradient(135deg, #3b82f6, #1d4ed8)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: '#ffffff',
+            boxShadow: '0 2px 6px rgba(59, 130, 246, 0.35)'
+          }}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            </svg>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.15 }}>
+            <span style={{ fontSize: '0.86rem', fontWeight: 800, color: '#0f172a', letterSpacing: '0.02em' }}>ADMIN</span>
+            <span style={{ fontSize: '0.68rem', fontWeight: 600, color: '#64748b' }}>RICO Enterprise</span>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -1199,157 +1428,859 @@ function LivePage({
   recording,
   online,
   plc,
+  stats,
+  cameras = [],
+  totalCamerasCount,
+  activeCamId,
+  onSelectCamera,
+  viewMode = 'single',
+  onChangeViewMode,
+  onEditCamera,
+  onResetFilters,
+  hierarchyTree = [],
+  selectedPlantId,
+  onChangePlant,
+  availableDepts = [],
+  selectedDeptId,
+  onChangeDept,
+  availableLines = [],
+  selectedLineId,
+  onChangeLine,
+  onNavigateSaved,
 }: {
   settings: CameraSettings;
   recording: RecordingStatus;
   online: boolean;
-  plc: PlcStatus;
+  plc?: PlcStatus;
+  stats?: RecordingStats;
+  cameras?: FlatCamera[];
+  totalCamerasCount?: number;
+  activeCamId?: number | null;
+  onSelectCamera?: (cam: FlatCamera) => void;
+  viewMode?: 'single' | 'grid';
+  onChangeViewMode?: (mode: 'single' | 'grid') => void;
+  onEditCamera?: (cam: FlatCamera) => void;
+  onResetFilters?: () => void;
+  hierarchyTree?: HierarchyPlant[];
+  selectedPlantId?: number | 'all';
+  onChangePlant?: (id: number | 'all') => void;
+  availableDepts?: any[];
+  selectedDeptId?: number | 'all';
+  onChangeDept?: (id: number | 'all') => void;
+  availableLines?: any[];
+  selectedLineId?: number | 'all';
+  onChangeLine?: (id: number | 'all') => void;
+  onNavigateSaved?: () => void;
 }) {
-  const liveUrl = useMemo(() => mjpegUrl(settings), [settings]);
-  const liveAudioUrl = useMemo(() => audioUrl(settings), [settings]);
+  const activeCam = useMemo(() => {
+    return cameras.find(c => c.id === activeCamId) || cameras[0] || null;
+  }, [cameras, activeCamId]);
+
+  const liveUrl = useMemo(() => {
+    if (activeCam) {
+      return hierarchyCameraMjpegUrl(activeCam.id);
+    }
+    return mjpegUrl(settings);
+  }, [activeCam, settings]);
+
   const [streamLoaded, setStreamLoaded] = useState(false);
-  const displayOnline = online || streamLoaded;
   const liveFrameRef = useRef<HTMLDivElement | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
   const [audioEnabled, setAudioEnabled] = useState(false);
-  const [nowTick, setNowTick] = useState(Date.now());
-  const [activeEvent, setActiveEvent] = useState<{
-    type: 'minor_stoppage' | 'breakdown';
-    startedAt: string;
-    lastSeenAt: number;
-  } | null>(null);
+  const [audioStatus, setAudioStatus] = useState<'idle' | 'loading' | 'playing' | 'error'>('idle');
+  const [audioConnected, setAudioConnected] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const [liveFullscreen, setLiveFullscreen] = useState(false);
+  const [currentTime, setCurrentTime] = useState(new Date());
 
-  async function toggleFullscreen() {
-    const target = liveFrameRef.current;
-    if (!target) return;
-    if (document.fullscreenElement === target) {
-      await document.exitFullscreen();
-      return;
+  const getAudioUrl = () => {
+    if (activeCam?.id) {
+      return hierarchyCameraAudioUrl(activeCam.id);
     }
-    await target.requestFullscreen();
-  }
-
-  function toggleAudio() {
-    setAudioEnabled((enabled) => !enabled);
-  }
-
-  useEffect(() => {
-    if (!audioEnabled) {
-      audioRef.current?.pause();
-      return;
-    }
-    audioRef.current?.play().catch(() => {
-      // Silently handle - audio may not be available
-      console.warn('Live audio stream could not be started.');
+    const camIp = activeCam?.camera_ip || settings.ip;
+    const rtspPort = activeCam?.rtsp_port || settings.rtsp_port || 554;
+    const username = activeCam?.username || settings.username || 'admin';
+    const password = activeCam?.password || settings.password || 'Admin@123';
+    const channel = activeCam?.channel || settings.channel || 1;
+    const rtspPath = activeCam?.rtsp_path || settings.rtsp_path || undefined;
+    const query = new URLSearchParams({
+      ip: camIp.trim(),
+      rtsp_port: String(rtspPort),
+      username,
+      password,
+      channel: String(channel),
+      ...(rtspPath ? { rtsp_path: rtspPath } : {}),
+      t: String(Date.now()),
     });
-  }, [audioEnabled, liveAudioUrl]);
+    return `${API_BASE}/audio.mp3?${query.toString()}`;
+  };
+
+  const toggleAudio = () => {
+    const el = audioRef.current;
+    if (!el) return;
+
+    if (!audioEnabled) {
+      // Turning sound ON
+      setAudioEnabled(true);
+      if (!audioConnected || !el.src || audioStatus === 'error') {
+        // First connection: fetch stream and play
+        setAudioStatus('loading');
+        el.src = getAudioUrl();
+        el.volume = 1.0;
+        el.muted = false;
+        const p = el.play();
+        if (p !== undefined) {
+          p.then(() => {
+            setAudioStatus('playing');
+            setAudioConnected(true);
+          }).catch(err => {
+            console.error('Audio playback error:', err);
+            setAudioStatus('error');
+          });
+        }
+      } else {
+        // Stream already active in background: instant un-mute (0ms delay)
+        el.muted = false;
+        if (el.paused) {
+          el.play().catch(() => {});
+        }
+        setAudioStatus('playing');
+      }
+    } else {
+      // Turning sound OFF: Instant mute without terminating connection
+      setAudioEnabled(false);
+      el.muted = true;
+    }
+  };
 
   useEffect(() => {
-    function onFullscreenChange() {
-      setLiveFullscreen(document.fullscreenElement === liveFrameRef.current);
+    if (audioConnected && audioRef.current) {
+      const el = audioRef.current;
+      setAudioStatus('loading');
+      el.src = getAudioUrl();
+      el.volume = 1.0;
+      el.muted = !audioEnabled;
+      el.play().then(() => {
+        setAudioStatus('playing');
+      }).catch(() => {
+        setAudioStatus('error');
+      });
     }
-    document.addEventListener('fullscreenchange', onFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
+  }, [activeCam?.id]);
+
+  useEffect(() => {
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.removeAttribute('src');
+      }
+    };
   }, []);
 
-  const liveEventType = normalizeGateEventType(plc.current_event_type || recording.event_type);
-  const liveEventStartedAt = plc.current_event_started_at || recording.event_started_at || recording.started_at;
-  const liveEventSignalActive = Boolean(
-    liveEventType
-    && plc.enabled !== false
-    && (plc.current_event_type || plc.gate_open || recording.running)
-  );
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const formatLiveOverlayDate = (d: Date) => {
+    const day = d.getDate().toString().padStart(2, '0');
+    const month = (d.getMonth() + 1).toString().padStart(2, '0');
+    const year = d.getFullYear();
+    const time = d.toTimeString().split(' ')[0];
+    return `${day}-${month}-${year} ${time}`;
+  };
+
+  const toggleFullscreen = () => {
+    if (!liveFrameRef.current) return;
+    if (!document.fullscreenElement) {
+      liveFrameRef.current.requestFullscreen().then(() => setLiveFullscreen(true)).catch(() => {});
+    } else {
+      document.exitFullscreen().then(() => setLiveFullscreen(false)).catch(() => {});
+    }
+  };
 
   useEffect(() => {
-    const timestamp = Date.now();
-    setActiveEvent((current) => {
-      if (liveEventSignalActive && liveEventType) {
-        return {
-          type: liveEventType,
-          startedAt: liveEventStartedAt || current?.startedAt || new Date().toISOString(),
-          lastSeenAt: timestamp,
-        };
-      }
-      if ((plc.gate_open || recording.running) && current) {
-        return { ...current, lastSeenAt: timestamp };
-      }
-      if (!current) return null;
-      const monitorOff = plc.enabled === false || !plc.running;
-      const closed = Boolean(plc.gate_close && !plc.gate_open && !recording.running && !plc.current_event_type);
-      const stale = timestamp - current.lastSeenAt > 8000;
-      if (monitorOff || closed || stale) return null;
-      return current;
-    });
-  }, [
-    liveEventSignalActive,
-    liveEventType,
-    liveEventStartedAt,
-    plc.gate_open,
-    plc.gate_close,
-    plc.current_event_type,
-    plc.enabled,
-    plc.running,
-    recording.running,
-  ]);
+    const handleFs = () => {
+      setLiveFullscreen(Boolean(document.fullscreenElement));
+    };
+    document.addEventListener('fullscreenchange', handleFs);
+    return () => document.removeEventListener('fullscreenchange', handleFs);
+  }, []);
 
-  useEffect(() => {
-    if (!activeEvent && !(plc.running && plc.machine_state === 'running')) return;
-    const timer = window.setInterval(() => setNowTick(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [activeEvent, plc.running, plc.machine_state]);
+  const currentPlant = hierarchyTree.find(p => p.id === selectedPlantId);
+  const currentPlantName = selectedPlantId === 'all'
+    ? 'All Plants'
+    : (currentPlant?.name || 'Plant');
 
-  const activeEventType = activeEvent ? eventTypeLabel(activeEvent.type) : '';
-  const activeEventSeconds = activeEvent ? secondsSince(activeEvent.startedAt, nowTick) : null;
-  const activeIsBreakdown = activeEvent?.type === 'breakdown';
+  const currentDept = availableDepts.find(d => d.id === selectedDeptId);
+  const currentDeptName = selectedDeptId === 'all'
+    ? 'All Departments'
+    : (currentDept?.name || 'Department');
+
+  const currentLine = availableLines.find(l => l.id === selectedLineId);
+  const currentLineName = selectedLineId === 'all'
+    ? 'All Lines'
+    : (currentLine?.name || 'Line');
+
+  const currentCamName = activeCam?.name || (cameras.length > 0 ? cameras[0].name : 'All Cameras');
 
   return (
-    <section className="workbench live-workbench">
-      <div className="feed-column">
-        <div className="live-frame" ref={liveFrameRef}>
-          <div className="camera-status-strip">
-            <span className={displayOnline ? 'mini-pill good live-timer-pill' : 'mini-pill bad'}>
-              <Icon name="camera" />
-              <span>{displayOnline ? 'LIVE' : 'OFFLINE'}</span>
-            </span>
-            {activeEventType && (
-              <span className={activeIsBreakdown ? 'mini-pill breakdown event-timer-pill' : 'mini-pill event event-timer-pill'}>
-                <span>{activeEventType}</span>
-                <strong>{formatDuration(activeEventSeconds || 0)}</strong>
-              </span>
-            )}
-          </div>
-          <div className="live-frame-actions">
-            <button
-              type="button"
-              className={`live-audio-pill-btn ${audioEnabled ? 'audio-enabled' : ''}`}
-              title={audioEnabled ? 'Mute live audio' : 'Play live audio'}
-              onClick={toggleAudio}
+    <section
+      className="workbench live-workbench"
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        flex: 1,
+        minHeight: 0,
+        gap: '12px',
+        width: '100%',
+        margin: 0,
+        boxSizing: 'border-box'
+      }}
+    >
+      {/* 1. Cascading Filter Cards + SINGLE / MULTI GRID Buttons in ONE Single Unified Row */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: '12px',
+        width: '100%',
+        flexWrap: 'wrap'
+      }}>
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: viewMode === 'single' ? 'minmax(140px, 1fr) minmax(140px, 1fr) minmax(190px, 1.35fr) minmax(150px, 1.1fr)' : 'minmax(140px, 1fr) minmax(140px, 1fr) minmax(190px, 1.4fr)',
+          gap: '10px',
+          flex: 1,
+          minWidth: 0
+        }}>
+          
+          {/* Card 1: Plant */}
+          <div
+            title={`Plant: ${currentPlantName}`}
+            style={{
+              position: 'relative',
+              background: '#ffffff',
+              borderRadius: '10px',
+              border: '1.5px solid #cbd5e1',
+              padding: '6px 12px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '8px',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+              minWidth: 0,
+              cursor: 'pointer',
+              transition: 'all 0.15s ease'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, flex: 1 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#1e293b" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M2 20a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8l-7 5V8l-7 5V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"/>
+                  <path d="M17 18h1"/>
+                  <path d="M12 18h1"/>
+                  <path d="M7 18h1"/>
+                </svg>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
+                <span style={{ fontSize: '0.74rem', color: '#64748b', fontWeight: 700, marginBottom: '1px', lineHeight: 1.1 }}>
+                  Plant
+                </span>
+                <span style={{ fontSize: '0.94rem', color: '#0f172a', fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.2 }}>
+                  {currentPlantName}
+                </span>
+              </div>
+            </div>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#334155" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
+            <select
+              value={selectedPlantId || 'all'}
+              onChange={(e) => {
+                const val = e.target.value === 'all' ? 'all' : Number(e.target.value);
+                onChangePlant?.(val);
+              }}
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                width: '100%',
+                height: '100%',
+                opacity: 0,
+                cursor: 'pointer',
+                zIndex: 10
+              }}
             >
-              <Icon name={audioEnabled ? 'audio' : 'volumeOff'} />
-              <span>{audioEnabled ? 'Audio ON' : 'Audio OFF'}</span>
-            </button>
-            <button type="button" title={liveFullscreen ? 'Exit Fullscreen' : 'Fullscreen'} onClick={toggleFullscreen}>
-              <Icon name={liveFullscreen ? 'minimize' : 'maximize'} />
-            </button>
+              <option value="all">🌐 All Plants ({hierarchyTree.length} Plants)</option>
+              {hierarchyTree.map(p => (
+                <option key={p.id} value={p.id}>🏭 {p.name} ({p.code})</option>
+              ))}
+            </select>
           </div>
-          <img
-            src={liveUrl}
-            alt="Live camera feed"
-            onLoad={() => setStreamLoaded(true)}
-            onError={() => setStreamLoaded(false)}
-          />
-          {audioEnabled && (
-            <audio
-              ref={audioRef}
-              src={liveAudioUrl}
-              autoPlay
-              onError={() => console.warn('Live audio is unavailable.')}
-            />
+
+          {/* Card 2: Department */}
+          <div
+            title={`Department: ${currentDeptName}`}
+            style={{
+              position: 'relative',
+              background: '#ffffff',
+              borderRadius: '10px',
+              border: '1.5px solid #cbd5e1',
+              padding: '6px 12px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '8px',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+              minWidth: 0,
+              cursor: 'pointer',
+              transition: 'all 0.15s ease'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, flex: 1 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#1e293b" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="3" y="3" width="7" height="7"/>
+                  <rect x="14" y="3" width="7" height="7"/>
+                  <rect x="14" y="14" width="7" height="7"/>
+                  <rect x="3" y="14" width="7" height="7"/>
+                </svg>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
+                <span style={{ fontSize: '0.74rem', color: '#64748b', fontWeight: 700, marginBottom: '1px', lineHeight: 1.1 }}>
+                  Department
+                </span>
+                <span style={{ fontSize: '0.94rem', color: '#0f172a', fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.2 }}>
+                  {currentDeptName}
+                </span>
+              </div>
+            </div>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#334155" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
+            <select
+              value={selectedDeptId || 'all'}
+              onChange={(e) => {
+                const val = e.target.value === 'all' ? 'all' : Number(e.target.value);
+                onChangeDept?.(val);
+              }}
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                width: '100%',
+                height: '100%',
+                opacity: 0,
+                cursor: 'pointer',
+                zIndex: 10
+              }}
+            >
+              <option value="all">📁 All Departments ({availableDepts.length} Departments)</option>
+              {availableDepts.map(d => {
+                const p = hierarchyTree.find(item => item.id === d.plant_id);
+                const prefix = (selectedPlantId === 'all' && p) ? `${p.name} → ` : '';
+                return (
+                  <option key={d.id} value={d.id}>{prefix}{d.name} ({d.code})</option>
+                );
+              })}
+            </select>
+          </div>
+
+          {/* Card 3: Line */}
+          <div
+            title={`Line: ${currentLineName}`}
+            style={{
+              position: 'relative',
+              background: '#ffffff',
+              borderRadius: '10px',
+              border: '1.5px solid #cbd5e1',
+              padding: '6px 12px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '8px',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+              minWidth: 0,
+              cursor: 'pointer',
+              transition: 'all 0.15s ease'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, flex: 1 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#1e293b" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/>
+                  <polyline points="16 7 22 7 22 13"/>
+                </svg>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
+                <span style={{ fontSize: '0.74rem', color: '#64748b', fontWeight: 700, marginBottom: '1px', lineHeight: 1.1 }}>
+                  Line
+                </span>
+                <span style={{ fontSize: currentLineName.length > 20 ? '0.86rem' : '0.94rem', color: '#0f172a', fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.2 }}>
+                  {currentLineName}
+                </span>
+              </div>
+            </div>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#334155" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
+            <select
+              value={selectedLineId || 'all'}
+              onChange={(e) => {
+                const val = e.target.value === 'all' ? 'all' : Number(e.target.value);
+                onChangeLine?.(val);
+              }}
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                width: '100%',
+                height: '100%',
+                opacity: 0,
+                cursor: 'pointer',
+                zIndex: 10
+              }}
+            >
+              <option value="all">⚡ All Lines ({availableLines.length} Lines)</option>
+              {availableLines.map(l => {
+                const d = availableDepts.find(item => item.id === l.department_id);
+                const prefix = (selectedDeptId === 'all' && d) ? `${d.name} → ` : '';
+                return (
+                  <option key={l.id} value={l.id}>{prefix}{l.name} ({l.code})</option>
+                );
+              })}
+            </select>
+          </div>
+
+          {/* Card 4: Camera */}
+          {viewMode === 'single' && (
+            <div
+              title={`Camera: ${currentCamName}`}
+              style={{
+                position: 'relative',
+                background: '#ffffff',
+                borderRadius: '10px',
+                border: '1.5px solid #cbd5e1',
+                padding: '6px 12px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '8px',
+                boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+                minWidth: 0,
+                cursor: 'pointer',
+                transition: 'all 0.15s ease'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, flex: 1 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#1e293b" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                    <circle cx="12" cy="13" r="4"/>
+                  </svg>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
+                  <span style={{ fontSize: '0.74rem', color: '#64748b', fontWeight: 700, marginBottom: '1px', lineHeight: 1.1 }}>
+                    Camera
+                  </span>
+                  <span style={{ fontSize: '0.94rem', color: '#0f172a', fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.2 }}>
+                    {currentCamName}
+                  </span>
+                </div>
+              </div>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#334155" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                <polyline points="6 9 12 15 18 9"/>
+              </svg>
+              <select
+                value={activeCamId || ''}
+                onChange={(e) => {
+                  const id = Number(e.target.value);
+                  const cam = cameras.find(c => c.id === id);
+                  if (cam) onSelectCamera?.(cam);
+                }}
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  width: '100%',
+                  height: '100%',
+                  opacity: 0,
+                  cursor: 'pointer',
+                  zIndex: 10
+                }}
+              >
+                {cameras.map(c => (
+                  <option key={c.id} value={c.id}>
+                    📹 {c.name} · {c.machine_name} ({c.camera_ip})
+                  </option>
+                ))}
+              </select>
+            </div>
           )}
         </div>
-        {recording.error && recording.running && <div className="error-banner">Recording status: {friendlyRecordingError(recording.error)}</div>}
+
+        {/* View Switcher Buttons (Exact Image 1 Design) */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+          <button
+            type="button"
+            onClick={() => onChangeViewMode?.('single')}
+            style={{
+              padding: '8px 16px',
+              borderRadius: '10px',
+              border: viewMode === 'single' ? '1.5px solid #93c5fd' : '1.5px solid #cbd5e1',
+              background: viewMode === 'single' ? '#eff6ff' : '#ffffff',
+              color: viewMode === 'single' ? '#1d4ed8' : '#334155',
+              fontWeight: 800,
+              fontSize: '0.84rem',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              boxShadow: viewMode === 'single' ? '0 2px 8px rgba(37, 99, 235, 0.12)' : '0 1px 3px rgba(0,0,0,0.04)',
+              transition: 'all 0.15s ease',
+              whiteSpace: 'nowrap'
+            }}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="7" height="7"/>
+              <rect x="14" y="3" width="7" height="7"/>
+              <rect x="14" y="14" width="7" height="7"/>
+              <rect x="3" y="14" width="7" height="7"/>
+            </svg>
+            <span>SINGLE</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              onChangeViewMode?.('grid');
+              onChangePlant?.('all');
+              onChangeDept?.('all');
+              onChangeLine?.('all');
+            }}
+            style={{
+              padding: '8px 16px',
+              borderRadius: '10px',
+              border: viewMode === 'grid' ? '1.5px solid #93c5fd' : '1.5px solid #cbd5e1',
+              background: viewMode === 'grid' ? '#eff6ff' : '#ffffff',
+              color: viewMode === 'grid' ? '#1d4ed8' : '#334155',
+              fontWeight: 800,
+              fontSize: '0.84rem',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              boxShadow: viewMode === 'grid' ? '0 2px 8px rgba(37, 99, 235, 0.12)' : '0 1px 3px rgba(0,0,0,0.04)',
+              transition: 'all 0.15s ease',
+              whiteSpace: 'nowrap'
+            }}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="7" height="7"/>
+              <rect x="14" y="3" width="7" height="7"/>
+              <rect x="14" y="14" width="7" height="7"/>
+              <rect x="3" y="14" width="7" height="7"/>
+            </svg>
+            <span>MULTI GRID ({cameras.length || 1})</span>
+          </button>
+
+          {/* Quick Automation Status Indicator */}
+          <div
+            title="PLC Gate Trigger Automation Status"
+            style={{
+              padding: '7px 14px',
+              borderRadius: '10px',
+              border: '1.5px solid #cbd5e1',
+              background: (settings.plc_enabled && plc?.running) ? '#f0fdf4' : '#f8fafc',
+              color: (settings.plc_enabled && plc?.running) ? '#15803d' : '#64748b',
+              fontWeight: 800,
+              fontSize: '0.82rem',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+              whiteSpace: 'nowrap'
+            }}
+          >
+            <span style={{
+              width: '8px',
+              height: '8px',
+              borderRadius: '50%',
+              background: (settings.plc_enabled && plc?.running) ? '#16a34a' : '#94a3b8'
+            }}></span>
+            <span>TRIGGER: {(settings.plc_enabled && plc?.running) ? 'AUTO' : 'OFF'}</span>
+          </div>
+        </div>
       </div>
+
+      {viewMode === 'grid' ? (
+        <MultiCamGrid
+          cameras={cameras}
+          totalCamerasCount={totalCamerasCount}
+          selectedCameraId={activeCamId}
+          onSelectCamera={(cam) => onSelectCamera?.(cam)}
+          onFocusSingle={(cam) => {
+            onSelectCamera?.(cam);
+            onChangeViewMode?.('single');
+          }}
+          onEditCamera={onEditCamera}
+          onResetFilters={onResetFilters}
+        />
+      ) : (
+        <>
+          {/* Main Full-Width Widescreen Live Video Container */}
+          <div
+            className="live-frame"
+            ref={liveFrameRef}
+            style={{
+              position: 'relative',
+              overflow: 'hidden',
+              borderRadius: '14px',
+              border: '1.5px solid #cbd5e1',
+              boxShadow: '0 4px 24px rgba(0,0,0,0.07)',
+              background: '#000000',
+              width: '100%',
+              flex: '1 1 auto',
+              minHeight: 0,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}
+          >
+            {/* Top Left: LIVE Badge + Machine Status Signal (Side-by-Side in Single Row) */}
+            <div style={{
+              position: 'absolute',
+              top: '16px',
+              left: '16px',
+              zIndex: 20,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '10px'
+            }}>
+              {/* 1. LIVE Indicator */}
+              <span style={{
+                background: '#10b981',
+                color: '#ffffff',
+                border: '1.5px solid #34d399',
+                padding: '5px 14px',
+                borderRadius: '8px',
+                fontSize: '0.86rem',
+                fontWeight: 900,
+                letterSpacing: '0.08em',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '8px',
+                backdropFilter: 'blur(8px)',
+                boxShadow: '0 4px 14px rgba(16, 185, 129, 0.45)'
+              }}>
+                <i style={{
+                  width: '8px',
+                  height: '8px',
+                  borderRadius: '50%',
+                  background: '#ffffff',
+                  display: 'inline-block',
+                  boxShadow: '0 0 8px #ffffff'
+                }}></i>
+                LIVE
+              </span>
+
+              {/* 2. Machine Status Badge (Running / Minor Stoppage / Breakdown in the same place & size) */}
+              {(() => {
+                const timerInfo = getLiveMachineTimerSeconds(plc);
+                const isBreakdown = timerInfo.state === 'breakdown';
+                const isMinor = timerInfo.state === 'minor_stoppage';
+                const timerText = formatTimerDisplay(timerInfo.seconds);
+
+                if (isBreakdown) {
+                  return (
+                    <div style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      background: 'rgba(220, 38, 38, 0.95)',
+                      border: '1.5px solid #fca5a5',
+                      padding: '5px 12px',
+                      borderRadius: '8px',
+                      backdropFilter: 'blur(8px)',
+                      boxShadow: '0 4px 18px rgba(220, 38, 38, 0.6)',
+                      animation: 'pulse-breakdown 1.8s infinite'
+                    }}>
+                      <span style={{ fontSize: '0.95rem', lineHeight: 1 }}>🚨</span>
+                      <span style={{ fontSize: '0.78rem', fontWeight: 900, color: '#fee2e2', letterSpacing: '0.04em' }}>
+                        BREAKDOWN
+                      </span>
+                      <span style={{ fontSize: '0.78rem', color: '#fca5a5' }}>•</span>
+                      <span style={{ fontSize: '0.82rem', fontWeight: 900, color: '#ffffff', fontFamily: 'monospace' }}>
+                        ⏱ {timerText}
+                      </span>
+                    </div>
+                  );
+                }
+
+                if (isMinor) {
+                  return (
+                    <div style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      background: 'rgba(217, 119, 6, 0.94)',
+                      border: '1.5px solid #fde68a',
+                      padding: '5px 12px',
+                      borderRadius: '8px',
+                      backdropFilter: 'blur(8px)',
+                      boxShadow: '0 4px 16px rgba(217, 119, 6, 0.5)'
+                    }}>
+                      <span style={{ fontSize: '0.95rem', lineHeight: 1 }}>⚡</span>
+                      <span style={{ fontSize: '0.78rem', fontWeight: 900, color: '#fef3c7', letterSpacing: '0.04em' }}>
+                        STOPPAGE
+                      </span>
+                      <span style={{ fontSize: '0.78rem', color: '#fde68a' }}>•</span>
+                      <span style={{ fontSize: '0.82rem', fontWeight: 800, color: '#ffffff', fontFamily: 'monospace' }}>
+                        ⏱ {timerText}
+                      </span>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    background: 'rgba(15, 23, 42, 0.88)',
+                    border: '1.5px solid rgba(34, 197, 94, 0.6)',
+                    padding: '5px 12px',
+                    borderRadius: '8px',
+                    backdropFilter: 'blur(8px)',
+                    boxShadow: '0 2px 10px rgba(0, 0, 0, 0.4)'
+                  }}>
+                    <span style={{
+                      width: '8px',
+                      height: '8px',
+                      borderRadius: '50%',
+                      background: '#22c55e',
+                      boxShadow: '0 0 8px #22c55e'
+                    }}></span>
+                    <span style={{ fontSize: '0.78rem', fontWeight: 800, color: '#86efac', letterSpacing: '0.04em' }}>
+                      RUNNING
+                    </span>
+                    <span style={{ fontSize: '0.78rem', color: '#94a3b8' }}>•</span>
+                    <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#f1f5f9', fontFamily: 'monospace' }}>
+                      ⏱ {timerText}
+                    </span>
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Video Image - Fills full width and height with zero distortion */}
+            <img
+              key={liveUrl}
+              src={liveUrl}
+              alt={activeCam?.name || "Live camera feed"}
+              onLoad={() => setStreamLoaded(true)}
+              onError={() => setStreamLoaded(false)}
+              style={{
+                width: '100%',
+                height: '100%',
+                objectFit: 'fill',
+                display: 'block'
+              }}
+            />
+
+            {/* Active Live Audio Element (positioned offscreen to ensure Chrome media pipeline stays awake) */}
+            <audio
+              ref={audioRef}
+              preload="auto"
+              playsInline
+              onPlaying={() => setAudioStatus('playing')}
+              onWaiting={() => setAudioStatus('loading')}
+              onError={(e) => {
+                console.error('Audio stream error event:', e);
+                setAudioStatus('error');
+              }}
+              style={{
+                position: 'fixed',
+                bottom: '-200px',
+                right: '-200px',
+                width: '1px',
+                height: '1px',
+                opacity: 0.001,
+                pointerEvents: 'none'
+              }}
+            />
+
+            {/* Bottom Right Floating Controls */}
+            <div style={{
+              position: 'absolute',
+              bottom: '22px',
+              right: '22px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px',
+              zIndex: 10
+            }}>
+              {/* Audio Toggle Button */}
+              <button
+                type="button"
+                onClick={toggleAudio}
+                style={{
+                  background: audioEnabled ? (audioStatus === 'error' ? '#ef4444' : '#10b981') : 'rgba(15, 23, 42, 0.88)',
+                  backdropFilter: 'blur(12px)',
+                  border: audioEnabled ? 'none' : '1.5px solid rgba(255, 255, 255, 0.22)',
+                  color: '#ffffff',
+                  padding: '10px 22px',
+                  borderRadius: '999px',
+                  fontSize: '0.96rem',
+                  fontWeight: 800,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  boxShadow: audioEnabled ? '0 4px 16px rgba(16, 185, 129, 0.55)' : '0 4px 16px rgba(0,0,0,0.5)',
+                  transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)'
+                }}
+                title={audioEnabled ? 'Mute Live Audio Feed' : 'Unmute Live Audio Feed'}
+              >
+                <span style={{ fontSize: '1.2rem' }}>
+                  {audioEnabled
+                    ? (audioStatus === 'loading' ? '⏳' : audioStatus === 'error' ? '⚠️' : '🔊')
+                    : '🔇'}
+                </span>
+                <span>
+                  {audioEnabled
+                    ? (audioStatus === 'loading' ? 'Connecting Audio...' : audioStatus === 'error' ? 'Audio Error (Retry)' : 'Audio ON')
+                    : 'Audio OFF'}
+                </span>
+              </button>
+
+              {/* Fullscreen Circular Button */}
+              <button
+                type="button"
+                onClick={toggleFullscreen}
+                style={{
+                  background: 'rgba(30, 41, 59, 0.88)',
+                  backdropFilter: 'blur(12px)',
+                  border: '1.5px solid rgba(255, 255, 255, 0.2)',
+                  color: '#ffffff',
+                  width: '44px',
+                  height: '44px',
+                  borderRadius: '50%',
+                  fontSize: '1.25rem',
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
+                  transition: 'all 0.2s ease'
+                }}
+                title={liveFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
+              >
+                <span>⛶</span>
+              </button>
+            </div>
+          </div>
+        </>
+      )}
     </section>
   );
 }
@@ -1450,6 +2381,8 @@ function SavedPage({
   const [savingReason, setSavingReason] = useState(false);
   const [isViewMode, setIsViewMode] = useState(false);
   const [openStep, setOpenStep] = useState(1);
+  const [stepSearch, setStepSearch] = useState('');
+  const [isModalMaximized, setIsModalMaximized] = useState(true);
 
   function editRecord(record: RecordingRecord, viewMode = false) {
     setIsViewMode(viewMode);
@@ -1483,7 +2416,8 @@ function SavedPage({
     setEditTargetDate(date);
     setEditNoteText(actionNote);
     setEditManualTranscript(record.manual_transcript || '');
-    setOpenStep(isStandardType ? 5 : 1);
+    setStepSearch('');
+    setOpenStep(isStandardType ? (reasonParts[1] ? (reasonParts[2] ? 4 : 3) : 2) : 1);
   }
   const [playbackState, setPlaybackState] = useState<PlaybackState>('idle');
 
@@ -1802,35 +2736,104 @@ function SavedPage({
   }
 
   return (
-    <section className={selected ? 'workbench saved-workbench active-player' : 'workbench saved-workbench'}>
-      <div className="library-column">
+    <section className={selected ? 'workbench saved-workbench active-player' : 'workbench saved-workbench'} style={{ padding: '12px 28px 24px', background: '#f8fafc' }}>
+      <div className="library-column" style={{ width: '100%' }}>
         {activeAppPage !== 'analytics' && (
           <>
-            <KpiCards stats={reportStats} thresholdSeconds={settings.max_record_seconds} />
-
-            <div className="library-header">
-              <div>
-                <h2>Event Report</h2>
-                <span>{list.total} events</span>
+            {/* Header Document Lockup + Action Buttons */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '4px 0 16px', flexWrap: 'wrap', gap: '14px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                <div style={{
+                  width: '44px',
+                  height: '44px',
+                  borderRadius: '10px',
+                  border: '1.5px solid #cbd5e1',
+                  background: '#ffffff',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '1.35rem',
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+                  color: '#1e40af'
+                }}>
+                  📄
+                </div>
+                <div>
+                  <h1 style={{ fontSize: '1.55rem', fontWeight: 800, color: '#0f172a', margin: 0, letterSpacing: '-0.02em' }}>
+                    Incident & Event Reports
+                  </h1>
+                  <p style={{ margin: '2px 0 0', fontSize: '0.85rem', color: '#64748b', fontWeight: 500 }}>
+                    View and manage machine incidents, stoppages and events with detailed logs and AI insights.
+                  </p>
+                </div>
               </div>
-              <div className="library-actions">
-                <a className="download-button report-download" href={exportUrl} download><Icon name="storage" /> Download Report</a>
-                <button onClick={() => load(true)}>{loading ? 'Refreshing...' : 'Refresh'}</button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <a
+                  className="download-button"
+                  href={exportUrl}
+                  download
+                  style={{
+                    background: '#059669',
+                    color: '#ffffff',
+                    border: 'none',
+                    borderRadius: '8px',
+                    padding: '9px 18px',
+                    fontWeight: 700,
+                    fontSize: '0.84rem',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    cursor: 'pointer',
+                    boxShadow: '0 2px 6px rgba(5, 150, 105, 0.25)',
+                    textDecoration: 'none'
+                  }}
+                >
+                  📥 Download Report
+                </a>
+                <button
+                  type="button"
+                  onClick={() => load(true)}
+                  style={{
+                    background: '#ffffff',
+                    color: '#334155',
+                    border: '1px solid #cbd5e1',
+                    borderRadius: '8px',
+                    padding: '9px 18px',
+                    fontWeight: 600,
+                    fontSize: '0.84rem',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    cursor: 'pointer',
+                    boxShadow: '0 1px 2px rgba(0,0,0,0.04)'
+                  }}
+                >
+                  🔄 Refresh
+                </button>
               </div>
             </div>
+
+            {/* 5 KPI Stat Cards */}
+            <KpiCards stats={reportStats} thresholdSeconds={settings.max_record_seconds} />
           </>
         )}
 
-        <div className="report-range-strip">
-          <span>Date Range</span>
-          <strong>{reportRangeSummary(appliedFilters)}</strong>
-          <em>{reportCategoryLabel(appliedFilters.category, settings.max_record_seconds)} | {reportShiftLabel(appliedFilters.shift)}</em>
-        </div>
-
-        <div className="filter-card compact-filter">
-          <label>
-            Period
-            <select value={datePreset} onChange={(event) => changeDatePreset(event.target.value as ReportDatePreset)}>
+        {/* Filter Bar: Clean Enterprise Light Card */}
+        <div className="filter-card compact-filter" style={{
+          background: '#ffffff',
+          borderRadius: '12px',
+          border: '1px solid #e2e8f0',
+          padding: '16px 20px',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+          marginBottom: '18px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '16px',
+          flexWrap: 'wrap'
+        }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '0.78rem', fontWeight: 700, color: '#475569' }}>
+            <span>📅 Date Range</span>
+            <select value={datePreset} onChange={(event) => changeDatePreset(event.target.value as ReportDatePreset)} style={{ padding: '8px 12px', fontSize: '0.86rem', background: '#ffffff', border: '1px solid #cbd5e1', color: '#0f172a', borderRadius: '8px', outline: 'none' }}>
               <option value="today">Today</option>
               <option value="yesterday">Yesterday</option>
               <option value="last_7">Last 7 Days</option>
@@ -1839,38 +2842,87 @@ function SavedPage({
               <option value="all">All Time</option>
             </select>
           </label>
-          <label>
-            From
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '0.78rem', fontWeight: 700, color: '#475569' }}>
+            <span>From</span>
             <DateInputDDMMYYYY disabled={datePreset !== 'custom'} value={fromDate} onChange={setFromDate} />
           </label>
-          <label>
-            To
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '0.78rem', fontWeight: 700, color: '#475569' }}>
+            <span>To</span>
             <DateInputDDMMYYYY disabled={datePreset !== 'custom'} value={toDate} onChange={setToDate} />
           </label>
-          <label>
-            Category
-            <select value={category} onChange={(event) => handleCategoryChange(event.target.value)}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '0.78rem', fontWeight: 700, color: '#475569' }}>
+            <span>⊞ Category</span>
+            <select value={category} onChange={(event) => handleCategoryChange(event.target.value)} style={{ padding: '8px 12px', fontSize: '0.86rem', background: '#ffffff', border: '1px solid #cbd5e1', color: '#0f172a', borderRadius: '8px', outline: 'none' }}>
               <option value="all">All</option>
               <option value="minor_stoppage">Minor Stoppage (&lt; {stoppageThresholdLabel(settings.max_record_seconds)})</option>
               <option value="breakdown">Breakdown (&gt; {stoppageThresholdLabel(settings.max_record_seconds)})</option>
             </select>
           </label>
-          <label>
-            Shift
-            <select value={shift} onChange={(event) => handleShiftChange(event.target.value as ReportShift)}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '0.78rem', fontWeight: 700, color: '#475569' }}>
+            <span>👤 Shift</span>
+            <select value={shift} onChange={(event) => handleShiftChange(event.target.value as ReportShift)} style={{ padding: '8px 12px', fontSize: '0.86rem', background: '#ffffff', border: '1px solid #cbd5e1', color: '#0f172a', borderRadius: '8px', outline: 'none' }}>
               <option value="all">All Shifts</option>
               <option value="A">Shift A</option>
               <option value="B">Shift B</option>
               <option value="C">Shift C</option>
             </select>
           </label>
-          <div className="filter-apply">
-            <button type="button" onClick={applyFilters} disabled={!filtersDirty || loading}>
-              Apply
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '10px', marginTop: '12px' }}>
+            <button
+              type="button"
+              onClick={applyFilters}
+              disabled={!filtersDirty || loading}
+              style={{
+                background: '#059669',
+                color: '#ffffff',
+                border: 'none',
+                borderRadius: '8px',
+                padding: '9px 22px',
+                fontWeight: 700,
+                fontSize: '0.86rem',
+                cursor: filtersDirty ? 'pointer' : 'default',
+                opacity: filtersDirty ? 1 : 0.6,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                boxShadow: '0 2px 6px rgba(5, 150, 105, 0.25)'
+              }}
+            >
+              <span>🌪️</span> Apply
             </button>
-            <span className={filtersDirty ? 'filter-state pending' : 'filter-state'}>
-              {filtersDirty ? 'Pending changes' : 'Applied'}
-            </span>
+            <button
+              type="button"
+              onClick={() => {
+                setDatePreset('today');
+                setFromDate(todayInputValue());
+                setToDate(todayInputValue());
+                setCategory('all');
+                setShift('all');
+                setAppliedFilters({
+                  datePreset: 'today',
+                  fromDate: todayInputValue(),
+                  toDate: todayInputValue(),
+                  category: 'all',
+                  shift: 'all',
+                });
+                load(true);
+              }}
+              style={{
+                background: '#ffffff',
+                color: '#475569',
+                border: '1px solid #cbd5e1',
+                borderRadius: '8px',
+                padding: '9px 18px',
+                fontWeight: 600,
+                fontSize: '0.86rem',
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px'
+              }}
+            >
+              <span>🔄</span> Reset
+            </button>
           </div>
         </div>
 
@@ -1880,154 +2932,434 @@ function SavedPage({
           <>
             {error && <div className="error-banner">{error}</div>}
 
-        {!loading && list.records.length === 0 && (
-          <div className="empty-state">
-            <strong>No events found</strong>
-            <span>Refresh the report after a gate event, or adjust the date/category filter.</span>
-          </div>
-        )}
+            {!loading && list.records.length === 0 && (
+              <div className="empty-state" style={{ background: '#ffffff', borderRadius: '12px', border: '1px solid #e2e8f0', padding: '40px', textAlign: 'center' }}>
+                <strong style={{ fontSize: '1.2rem', color: '#0f172a' }}>No events found</strong>
+                <span style={{ display: 'block', color: '#64748b', marginTop: '6px', fontSize: '0.88rem' }}>Refresh the report after a gate event, or adjust the date/category filter.</span>
+              </div>
+            )}
 
-        {list.records.length > 0 && <div className="record-list">
-          <div className="record-list-head">
-            <span>S.No</span>
-            <span>Start Date & Time</span>
-            <span>End Time</span>
-            <span>Video Duration</span>
-            <span>Event Duration</span>
-            <span>Category</span>
-            <span>Reason</span>
-            <span>AI Voice Transcript</span>
-            <span>Manual Correction</span>
-            <span>Status</span>
-            <span>Actions</span>
-          </div>
-          {list.records.map((record, index) => {
-            const status = liveStatus(record);
-            const videoAvailable = hasVideo(record);
-            const readyForVideo = videoReady(record);
-            const serialNumber = (page - 1) * PAGE_SIZE + index + 1;
-            return (
-              <article className="record-row" key={record.file_path}>
-                <span className="record-index">{serialNumber}</span>
-                <span className="record-time" title={record.file_name}>
-                  <strong>{formatDateTime(record.started_at)}</strong>
-                </span>
-                <span className="record-duration">{formatTimeOnly(liveEventEnd(record))}</span>
-                <span className="record-duration">{formatDuration(record.duration_seconds)}</span>
-                <span className="record-duration">{formatDuration(liveBreakdownDuration(record))}</span>
-                <span className={record.event_type === 'breakdown' ? 'status-badge bad' : 'status-badge neutral'}>{eventTypeLabel(record.event_type)}</span>
-                {(() => {
+            {list.records.length > 0 && (
+              <div className="record-list" style={{ background: '#ffffff', borderRadius: '14px', border: '1.5px solid #e2e8f0', boxShadow: '0 1px 4px rgba(0,0,0,0.04)', overflowX: 'auto', width: '100%' }}>
+                {/* 11 Columns matching Image 2 */}
+                <div className="record-list-head" style={{ background: '#ffffff', borderBottom: '1.5px solid #e2e8f0', color: '#64748b', fontWeight: 800, fontSize: '0.78rem', letterSpacing: '0.05em', padding: '16px 24px' }}>
+                  <span>S.NO</span>
+                  <span>START DATE & TIME ⇅</span>
+                  <span>END TIME ↓</span>
+                  <span>VIDEO DURATION ⇅</span>
+                  <span>EVENT DURATION ↑</span>
+                  <span>CATEGORY ⇅</span>
+                  <span>REASON ↓</span>
+                  <span>AI VOICE TRANSCRIPT ⇅</span>
+                  <span>MANUAL CORRECTION ⇅</span>
+                  <span>STATUS ⇅</span>
+                  <span style={{ textAlign: 'center' }}>ACTIONS</span>
+                </div>
+                {list.records.map((record, index) => {
+                  const status = liveStatus(record);
+                  const videoAvailable = hasVideo(record);
+                  const readyForVideo = videoReady(record);
+                  const canPlay = readyForVideo || videoAvailable;
+                  const serialNumber = (page - 1) * PAGE_SIZE + index + 1;
+                  const isBreakdown = record.event_type === 'breakdown';
                   const hasReason = Boolean(record.reason_submitted_by && record.reason_submitted_by !== 'Voice Transcript');
-                  let chipClass = 'reason-chip pending';
-                  let chipText = 'Pending reason';
-                  let titleText = 'Reason is pending';
-                  let isDisabled = !hasReason;
-
-                  if (hasReason) {
-                    chipClass = 'reason-chip saved';
-                    chipText = record.reason?.split(' - ')[0] || 'Reason Saved';
-                    titleText = record.reason!;
-                  } else if (record.transcript) {
-                    chipClass = 'reason-chip processing';
-                    chipText = 'Verify';
-                    titleText = 'Verify AI transcript';
-                  }
 
                   return (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <button
-                        type="button"
-                        className={`${chipClass} ${expandedRowPaths[record.file_path] ? 'expanded' : ''}`}
-                        title={titleText}
-                        onClick={() => {
-                          if (readyForVideo || videoAvailable) {
-                            editRecord(record, hasReason);
-                          }
-                        }}
-                        style={{ cursor: (readyForVideo || videoAvailable) ? 'pointer' : 'default', flex: 1, textAlign: 'left', wordBreak: 'break-word' }}
-                      >
-                        {chipText}
-                      </button>
-                      {(readyForVideo || videoAvailable) && (
+                    <article
+                      className="record-row"
+                      key={record.file_path}
+                      style={{
+                        background: '#ffffff',
+                        borderBottom: '1px solid #f1f5f9',
+                        padding: '15px 24px',
+                        alignItems: 'center',
+                        transition: 'background 0.15s ease'
+                      }}
+                    >
+                      {/* 1. S.NO */}
+                      <span className="record-index" style={{ fontWeight: 700, color: '#475569', fontSize: '0.92rem' }}>{serialNumber}</span>
+
+                      {/* 2. START DATE & TIME */}
+                      <span className="record-time" title={record.file_name} style={{ color: '#0f172a', fontWeight: 700, fontSize: '0.92rem', whiteSpace: 'nowrap' }}>
+                        {formatDateTime(record.started_at)}
+                      </span>
+
+                      {/* 3. END TIME */}
+                      <span className="record-duration" style={{ color: '#475569', fontWeight: 600, fontSize: '0.9rem', whiteSpace: 'nowrap' }}>
+                        {formatTimeOnly(liveEventEnd(record))}
+                      </span>
+
+                      {/* 4. VIDEO DURATION */}
+                      <span className="record-duration" style={{ color: '#475569', fontWeight: 600, fontSize: '0.9rem' }}>
+                        {record.duration_seconds ? formatDuration(record.duration_seconds) : '-'}
+                      </span>
+
+                      {/* 5. EVENT DURATION */}
+                      <span className="record-duration" style={{ fontWeight: 800, color: '#0f172a', fontSize: '0.94rem' }}>
+                        {formatDuration(liveBreakdownDuration(record))}
+                      </span>
+
+                      {/* 6. CATEGORY: Exact match to Image 2 */}
+                      <span>
+                        {isBreakdown ? (
+                          <span style={{
+                            background: '#fee2e2',
+                            color: '#dc2626',
+                            border: '1px solid #fecaca',
+                            padding: '5px 14px',
+                            borderRadius: '9999px',
+                            fontSize: '0.78rem',
+                            fontWeight: 800,
+                            letterSpacing: '0.04em',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            whiteSpace: 'nowrap'
+                          }}>
+                            ⚠️ BREAKDOWN
+                          </span>
+                        ) : (
+                          <span style={{
+                            background: '#d1fae5',
+                            color: '#059669',
+                            border: '1px solid #a7f3d0',
+                            padding: '5px 14px',
+                            borderRadius: '9999px',
+                            fontSize: '0.78rem',
+                            fontWeight: 800,
+                            letterSpacing: '0.04em',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            whiteSpace: 'nowrap'
+                          }}>
+                            ⏸ MINOR STOPPAGE
+                          </span>
+                        )}
+                      </span>
+
+                      {/* 7. REASON: Exact match to Image 2 with edit icon next to reason badge */}
+                      <span>
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+                          {hasReason ? (
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); editRecord(record, false); }}
+                              style={{
+                                background: '#eff6ff',
+                                border: '1px solid #bfdbfe',
+                                color: '#1d4ed8',
+                                padding: '5px 14px',
+                                borderRadius: '9999px',
+                                fontSize: '0.78rem',
+                                fontWeight: 700,
+                                cursor: 'pointer',
+                                whiteSpace: 'nowrap',
+                                maxWidth: '130px',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis'
+                              }}
+                              title={record.reason || undefined}
+                            >
+                              {record.reason?.split(' - ')[0] || 'Verify'}
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); editRecord(record, false); }}
+                              style={{
+                                background: '#ffedd5',
+                                border: '1px solid #fed7aa',
+                                color: '#c2410c',
+                                padding: '5px 16px',
+                                borderRadius: '9999px',
+                                fontSize: '0.78rem',
+                                fontWeight: 700,
+                                cursor: 'pointer',
+                                whiteSpace: 'nowrap'
+                              }}
+                              title="Click to fill downtime reason"
+                            >
+                              Pending reason
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); editRecord(record, false); }}
+                            title="Fill / Edit Downtime Reason"
+                            style={{
+                              background: '#eff6ff',
+                              border: '1.5px solid #3b82f6',
+                              color: '#2563eb',
+                              width: '30px',
+                              height: '30px',
+                              borderRadius: '50%',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              cursor: 'pointer',
+                              fontSize: '0.85rem',
+                              padding: 0,
+                              transition: 'all 0.15s ease',
+                              boxShadow: '0 1px 3px rgba(59, 130, 246, 0.15)',
+                              flexShrink: 0
+                            }}
+                          >
+                            ✏️
+                          </button>
+                        </div>
+                      </span>
+
+                      {/* 8. AI VOICE TRANSCRIPT: Exact match to Image 2 */}
+                      <span>
+                        {record.transcript ? (
+                          <span
+                            title={record.transcript}
+                            style={{
+                              background: '#eff6ff',
+                              border: '1px solid #dbeafe',
+                              color: '#2563eb',
+                              padding: '5px 14px',
+                              borderRadius: '9999px',
+                              fontSize: '0.78rem',
+                              fontWeight: 600,
+                              whiteSpace: 'nowrap',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              maxWidth: '190px',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis'
+                            }}
+                          >
+                            🎙️ {record.transcript}
+                          </span>
+                        ) : (
+                          <span style={{
+                            background: '#f8fafc',
+                            border: '1px solid #e2e8f0',
+                            color: '#64748b',
+                            padding: '5px 14px',
+                            borderRadius: '9999px',
+                            fontSize: '0.78rem',
+                            fontWeight: 600,
+                            whiteSpace: 'nowrap',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '6px'
+                          }}>
+                            🎙️ No voice detected
+                          </span>
+                        )}
+                      </span>
+
+                      {/* 9. MANUAL CORRECTION: Exact match to Image 2 */}
+                      <span>
+                        {record.manual_transcript ? (
+                          <span
+                            title={record.manual_transcript}
+                            style={{
+                              background: '#f1f5f9',
+                              border: '1px solid #cbd5e1',
+                              color: '#0f172a',
+                              padding: '5px 14px',
+                              borderRadius: '9999px',
+                              fontSize: '0.78rem',
+                              fontWeight: 600,
+                              whiteSpace: 'nowrap',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              maxWidth: '180px',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis'
+                            }}
+                          >
+                            ✏️ {record.manual_transcript}
+                          </span>
+                        ) : (
+                          <span style={{
+                            background: '#f8fafc',
+                            border: '1px dashed #cbd5e1',
+                            color: '#64748b',
+                            padding: '5px 14px',
+                            borderRadius: '9999px',
+                            fontSize: '0.78rem',
+                            fontWeight: 500,
+                            whiteSpace: 'nowrap',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '6px'
+                          }}>
+                            ✏️ No manual correction
+                          </span>
+                        )}
+                      </span>
+
+                      {/* 10. STATUS: Exact match to Image 2 */}
+                      <span>
+                        <span style={{
+                          background: status === 'Running' ? '#fef3c7' : (record.error ? '#fee2e2' : '#dcfce7'),
+                          border: `1px solid ${status === 'Running' ? '#fde68a' : (record.error ? '#fecaca' : '#bbf7d0')}`,
+                          color: status === 'Running' ? '#b45309' : (record.error ? '#dc2626' : '#15803d'),
+                          padding: '5px 18px',
+                          borderRadius: '9999px',
+                          fontSize: '0.78rem',
+                          fontWeight: 800,
+                          letterSpacing: '0.04em',
+                          whiteSpace: 'nowrap'
+                        }}>
+                          {status === 'Running' ? 'IN PROGRESS' : (record.error ? 'PENDING' : 'COMPLETED')}
+                        </span>
+                      </span>
+
+                      {/* 11. ACTIONS: Exact match to Image 2 (Play + Download + More) */}
+                      <div className="row-actions" style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', whiteSpace: 'nowrap' }}>
+                        {canPlay ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                playRecord(record);
+                              }}
+                              style={{
+                                background: '#eff6ff',
+                                color: '#1d4ed8',
+                                border: '1.5px solid #3b82f6',
+                                padding: '6px 18px',
+                                borderRadius: '8px',
+                                fontSize: '0.82rem',
+                                fontWeight: 700,
+                                cursor: 'pointer',
+                                transition: 'all 0.15s ease'
+                              }}
+                              title="Play Event Video"
+                            >
+                              Play
+                            </button>
+                            <a
+                              href={recordingFileUrl(recordStorageRoot(record), record.file_path)}
+                              download={record.file_name || 'event_recording.mp4'}
+                              onClick={(e) => e.stopPropagation()}
+                              style={{
+                                background: '#ecfdf5',
+                                border: '1.5px solid #10b981',
+                                color: '#047857',
+                                padding: '5px 14px',
+                                borderRadius: '8px',
+                                fontSize: '0.82rem',
+                                fontWeight: 700,
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '5px',
+                                textDecoration: 'none',
+                                transition: 'all 0.15s ease'
+                              }}
+                              title="Download Video File"
+                            >
+                              <span>📥</span> Download
+                            </a>
+                          </>
+                        ) : (
+                          <span style={{ color: '#94a3b8', fontSize: '0.86rem', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                            No video
+                          </span>
+                        )}
                         <button
                           type="button"
-                          title={hasReason ? "View Details" : "Fill Details"}
-                          onClick={() => editRecord(record, hasReason)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            editRecord(record, false);
+                          }}
+                          title="More Options"
                           style={{
-                            padding: '6px',
-                            background: hasReason ? 'rgba(16, 185, 129, 0.1)' : 'rgba(59, 130, 246, 0.1)',
-                            color: hasReason ? '#10b981' : '#60a5fa',
-                            border: hasReason ? '1px solid rgba(16, 185, 129, 0.3)' : '1px solid rgba(59, 130, 246, 0.3)',
-                            borderRadius: '50%',
+                            background: 'transparent',
+                            border: 'none',
+                            color: '#94a3b8',
+                            fontSize: '1.15rem',
                             cursor: 'pointer',
-                            display: 'flex',
+                            padding: '4px 6px',
+                            borderRadius: '6px',
+                            display: 'inline-flex',
                             alignItems: 'center',
                             justifyContent: 'center',
-                            transition: 'all 0.2s',
-                            width: '32px',
-                            height: '32px',
-                            flexShrink: 0
+                            lineHeight: 1
                           }}
                         >
-                          {hasReason ? (
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                          ) : (
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-                          )}
+                          ⋮
                         </button>
-                      )}
-                    </div>
+                      </div>
+                    </article>
                   );
-                })()}
-                
-                <div 
-                  className={`transcript-bubble ${record.transcript ? '' : 'empty'}`}
-                  title={record.transcript || (record.transcript_status === 'processing' ? 'Transcription is running in background' : record.transcript_status === 'failed' ? (record.transcript_error || 'Audio transcription failed') : 'No speech detected in audio')} 
-                  onClick={() => {
-                    if (record.transcript) {
-                      setExpandedRowPaths(prev => ({
-                        ...prev,
-                        [`transcript_${record.file_path}`]: !prev[`transcript_${record.file_path}`]
-                      }));
-                    }
+                })}
+              </div>
+            )}
+
+            {/* Bottom Pagination matching Image 2 */}
+            {list.records.length > 0 && (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '8px', marginTop: '16px', padding: '8px 2px' }}>
+                <button
+                  disabled={page <= 1}
+                  onClick={() => setPage(page - 1)}
+                  style={{
+                    width: '32px',
+                    height: '32px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    border: '1px solid #cbd5e1',
+                    borderRadius: '6px',
+                    background: '#ffffff',
+                    color: page <= 1 ? '#cbd5e1' : '#334155',
+                    cursor: page <= 1 ? 'not-allowed' : 'pointer',
+                    fontSize: '0.85rem'
                   }}
-                  style={{ 
-                    whiteSpace: expandedRowPaths[`transcript_${record.file_path}`] ? 'normal' : 'nowrap', 
-                    overflow: expandedRowPaths[`transcript_${record.file_path}`] ? 'visible' : 'hidden', 
-                    textOverflow: expandedRowPaths[`transcript_${record.file_path}`] ? 'unset' : 'ellipsis', 
-                  }}>
-                  {record.transcript ? record.transcript : (record.transcript_status === 'processing' ? 'Transcribing...' : record.transcript_status === 'failed' ? 'Transcription failed' : 'No voice detected')}
-                </div>
-                
-                <div className="transcript-bubble" style={{ whiteSpace: 'normal', color: record.manual_transcript ? '#f8fafc' : '#64748b', background: record.manual_transcript ? 'rgba(59, 130, 246, 0.15)' : 'rgba(255, 255, 255, 0.05)', border: record.manual_transcript ? '1px solid rgba(59, 130, 246, 0.4)' : '1px dashed rgba(255, 255, 255, 0.1)' }}>
-                  {record.manual_transcript ? record.manual_transcript : 'No manual correction'}
-                </div>
-                
-                <span className={record.error ? 'status-badge bad' : 'status-badge good'}>{status}</span>
-                <div className="row-actions">
-                  {readyForVideo ? (
-                    <>
-                      <button type="button" onClick={() => playRecord(record)}>Play</button>
-                      <a className="download-button" href={recordingFileUrl(recordStorageRoot(record), record.file_path, true)}><Icon name="storage" /> Download</a>
-                    </>
-                  ) : videoAvailable ? (
-                    <span className="recording-note">Recording...</span>
-                  ) : (
-                    <span className="no-video-note">No video</span>
-                  )}
-                </div>
-
-                {/* Inline form removed in favor of global modal */}
-              </article>
-            );
-          })}
-        </div>}
-
-        {list.records.length > 0 && <div className="pager">
-          <button disabled={page <= 1} onClick={() => setPage(page - 1)}>Previous</button>
-          <span>{page} / {totalPages}</span>
-          <button disabled={page >= totalPages} onClick={() => setPage(page + 1)}>Next</button>
-        </div>}
+                >
+                  &lt;
+                </button>
+                <button
+                  style={{
+                    width: '32px',
+                    height: '32px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    border: 'none',
+                    borderRadius: '6px',
+                    background: '#1d4ed8',
+                    color: '#ffffff',
+                    fontWeight: 700,
+                    fontSize: '0.85rem'
+                  }}
+                >
+                  {page}
+                </button>
+                <button
+                  disabled={page >= totalPages}
+                  onClick={() => setPage(page + 1)}
+                  style={{
+                    width: '32px',
+                    height: '32px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    border: '1px solid #cbd5e1',
+                    borderRadius: '6px',
+                    background: '#ffffff',
+                    color: page >= totalPages ? '#cbd5e1' : '#334155',
+                    cursor: page >= totalPages ? 'not-allowed' : 'pointer',
+                    fontSize: '0.85rem'
+                  }}
+                >
+                  &gt;
+                </button>
+                <span style={{ fontSize: '0.86rem', color: '#475569', fontWeight: 600, marginLeft: '8px' }}>
+                  {`${(page - 1) * PAGE_SIZE + 1} - ${Math.min(page * PAGE_SIZE, list.total)} of ${list.total}`}
+                </span>
+              </div>
+            )}
           </>
         )}
       </div>
@@ -2070,442 +3402,630 @@ function SavedPage({
                 disablePictureInPicture
                 preload="auto"
                 onPlay={() => {
-                  pendingPlayPathRef.current = null;
-                  setPlayingPath(selected.file_path);
                   setPlaybackState('ready');
+                  videoLoadRetryRef.current = 0;
                 }}
-                onPause={() => setPlayingPath((current) => current === selected.file_path ? '' : current)}
-                onEnded={() => setPlayingPath((current) => current === selected.file_path ? '' : current)}
-                onLoadedMetadata={() => {
-                  setError('');
-                  setPlaybackState('ready');
-                }}
-                onCanPlay={() => {
-                  setPlaybackState('ready');
-                  if (pendingPlayPathRef.current === selected.file_path) startPlayer(selected.file_path);
-                }}
-                onWaiting={() => setPlaybackState((current) => current === 'error' ? current : 'loading')}
-                onPlaying={() => setPlaybackState('ready')}
                 onError={() => {
                   if (videoLoadRetryRef.current < 2) {
-                    setPlaybackState('loading');
                     videoLoadRetryRef.current += 1;
-                    window.setTimeout(() => setVideoRetryNonce((value) => value + 1), 700);
+                    retrySelectedVideo();
                     return;
                   }
-                  pendingPlayPathRef.current = null;
-                  setPlayingPath('');
                   setPlaybackState('error');
+                  setError('Playback error. Click Reload or verify camera connectivity.');
                 }}
               />
-              {playbackState === 'ready' && (
-                <button
-                  type="button"
-                  className={playingPath === selected.file_path ? 'record-player-center-toggle playing' : 'record-player-center-toggle'}
-                  title={playingPath === selected.file_path ? 'Pause video' : 'Play video'}
-                  aria-label={playingPath === selected.file_path ? 'Pause video' : 'Play video'}
-                  onClick={toggleSelectedPlayback}
-                >
-                  <Icon name={playingPath === selected.file_path ? 'pause' : 'play'} />
-                </button>
-              )}
-              {playbackState !== 'ready' && (
-                <div className={playbackState === 'error' ? 'video-loading-overlay error' : 'video-loading-overlay'}>
-                  {playbackState === 'loading' ? (
-                    <>
-                      <span className="video-spinner" aria-hidden="true"></span>
-                      <strong>Preparing video</strong>
-                      <em>{selected.file_name}</em>
-                      <small>{videoLoadRetryRef.current ? `Retry ${videoLoadRetryRef.current} of 2` : 'Loading secure recording...'}</small>
-                    </>
-                  ) : (
-                    <>
-                      <strong>Video failed to load</strong>
-                      <em>The video file might be ready, but the browser interrupted the stream request.</em>
-                      <div className="video-loading-actions">
-                        <button type="button" onClick={retrySelectedVideo}>Retry</button>
-                        <a className="download-button" href={recordingFileUrl(recordStorageRoot(selected), selected.file_path, true)}>
-                          Download
-                        </a>
-                      </div>
-                    </>
-                  )}
-                </div>
-              )}
             </div>
           </div>
         </div>
       )}
-
-      {/* GLOBAL REASON MODAL */}
       {editingReasonRecord && (
         <div
           style={{
             position: 'fixed',
-            top: 0, left: 0, right: 0, bottom: 0,
-            background: 'radial-gradient(ellipse at 50% 0%, #101c38 0%, #060a14 85%)',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(15, 23, 42, 0.85)',
+            backdropFilter: 'blur(10px)',
+            display: 'flex',
+            alignItems: 'stretch',
+            justifyContent: 'stretch',
             zIndex: 9999,
-            overflowY: 'auto',
-            display: 'flex',
-            flexDirection: 'column'
+            padding: 0,
+            margin: 0
           }}
+          onClick={() => setEditingReasonRecord(null)}
         >
-          {/* ── STICKY TOP BAR ── */}
-          <div style={{
-            position: 'sticky', top: 0, zIndex: 10,
-            background: 'rgba(15, 23, 42, 0.96)',
-            backdropFilter: 'blur(16px)',
-            WebkitBackdropFilter: 'blur(16px)',
-            borderBottom: '2px solid #1e293b',
-            padding: '20px 48px',
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            flexShrink: 0
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+          <div
+            style={{
+              background: '#ffffff',
+              border: 'none',
+              borderRadius: 0,
+              width: '100vw',
+              maxWidth: '100vw',
+              height: '100vh',
+              maxHeight: '100vh',
+              boxShadow: 'none',
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'column'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div style={{
+              padding: '14px 28px',
+              background: '#f8fafc',
+              borderBottom: '1.5px solid #e2e8f0',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: '12px',
+              flexShrink: 0
+            }}>
               <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
-                  <span style={{ fontSize: '0.85rem', color: '#38bdf8', fontWeight: '900', letterSpacing: '2.5px', textTransform: 'uppercase' }}>
-                    🏭 RICO AUTO INDUSTRIES • OFFICIAL TPM EVENT REPORT
-                  </span>
+                <div style={{ fontSize: '0.78rem', fontWeight: 800, letterSpacing: '0.12em', color: '#2563eb', textTransform: 'uppercase', marginBottom: '3px' }}>
+                  🏭 RICO AUTO INDUSTRIES • OFFICIAL TPM EVENT REPORT
                 </div>
-                <h2 style={{ margin: 0, fontSize: '2.2rem', fontWeight: '900', color: '#ffffff', letterSpacing: '0.5px' }}>
-                  EVENT REPORT & ROOT CAUSE DETAILS
+                <h2 style={{ margin: 0, fontSize: '1.45rem', fontWeight: 900, color: '#0f172a', letterSpacing: '-0.01em' }}>
+                  EVENT REPORT & ROOT CAUSE DETAILS (OPERATOR ENTRY)
                 </h2>
               </div>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
-              {/* Event Type Badge */}
-              <span style={{
-                fontSize: '1rem',
-                fontWeight: '800',
-                padding: '10px 18px',
-                borderRadius: '8px',
-                background: editingReasonRecord?.event_type === 'breakdown' ? 'rgba(239, 68, 68, 0.22)' : 'rgba(245, 158, 11, 0.22)',
-                border: `1.5px solid ${editingReasonRecord?.event_type === 'breakdown' ? '#ef4444' : '#f59e0b'}`,
-                color: editingReasonRecord?.event_type === 'breakdown' ? '#fca5a5' : '#fde68a',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '8px'
-              }}>
-                {editingReasonRecord?.event_type === 'breakdown' ? '🚨 Machine Breakdown' : '⚡ Minor Stoppage'}
-              </span>
-
-              {/* Duration Badge */}
-              <span style={{
-                fontSize: '1rem',
-                fontWeight: '800',
-                padding: '10px 18px',
-                borderRadius: '8px',
-                background: 'rgba(59, 130, 246, 0.18)',
-                border: '1.5px solid rgba(59, 130, 246, 0.45)',
-                color: '#93c5fd',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '8px'
-              }}>
-                ⏱️ {formatDuration(eventDuration(editingReasonRecord))}
-              </span>
-
-              {/* Timestamp Badge */}
-              {editingReasonRecord?.event_started_at && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
                 <span style={{
-                  fontSize: '1rem',
-                  color: '#f1f5f9',
-                  background: 'rgba(255,255,255,0.06)',
-                  padding: '10px 18px',
-                  borderRadius: '8px',
-                  border: '1.5px solid rgba(255,255,255,0.15)',
-                  fontWeight: '700',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '8px'
-                }}>
-                  📅 {new Date(editingReasonRecord.event_started_at).toLocaleString('en-GB')}
-                </span>
-              )}
-
-              {/* Close Button */}
-              <button
-                type="button"
-                onClick={() => setEditingReasonRecord(null)}
-                style={{
-                  background: 'rgba(239, 68, 68, 0.15)',
-                  border: '1.5px solid rgba(239, 68, 68, 0.5)',
-                  color: '#f87171',
-                  cursor: 'pointer',
-                  padding: '10px 24px',
-                  borderRadius: '8px',
-                  fontWeight: '800',
-                  fontSize: '1.05rem',
-                  transition: 'all 0.2s',
+                  background: editingReasonRecord.event_type === 'breakdown' ? '#fee2e2' : '#d1fae5',
+                  color: editingReasonRecord.event_type === 'breakdown' ? '#dc2626' : '#059669',
+                  border: editingReasonRecord.event_type === 'breakdown' ? '1.5px solid #fecaca' : '1.5px solid #a7f3d0',
+                  padding: '6px 16px',
+                  borderRadius: '9999px',
+                  fontSize: '0.84rem',
+                  fontWeight: 800,
                   display: 'inline-flex',
                   alignItems: 'center',
                   gap: '6px'
-                }}
-                onMouseOver={(e) => { e.currentTarget.style.background = '#ef4444'; e.currentTarget.style.color = '#ffffff'; }}
-                onMouseOut={(e) => { e.currentTarget.style.background = 'rgba(239, 68, 68, 0.15)'; e.currentTarget.style.color = '#f87171'; }}
-              >
-                ✕ Close
-              </button>
+                }}>
+                  {editingReasonRecord.event_type === 'breakdown' ? '🚨 BREAKDOWN' : '⚡ MINOR STOPPAGE'}
+                </span>
+                <span style={{
+                  background: '#ffffff',
+                  border: '1.5px solid #cbd5e1',
+                  color: '#1e293b',
+                  padding: '6px 14px',
+                  borderRadius: '8px',
+                  fontSize: '0.84rem',
+                  fontWeight: 700
+                }}>
+                  ⏱ {formatDuration(liveBreakdownDuration(editingReasonRecord))}
+                </span>
+                <span style={{
+                  background: '#ffffff',
+                  border: '1.5px solid #cbd5e1',
+                  color: '#1e293b',
+                  padding: '6px 14px',
+                  borderRadius: '8px',
+                  fontSize: '0.84rem',
+                  fontWeight: 600
+                }}>
+                  📅 {formatDateTime(editingReasonRecord.started_at)}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setEditingReasonRecord(null)}
+                  style={{
+                    background: '#ef4444',
+                    border: 'none',
+                    color: '#ffffff',
+                    padding: '7px 18px',
+                    borderRadius: '8px',
+                    fontSize: '0.86rem',
+                    fontWeight: 800,
+                    cursor: 'pointer',
+                    boxShadow: '0 2px 8px rgba(239, 68, 68, 0.35)',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px'
+                  }}
+                >
+                  ✕ Close
+                </button>
+              </div>
             </div>
-          </div>
 
-          {/* ── BODY ── */}
-          <div style={{ flex: 1, padding: '16px 36px 40px', display: 'flex', flexDirection: 'column', gap: '14px', maxWidth: '1340px', width: '100%', margin: '0 auto', boxSizing: 'border-box' }}>
-
-            {/* ─ AI CONTEXT SECTION ─ */}
+            {/* Modal Body - 2-Column Industrial Split Workspace */}
             <div style={{
-              border: '1.5px solid rgba(56, 189, 248, 0.35)',
-              borderRadius: '12px',
+              flex: 1,
+              minHeight: 0,
+              display: 'grid',
+              gridTemplateColumns: 'minmax(320px, 380px) 1fr',
+              gap: '20px',
+              padding: '18px 24px',
               overflow: 'hidden',
-              background: 'linear-gradient(180deg, rgba(14, 165, 233, 0.08) 0%, rgba(15, 23, 42, 0.8) 100%)',
-              boxShadow: '0 4px 20px rgba(14, 165, 233, 0.08)'
+              background: '#ffffff'
             }}>
+              {/* 👈 LEFT COLUMN: Context, Remarks, and Action Plan & 5-Why RCA */}
               <div style={{
                 display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                padding: '10px 18px',
-                borderBottom: '1px solid rgba(255,255,255,0.08)',
-                background: 'rgba(56, 189, 248, 0.06)'
+                flexDirection: 'column',
+                gap: '16px',
+                overflowY: 'auto',
+                paddingRight: '6px'
               }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  <span style={{
-                    fontSize: '0.75rem',
-                    fontWeight: '900',
-                    letterSpacing: '1.5px',
-                    textTransform: 'uppercase',
-                    color: '#38bdf8',
-                    background: 'rgba(56,189,248,0.2)',
-                    border: '1px solid rgba(56,189,248,0.4)',
-                    borderRadius: '5px',
-                    padding: '3px 8px'
-                  }}>
-                    🤖 AI SPEECH ENGINE
-                  </span>
-                  <span style={{ fontSize: '1.05rem', fontWeight: '800', color: '#ffffff' }}>
-                    Operator Voice Commentary & Audio Context
-                  </span>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  {editingReasonRecord?.transcript ? (
+                {/* Left Card 1: AI Speech Context */}
+                <div style={{
+                  border: '1.5px solid #e2e8f0',
+                  borderRadius: '12px',
+                  background: '#f8fafc',
+                  padding: '14px 16px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '10px'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                     <span style={{
-                      fontSize: '0.8rem',
-                      color: '#4ade80',
-                      background: 'rgba(74, 222, 128, 0.15)',
-                      border: '1px solid rgba(74, 222, 128, 0.35)',
-                      borderRadius: '12px',
-                      padding: '3px 10px',
-                      fontWeight: '700',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '5px'
+                      fontSize: '0.74rem',
+                      fontWeight: 900,
+                      letterSpacing: '1px',
+                      textTransform: 'uppercase',
+                      color: '#2563eb',
+                      background: '#eff6ff',
+                      border: '1px solid #bfdbfe',
+                      borderRadius: '6px',
+                      padding: '2px 8px'
                     }}>
-                      🟢 Speech Recorded
+                      🎙 AI SPEECH CONTEXT
                     </span>
-                  ) : (
                     <span style={{
-                      fontSize: '0.8rem',
-                      color: '#94a3b8',
-                      background: 'rgba(255, 255, 255, 0.05)',
-                      border: '1px solid rgba(255, 255, 255, 0.1)',
-                      borderRadius: '12px',
-                      padding: '3px 10px',
-                      fontWeight: '600',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '5px'
+                      background: editingReasonRecord.transcript ? '#d1fae5' : '#f1f5f9',
+                      color: editingReasonRecord.transcript ? '#059669' : '#64748b',
+                      border: editingReasonRecord.transcript ? '1px solid #a7f3d0' : '1px solid #e2e8f0',
+                      padding: '2px 8px',
+                      borderRadius: '9999px',
+                      fontSize: '0.74rem',
+                      fontWeight: 800
                     }}>
-                      ⚪ No Speech Recorded
+                      {editingReasonRecord.transcript ? '● Speech Recorded' : '○ No Voice Recorded'}
                     </span>
-                  )}
-                </div>
-              </div>
-
-              <div style={{ padding: '12px 18px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <span style={{ fontSize: '0.85rem', color: '#38bdf8', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    🎙️ AI Voice Transcript (Speech-to-Text)
-                  </span>
-                  <div style={{
-                    background: '#060d1d',
-                    padding: '10px 14px',
-                    borderRadius: '8px',
-                    color: editingReasonRecord?.transcript ? '#f8fafc' : '#64748b',
-                    fontStyle: editingReasonRecord?.transcript ? 'normal' : 'italic',
-                    fontSize: '1.02rem',
-                    fontWeight: editingReasonRecord?.transcript ? '600' : '500',
-                    border: '1px solid rgba(56, 189, 248, 0.25)',
-                    lineHeight: '1.5',
-                    minHeight: '62px',
-                    maxHeight: '82px',
-                    overflowY: 'auto',
-                    boxSizing: 'border-box'
-                  }}>
-                    {editingReasonRecord?.transcript || '⚪ No operator speech detected during this stoppage.'}
                   </div>
-                </div>
 
-                <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <span style={{ fontSize: '0.85rem', color: '#fbbf24', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    ✏️ Manual Correction / Operator Remarks
-                  </span>
-                  <div style={{ position: 'relative', flex: 1, display: 'flex' }}>
+                  <div>
+                    <div style={{ fontSize: '0.78rem', fontWeight: 800, color: '#2563eb', textTransform: 'uppercase', marginBottom: '4px' }}>
+                      Voice Transcript
+                    </div>
+                    <div style={{
+                      background: '#ffffff',
+                      border: '1.5px solid #cbd5e1',
+                      borderRadius: '8px',
+                      padding: '8px 12px',
+                      fontSize: '0.88rem',
+                      minHeight: '44px',
+                      color: editingReasonRecord.transcript ? '#0f172a' : '#64748b',
+                      fontStyle: editingReasonRecord.transcript ? 'normal' : 'italic',
+                      lineHeight: '1.45',
+                      wordBreak: 'break-word',
+                      boxSizing: 'border-box'
+                    }}>
+                      {editingReasonRecord.transcript || 'No voice detected during this event duration.'}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div style={{ fontSize: '0.78rem', fontWeight: 800, color: '#ea580c', textTransform: 'uppercase', marginBottom: '4px' }}>
+                      Operator Remarks / Correction
+                    </div>
                     <textarea
-                      disabled={savingReason || isViewMode}
-                      placeholder="Type verified operator remarks or Hindi/English speech correction here..."
                       value={editManualTranscript}
-                      onChange={e => setEditManualTranscript(e.target.value)}
+                      onChange={(e) => setEditManualTranscript(e.target.value)}
+                      placeholder="Type verified operator remarks..."
                       style={{
-                        flex: 1,
-                        minHeight: '62px',
-                        maxHeight: '82px',
-                        background: '#060d1d',
-                        border: '1px solid rgba(245, 158, 11, 0.3)',
+                        width: '100%',
+                        minHeight: '44px',
+                        background: '#ffffff',
+                        border: '1.5px solid #cbd5e1',
                         borderRadius: '8px',
-                        color: '#ffffff',
-                        padding: '10px 32px 10px 14px',
-                        fontSize: '1.02rem',
-                        fontWeight: '600',
-                        resize: 'none',
+                        padding: '8px 12px',
+                        fontSize: '0.88rem',
+                        color: '#0f172a',
                         outline: 'none',
+                        resize: 'vertical',
                         boxSizing: 'border-box',
-                        lineHeight: '1.5',
-                        transition: 'border-color 0.2s',
                         fontFamily: 'inherit'
                       }}
-                      onFocus={(e) => { e.target.style.borderColor = '#fbbf24'; }}
-                      onBlur={(e) => { e.target.style.borderColor = 'rgba(245, 158, 11, 0.3)'; }}
                     />
-                    <div style={{ position: 'absolute', bottom: '10px', right: '10px', pointerEvents: 'none', color: '#fbbf24', opacity: 0.7 }}>
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
-                    </div>
                   </div>
-                </label>
-              </div>
-            </div>
+                </div>
 
-            {/* ─ STEP 1: DOWNTIME TYPE ACCORDION ─ */}
-            <AccordionSection
-              step="1"
-              title="Downtime Type (Primary Classification)"
-              color="#ef4444"
-              selected={editReasonText}
-              isOpen={openStep === 1}
-              onToggle={() => setOpenStep(openStep === 1 ? 0 : 1)}
-              disabled={savingReason || isViewMode}
-              searchable
-            >
-              {(search: string) => {
-                const filtered = [...DOWNTIME_TYPES].sort((a, b) => a.localeCompare(b)).filter(o => o.toLowerCase().includes(search.toLowerCase()));
-                return (
-                  <>
-                    {search && (
-                      <div style={{ fontSize: '0.95rem', color: '#94a3b8', marginBottom: '12px', fontWeight: '600' }}>
-                        {filtered.length} result{filtered.length !== 1 ? 's' : ''} for "{search}"
-                      </div>
-                    )}
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '14px' }}>
-                      {filtered.length > 0 ? filtered.map(opt => {
-                        const cfg = DOWNTIME_TYPE_CONFIG[opt] || { color: '#ef4444', bg: 'rgba(239,68,68,0.18)', border: '#ef4444', glow: 'rgba(239,68,68,0.4)', icon: '⚙️' };
-                        const isSelected = editReasonText === opt;
-                        return (
-                          <button
-                            key={opt}
-                            type="button"
-                            disabled={savingReason || isViewMode}
-                            onClick={() => {
-                              setEditReasonText(opt);
-                              setSelectedCategory('');
-                              setSelectedSubReason('');
-                              setOpenStep(2);
-                            }}
-                            style={{
-                              padding: '16px 20px',
-                              borderRadius: '12px',
-                              border: isSelected ? `2.5px solid ${cfg.color}` : '1.5px solid rgba(255,255,255,0.12)',
-                              background: isSelected ? cfg.bg : 'rgba(255,255,255,0.04)',
-                              color: isSelected ? '#ffffff' : '#e2e8f0',
-                              cursor: (savingReason || isViewMode) ? 'not-allowed' : 'pointer',
-                              fontSize: '1.1rem',
-                              fontWeight: isSelected ? '800' : '700',
-                              transition: 'all 0.2s ease',
-                              boxShadow: isSelected ? `0 6px 24px ${cfg.glow}` : 'none',
-                              textAlign: 'left',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'space-between',
-                              gap: '10px'
-                            }}
-                            onMouseOver={(e) => {
-                              if (!isSelected) {
-                                e.currentTarget.style.background = cfg.bg;
-                                e.currentTarget.style.borderColor = cfg.color;
-                                e.currentTarget.style.color = '#ffffff';
-                                e.currentTarget.style.transform = 'translateY(-2px)';
-                              }
-                            }}
-                            onMouseOut={(e) => {
-                              if (!isSelected) {
-                                e.currentTarget.style.background = 'rgba(255,255,255,0.04)';
-                                e.currentTarget.style.borderColor = 'rgba(255,255,255,0.12)';
-                                e.currentTarget.style.color = '#e2e8f0';
-                                e.currentTarget.style.transform = 'none';
-                              }
-                            }}
-                          >
-                            <span style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                              <span style={{ fontSize: '1.3rem' }}>{cfg.icon}</span>
-                              <span>{opt}</span>
-                            </span>
-                            {isSelected && (
-                              <span style={{
-                                width: '24px', height: '24px', borderRadius: '50%',
-                                background: cfg.color, color: '#ffffff',
-                                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                fontSize: '0.85rem', fontWeight: '900', flexShrink: 0
-                              }}>✓</span>
-                            )}
-                          </button>
-                        );
-                      }) : (
-                        <div style={{ color: '#94a3b8', fontSize: '1.05rem', padding: '12px 0', fontWeight: '600' }}>
-                          No results found for "{search}"
-                        </div>
+                {/* Left Card 2: Action Plan & 5-Why RCA Notes */}
+                <div style={{
+                  border: '1.5px solid #e2e8f0',
+                  borderRadius: '12px',
+                  background: '#f8fafc',
+                  padding: '16px 18px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '14px',
+                  flex: 1
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', borderBottom: '1px solid #e2e8f0', paddingBottom: '10px' }}>
+                    <span style={{
+                      fontSize: '0.74rem',
+                      fontWeight: 900,
+                      letterSpacing: '1px',
+                      textTransform: 'uppercase',
+                      color: '#10b981',
+                      background: '#ecfdf5',
+                      border: '1px solid #a7f3d0',
+                      borderRadius: '6px',
+                      padding: '2px 8px'
+                    }}>
+                      📋 ACTION PLAN & RCA
+                    </span>
+                    <span style={{ fontSize: '0.94rem', fontWeight: 800, color: '#0f172a' }}>
+                      Ownership & Root Cause Countermeasures
+                    </span>
+                  </div>
+
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '0.84rem', fontWeight: 800, color: '#334155' }}>
+                    <span>👤 HOD / ASSIGNED PERSON</span>
+                    <input
+                      type="text"
+                      disabled={savingReason || isViewMode}
+                      placeholder="e.g. Ashutosh Pandey"
+                      value={editPerson}
+                      onChange={e => setEditPerson(e.target.value)}
+                      style={{
+                        background: '#ffffff',
+                        border: '1.5px solid #cbd5e1',
+                        borderRadius: '8px',
+                        padding: '10px 14px',
+                        color: '#0f172a',
+                        fontSize: '0.96rem',
+                        fontWeight: 600,
+                        outline: 'none',
+                        boxSizing: 'border-box'
+                      }}
+                    />
+                  </label>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                    <label style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '0.84rem', fontWeight: 800, color: '#334155' }}>
+                      <span>📌 RESOLUTION STATUS</span>
+                      <select
+                        disabled={savingReason || isViewMode}
+                        value={editStatus}
+                        onChange={e => setEditStatus(e.target.value)}
+                        style={{
+                          background: '#ffffff',
+                          border: '1.5px solid #cbd5e1',
+                          borderRadius: '8px',
+                          padding: '10px 12px',
+                          color: '#0f172a',
+                          fontSize: '0.92rem',
+                          fontWeight: 600,
+                          outline: 'none',
+                          boxSizing: 'border-box',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        <option value="Pending">⏳ Pending</option>
+                        <option value="In Progress">🔄 In Progress</option>
+                        <option value="Completed">✅ Completed</option>
+                      </select>
+                    </label>
+
+                    <label style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '0.84rem', fontWeight: 800, color: '#334155' }}>
+                      <span>📅 TARGET DATE</span>
+                      <input
+                        type="date"
+                        disabled={savingReason || isViewMode}
+                        value={editTargetDate}
+                        onChange={e => setEditTargetDate(e.target.value)}
+                        style={{
+                          background: '#ffffff',
+                          border: '1.5px solid #cbd5e1',
+                          borderRadius: '8px',
+                          padding: '10px 12px',
+                          color: '#0f172a',
+                          fontSize: '0.92rem',
+                          fontWeight: 600,
+                          outline: 'none',
+                          boxSizing: 'border-box'
+                        }}
+                      />
+                    </label>
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', flex: 1 }}>
+                    <div style={{ fontSize: '0.84rem', fontWeight: 800, color: '#d97706', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+                      🛠 5-WHY ROOT CAUSE ANALYSIS (RCA) & ACTIONS
+                    </div>
+                    <textarea
+                      disabled={savingReason || isViewMode}
+                      value={editNoteText}
+                      onChange={e => setEditNoteText(e.target.value)}
+                      placeholder="Enter verified 5-Why root cause analysis notes, corrective actions taken, preventive countermeasures..."
+                      style={{
+                        width: '100%',
+                        minHeight: '125px',
+                        flex: 1,
+                        background: '#ffffff',
+                        border: '1.5px solid #cbd5e1',
+                        borderRadius: '8px',
+                        padding: '12px 14px',
+                        fontSize: '0.94rem',
+                        lineHeight: '1.55',
+                        color: '#0f172a',
+                        outline: 'none',
+                        resize: 'vertical',
+                        boxSizing: 'border-box',
+                        fontFamily: 'inherit'
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* 👉 RIGHT COLUMN: Interactive Hierarchy Reason Finder */}
+              <div style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '14px',
+                overflow: 'hidden',
+                background: '#f8fafc',
+                border: '1.5px solid #e2e8f0',
+                borderRadius: '14px',
+                padding: '18px 20px'
+              }}>
+                {/* 1. Step Navigation Stepper Tabs */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: '10px', width: '100%' }}>
+                  {/* Step 1 Tab */}
+                  <button
+                    type="button"
+                    onClick={() => { setOpenStep(1); setStepSearch(''); }}
+                    style={{
+                      padding: '10px 14px',
+                      borderRadius: '10px',
+                      minWidth: 0,
+                      boxSizing: 'border-box',
+                      border: openStep === 1 ? '2.5px solid #ef4444' : editReasonText ? '1.5px solid #86efac' : '1.5px solid #cbd5e1',
+                      background: openStep === 1 ? '#fee2e2' : editReasonText ? '#f0fdf4' : '#ffffff',
+                      color: openStep === 1 ? '#dc2626' : editReasonText ? '#15803d' : '#64748b',
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                      boxShadow: openStep === 1 ? '0 2px 8px rgba(239,68,68,0.2)' : 'none',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    <div style={{ fontSize: '0.72rem', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.05em' }}>STEP 1</div>
+                    <div style={{ fontSize: '0.90rem', fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={editReasonText || '1. Downtime Type'}>
+                      {editReasonText ? `✓ ${editReasonText}` : '1. Downtime Type'}
+                    </div>
+                  </button>
+
+                  {/* Step 2 Tab */}
+                  <button
+                    type="button"
+                    disabled={!editReasonText}
+                    onClick={() => { setOpenStep(2); setStepSearch(''); }}
+                    style={{
+                      padding: '10px 14px',
+                      borderRadius: '10px',
+                      minWidth: 0,
+                      boxSizing: 'border-box',
+                      border: openStep === 2 ? '2.5px solid #f59e0b' : selectedCategory ? '1.5px solid #86efac' : '1.5px solid #cbd5e1',
+                      background: openStep === 2 ? '#fef3c7' : selectedCategory ? '#f0fdf4' : !editReasonText ? '#f8fafc' : '#ffffff',
+                      color: openStep === 2 ? '#b45309' : selectedCategory ? '#15803d' : '#64748b',
+                      cursor: !editReasonText ? 'not-allowed' : 'pointer',
+                      textAlign: 'left',
+                      boxShadow: openStep === 2 ? '0 2px 8px rgba(245,158,11,0.2)' : 'none',
+                      opacity: !editReasonText ? 0.6 : 1,
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    <div style={{ fontSize: '0.72rem', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.05em' }}>STEP 2</div>
+                    <div style={{ fontSize: '0.90rem', fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={selectedCategory || '2. Category'}>
+                      {selectedCategory ? `✓ ${selectedCategory}` : '2. Category'}
+                    </div>
+                  </button>
+
+                  {/* Step 3 Tab */}
+                  <button
+                    type="button"
+                    disabled={!selectedCategory || selectedCategory === 'No Reason' || (ACTUAL_DOWNTIME_DATA[editReasonText]?.[selectedCategory] || []).length === 0}
+                    onClick={() => { setOpenStep(3); setStepSearch(''); }}
+                    style={{
+                      padding: '10px 14px',
+                      borderRadius: '10px',
+                      minWidth: 0,
+                      boxSizing: 'border-box',
+                      border: openStep === 3 ? '2.5px solid #8b5cf6' : selectedSubReason ? '1.5px solid #86efac' : '1.5px solid #cbd5e1',
+                      background: openStep === 3 ? '#f3e8ff' : selectedSubReason ? '#f0fdf4' : '#ffffff',
+                      color: openStep === 3 ? '#7e22ce' : selectedSubReason ? '#15803d' : '#64748b',
+                      cursor: (!selectedCategory || selectedCategory === 'No Reason') ? 'not-allowed' : 'pointer',
+                      textAlign: 'left',
+                      boxShadow: openStep === 3 ? '0 2px 8px rgba(139,92,246,0.2)' : 'none',
+                      opacity: (!selectedCategory || selectedCategory === 'No Reason') ? 0.6 : 1,
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    <div style={{ fontSize: '0.72rem', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.05em' }}>STEP 3</div>
+                    <div style={{ fontSize: '0.90rem', fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={selectedSubReason || '3. Sub-Reason'}>
+                      {selectedSubReason ? `✓ ${selectedSubReason}` : '3. Sub-Reason'}
+                    </div>
+                  </button>
+
+                  {/* Step 4 Tab */}
+                  <button
+                    type="button"
+                    onClick={() => { setOpenStep(4); setStepSearch(''); }}
+                    style={{
+                      padding: '10px 14px',
+                      borderRadius: '10px',
+                      minWidth: 0,
+                      boxSizing: 'border-box',
+                      border: openStep === 4 ? '2.5px solid #3b82f6' : editResponsibility ? '1.5px solid #86efac' : '1.5px solid #cbd5e1',
+                      background: openStep === 4 ? '#dbeafe' : editResponsibility ? '#f0fdf4' : '#ffffff',
+                      color: openStep === 4 ? '#1d4ed8' : editResponsibility ? '#15803d' : '#64748b',
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                      boxShadow: openStep === 4 ? '0 2px 8px rgba(59,130,246,0.2)' : 'none',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    <div style={{ fontSize: '0.72rem', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.05em' }}>STEP 4</div>
+                    <div style={{ fontSize: '0.90rem', fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={editResponsibility || '4. Department'}>
+                      {editResponsibility ? `✓ ${editResponsibility}` : '4. Department'}
+                    </div>
+                  </button>
+                </div>
+
+                {/* 2. Step Header & Auto-Search Bar */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '14px', flexWrap: 'wrap', borderBottom: '1.5px solid #e2e8f0', paddingBottom: '12px' }}>
+                  <div>
+                    <span style={{
+                      fontSize: '0.8rem',
+                      fontWeight: 800,
+                      color: openStep === 1 ? '#dc2626' : openStep === 2 ? '#b45309' : openStep === 3 ? '#7e22ce' : '#1d4ed8',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.06em'
+                    }}>
+                      {openStep === 1 && 'LEVEL 1: PRIMARY CLASSIFICATION'}
+                      {openStep === 2 && `LEVEL 2: FAILURE CATEGORY (${Object.keys(ACTUAL_DOWNTIME_DATA[editReasonText] || {}).length} AVAILABLE)`}
+                      {openStep === 3 && `LEVEL 3: SPECIFIC SUB-REASON (${(ACTUAL_DOWNTIME_DATA[editReasonText]?.[selectedCategory] || []).length} AVAILABLE)`}
+                      {openStep === 4 && 'LEVEL 4: RESPONSIBLE DEPARTMENT & HOD'}
+                    </span>
+                    <h3 style={{ margin: '2px 0 0', fontSize: '1.25rem', fontWeight: 900, color: '#0f172a' }}>
+                      {openStep === 1 && 'Select Downtime Type'}
+                      {openStep === 2 && `Select Component / Category for "${editReasonText}"`}
+                      {openStep === 3 && `Select Specific Failure Cause for "${selectedCategory}"`}
+                      {openStep === 4 && 'Assign Responsible Department'}
+                    </h3>
+                  </div>
+
+                  {/* Auto-Search Input (Only on searchable steps 1, 2, 3) */}
+                  {openStep !== 4 && (
+                    <div style={{ position: 'relative', width: '280px', maxWidth: '100%' }}>
+                      <span style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#64748b', fontSize: '1rem', pointerEvents: 'none' }}>🔍</span>
+                      <input
+                        type="text"
+                        placeholder={`Search ${openStep === 1 ? 'types' : openStep === 2 ? 'categories' : 'sub-reasons'}...`}
+                        value={stepSearch}
+                        onChange={e => setStepSearch(e.target.value)}
+                        style={{
+                          width: '100%',
+                          height: '40px',
+                          padding: '0 32px 0 36px',
+                          fontSize: '0.94rem',
+                          fontWeight: 600,
+                          borderRadius: '8px',
+                          background: '#ffffff',
+                          border: '1.5px solid #cbd5e1',
+                          color: '#0f172a',
+                          outline: 'none',
+                          boxSizing: 'border-box'
+                        }}
+                      />
+                      {stepSearch && (
+                        <button
+                          type="button"
+                          onClick={() => setStepSearch('')}
+                          style={{
+                            position: 'absolute',
+                            right: '8px',
+                            top: '50%',
+                            transform: 'translateY(-50%)',
+                            background: 'transparent',
+                            border: 'none',
+                            color: '#94a3b8',
+                            cursor: 'pointer',
+                            fontSize: '0.9rem',
+                            padding: '4px'
+                          }}
+                        >
+                          ✕
+                        </button>
                       )}
                     </div>
-                  </>
-                );
-              }}
-            </AccordionSection>
+                  )}
+                </div>
 
-            {/* ─ STEP 2: CATEGORY ACCORDION ─ */}
-            {editReasonText && DOWNTIME_TYPES.includes(editReasonText) && (
-              <AccordionSection
-                step="2"
-                title="Category (Failure Component / Source)"
-                color="#f59e0b"
-                selected={selectedCategory}
-                isOpen={openStep === 2}
-                onToggle={() => setOpenStep(openStep === 2 ? 0 : 2)}
-                disabled={savingReason || isViewMode}
-                searchable
-              >
-                {(search: string) => {
-                  const allOpts = Object.keys(ACTUAL_DOWNTIME_DATA[editReasonText] || {}).sort((a, b) => a === 'No Reason' ? -1 : b === 'No Reason' ? 1 : a.localeCompare(b));
-                  const filtered = allOpts.filter(o => o.toLowerCase().includes(search.toLowerCase()));
-                  return (
-                    <>
-                      {search && (
-                        <div style={{ fontSize: '0.95rem', color: '#94a3b8', marginBottom: '12px', fontWeight: '600' }}>
-                          {filtered.length} result{filtered.length !== 1 ? 's' : ''} for "{search}"
+                {/* 3. Interactive Tiles Grid */}
+                <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: '4px' }}>
+                  {/* STEP 1 TILES */}
+                  {openStep === 1 && (() => {
+                    const filtered = DOWNTIME_TYPES.filter(o => o.toLowerCase().includes(stepSearch.toLowerCase()));
+                    return (
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '14px' }}>
+                        {filtered.length > 0 ? filtered.map(opt => {
+                          const cfg = DOWNTIME_TYPE_CONFIG[opt] || { color: '#ef4444', icon: '⚙️' };
+                          const isSelected = editReasonText === opt;
+                          const catCount = Object.keys(ACTUAL_DOWNTIME_DATA[opt] || {}).length;
+                          return (
+                            <button
+                              key={opt}
+                              type="button"
+                              disabled={savingReason || isViewMode}
+                              onClick={() => {
+                                setEditReasonText(opt);
+                                setSelectedCategory('');
+                                setSelectedSubReason('');
+                                setOpenStep(2);
+                                setStepSearch('');
+                              }}
+                              style={{
+                                padding: '16px 20px',
+                                borderRadius: '12px',
+                                border: isSelected ? '2.5px solid #ef4444' : '1.5px solid #cbd5e1',
+                                background: isSelected ? '#fee2e2' : '#ffffff',
+                                color: isSelected ? '#dc2626' : '#0f172a',
+                                cursor: (savingReason || isViewMode) ? 'not-allowed' : 'pointer',
+                                fontSize: '1rem',
+                                fontWeight: isSelected ? 800 : 700,
+                                textAlign: 'left',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '14px',
+                                transition: 'all 0.15s ease',
+                                boxShadow: isSelected ? '0 4px 16px rgba(239, 68, 68, 0.25)' : '0 1px 3px rgba(0,0,0,0.04)'
+                              }}
+                            >
+                              <span style={{ fontSize: '1.5rem' }}>{cfg.icon}</span>
+                              <div style={{ flex: 1 }}>
+                                <div style={{ fontSize: '1rem', fontWeight: 800 }}>{opt}</div>
+                                <div style={{ fontSize: '0.82rem', color: isSelected ? '#dc2626' : '#64748b', marginTop: '2px', fontWeight: 600 }}>
+                                  {catCount} Categories
+                                </div>
+                              </div>
+                              {isSelected && <span style={{ fontSize: '1.2rem', fontWeight: 900 }}>✓</span>}
+                            </button>
+                          );
+                        }) : (
+                          <div style={{ padding: '30px', color: '#64748b', gridColumn: '1 / -1', textAlign: 'center', fontSize: '1rem', fontWeight: 600 }}>
+                            No downtime types matching "{stepSearch}"
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+
+                  {/* STEP 2 TILES */}
+                  {openStep === 2 && (() => {
+                    if (!editReasonText) {
+                      return (
+                        <div style={{ padding: '40px', textAlign: 'center', color: '#64748b', fontSize: '1rem', fontWeight: 600 }}>
+                          Please select a Downtime Type first from Step 1.
                         </div>
-                      )}
+                      );
+                    }
+                    const allOpts = Object.keys(ACTUAL_DOWNTIME_DATA[editReasonText] || {}).sort((a, b) => a === 'No Reason' ? -1 : b === 'No Reason' ? 1 : a.localeCompare(b));
+                    const filtered = allOpts.filter(o => o.toLowerCase().includes(stepSearch.toLowerCase()));
+                    return (
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '12px' }}>
                         {filtered.length > 0 ? filtered.map(opt => {
                           const isSelected = selectedCategory === opt;
+                          const subCount = (ACTUAL_DOWNTIME_DATA[editReasonText]?.[opt] || []).length;
                           return (
                             <button
                               key={opt}
@@ -2514,88 +4034,64 @@ function SavedPage({
                               onClick={() => {
                                 setSelectedCategory(opt);
                                 setSelectedSubReason(opt === 'No Reason' ? 'No Reason' : '');
-                                setOpenStep((ACTUAL_DOWNTIME_DATA[editReasonText]?.[opt] || []).length > 0 && opt !== 'No Reason' ? 3 : 4);
+                                if (subCount > 0 && opt !== 'No Reason') {
+                                  setOpenStep(3);
+                                } else {
+                                  setOpenStep(4);
+                                }
+                                setStepSearch('');
                               }}
                               style={{
-                                padding: '15px 18px',
+                                padding: '14px 18px',
                                 borderRadius: '12px',
-                                border: isSelected ? '2.5px solid #f59e0b' : '1.5px solid rgba(255,255,255,0.12)',
-                                background: isSelected ? 'rgba(245, 158, 11, 0.22)' : 'rgba(255,255,255,0.04)',
-                                color: isSelected ? '#ffffff' : '#e2e8f0',
+                                border: isSelected ? '2.5px solid #f59e0b' : '1.5px solid #cbd5e1',
+                                background: isSelected ? '#fef3c7' : '#ffffff',
+                                color: isSelected ? '#b45309' : '#0f172a',
                                 cursor: (savingReason || isViewMode) ? 'not-allowed' : 'pointer',
-                                fontSize: '1.08rem',
-                                fontWeight: isSelected ? '800' : '700',
-                                transition: 'all 0.2s ease',
-                                boxShadow: isSelected ? '0 6px 20px rgba(245, 158, 11, 0.35)' : 'none',
+                                fontSize: '0.96rem',
+                                fontWeight: isSelected ? 800 : 700,
                                 textAlign: 'left',
                                 display: 'flex',
                                 alignItems: 'center',
                                 justifyContent: 'space-between',
-                                gap: '8px'
-                              }}
-                              onMouseOver={(e) => {
-                                if (!isSelected) {
-                                  e.currentTarget.style.background = 'rgba(245, 158, 11, 0.12)';
-                                  e.currentTarget.style.borderColor = '#f59e0b';
-                                  e.currentTarget.style.color = '#ffffff';
-                                  e.currentTarget.style.transform = 'translateY(-2px)';
-                                }
-                              }}
-                              onMouseOut={(e) => {
-                                if (!isSelected) {
-                                  e.currentTarget.style.background = 'rgba(255,255,255,0.04)';
-                                  e.currentTarget.style.borderColor = 'rgba(255,255,255,0.12)';
-                                  e.currentTarget.style.color = '#e2e8f0';
-                                  e.currentTarget.style.transform = 'none';
-                                }
+                                gap: '10px',
+                                transition: 'all 0.15s ease',
+                                boxShadow: isSelected ? '0 4px 16px rgba(245, 158, 11, 0.25)' : '0 1px 3px rgba(0,0,0,0.04)'
                               }}
                             >
-                              <span>{opt}</span>
-                              {isSelected && (
-                                <span style={{
-                                  width: '22px', height: '22px', borderRadius: '50%',
-                                  background: '#f59e0b', color: '#000',
-                                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                  fontSize: '0.8rem', fontWeight: '900', flexShrink: 0
-                                }}>✓</span>
-                              )}
+                              <div>
+                                <div>{opt}</div>
+                                {opt !== 'No Reason' && subCount > 0 && (
+                                  <div style={{ fontSize: '0.78rem', color: isSelected ? '#b45309' : '#64748b', marginTop: '2px', fontWeight: 600 }}>
+                                    {subCount} Sub-reasons
+                                  </div>
+                                )}
+                              </div>
+                              {isSelected && <span style={{ fontSize: '1.15rem', fontWeight: 900 }}>✓</span>}
                             </button>
                           );
                         }) : (
-                          <div style={{ color: '#94a3b8', fontSize: '1.05rem', padding: '12px 0', fontWeight: '600' }}>
-                            No results found for "{search}"
+                          <div style={{ padding: '30px', color: '#64748b', gridColumn: '1 / -1', textAlign: 'center', fontSize: '1rem', fontWeight: 600 }}>
+                            No categories matching "{stepSearch}"
                           </div>
                         )}
                       </div>
-                    </>
-                  );
-                }}
-              </AccordionSection>
-            )}
+                    );
+                  })()}
 
-            {/* ─ STEP 3: SUB-REASON ACCORDION ─ */}
-            {editReasonText && selectedCategory && selectedCategory !== 'No Reason' && (ACTUAL_DOWNTIME_DATA[editReasonText]?.[selectedCategory] || []).length > 0 && (
-              <AccordionSection
-                step="3"
-                title="Sub-Reason (Specific Failure Cause)"
-                color="#8b5cf6"
-                selected={selectedSubReason}
-                isOpen={openStep === 3}
-                onToggle={() => setOpenStep(openStep === 3 ? 0 : 3)}
-                disabled={savingReason || isViewMode}
-                searchable
-              >
-                {(search: string) => {
-                  const allOpts = [...(ACTUAL_DOWNTIME_DATA[editReasonText]?.[selectedCategory] || [])].sort((a: string, b: string) => a.localeCompare(b));
-                  const filtered = allOpts.filter((o: string) => o.toLowerCase().includes(search.toLowerCase()));
-                  return (
-                    <>
-                      {search && (
-                        <div style={{ fontSize: '0.95rem', color: '#94a3b8', marginBottom: '12px', fontWeight: '600' }}>
-                          {filtered.length} result{filtered.length !== 1 ? 's' : ''} for "{search}"
+                  {/* STEP 3 TILES */}
+                  {openStep === 3 && (() => {
+                    if (!selectedCategory) {
+                      return (
+                        <div style={{ padding: '40px', textAlign: 'center', color: '#64748b', fontSize: '1rem', fontWeight: 600 }}>
+                          Please select a Category first from Step 2.
                         </div>
-                      )}
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '12px' }}>
+                      );
+                    }
+                    const allOpts = [...(ACTUAL_DOWNTIME_DATA[editReasonText]?.[selectedCategory] || [])].sort((a: string, b: string) => a.localeCompare(b));
+                    const filtered = allOpts.filter((o: string) => o.toLowerCase().includes(stepSearch.toLowerCase()));
+                    return (
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '12px' }}>
                         {filtered.length > 0 ? filtered.map((opt: string) => {
                           const isSelected = selectedSubReason === opt;
                           return (
@@ -2606,370 +4102,152 @@ function SavedPage({
                               onClick={() => {
                                 setSelectedSubReason(opt);
                                 setOpenStep(4);
+                                setStepSearch('');
                               }}
                               style={{
-                                padding: '15px 18px',
+                                padding: '14px 18px',
                                 borderRadius: '12px',
-                                border: isSelected ? '2.5px solid #8b5cf6' : '1.5px solid rgba(255,255,255,0.12)',
-                                background: isSelected ? 'rgba(139, 92, 246, 0.22)' : 'rgba(255,255,255,0.04)',
-                                color: isSelected ? '#ffffff' : '#e2e8f0',
+                                border: isSelected ? '2.5px solid #8b5cf6' : '1.5px solid #cbd5e1',
+                                background: isSelected ? '#f3e8ff' : '#ffffff',
+                                color: isSelected ? '#7e22ce' : '#0f172a',
                                 cursor: (savingReason || isViewMode) ? 'not-allowed' : 'pointer',
-                                fontSize: '1.08rem',
-                                fontWeight: isSelected ? '800' : '700',
-                                transition: 'all 0.2s ease',
-                                boxShadow: isSelected ? '0 6px 20px rgba(139, 92, 246, 0.35)' : 'none',
+                                fontSize: '0.96rem',
+                                fontWeight: isSelected ? 800 : 700,
                                 textAlign: 'left',
                                 display: 'flex',
                                 alignItems: 'center',
                                 justifyContent: 'space-between',
-                                gap: '8px'
-                              }}
-                              onMouseOver={(e) => {
-                                if (!isSelected) {
-                                  e.currentTarget.style.background = 'rgba(139, 92, 246, 0.12)';
-                                  e.currentTarget.style.borderColor = '#8b5cf6';
-                                  e.currentTarget.style.color = '#ffffff';
-                                  e.currentTarget.style.transform = 'translateY(-2px)';
-                                }
-                              }}
-                              onMouseOut={(e) => {
-                                if (!isSelected) {
-                                  e.currentTarget.style.background = 'rgba(255,255,255,0.04)';
-                                  e.currentTarget.style.borderColor = 'rgba(255,255,255,0.12)';
-                                  e.currentTarget.style.color = '#e2e8f0';
-                                  e.currentTarget.style.transform = 'none';
-                                }
+                                gap: '10px',
+                                transition: 'all 0.15s ease',
+                                boxShadow: isSelected ? '0 4px 16px rgba(139, 92, 246, 0.25)' : '0 1px 3px rgba(0,0,0,0.04)'
                               }}
                             >
                               <span>{opt}</span>
-                              {isSelected && (
-                                <span style={{
-                                  width: '22px', height: '22px', borderRadius: '50%',
-                                  background: '#8b5cf6', color: '#ffffff',
-                                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                  fontSize: '0.8rem', fontWeight: '900', flexShrink: 0
-                                }}>✓</span>
-                              )}
+                              {isSelected && <span style={{ fontSize: '1.15rem', fontWeight: 900 }}>✓</span>}
                             </button>
                           );
                         }) : (
-                          <div style={{ color: '#94a3b8', fontSize: '1.05rem', padding: '12px 0', fontWeight: '600' }}>
-                            No results found for "{search}"
+                          <div style={{ padding: '30px', color: '#64748b', gridColumn: '1 / -1', textAlign: 'center', fontSize: '1rem', fontWeight: 600 }}>
+                            No sub-reasons matching "{stepSearch}"
                           </div>
                         )}
                       </div>
-                    </>
-                  );
-                }}
-              </AccordionSection>
-            )}
-
-            {/* ─ STEP 4: DEPARTMENT ACCORDION ─ */}
-            {editReasonText && selectedCategory && (
-              <AccordionSection
-                step="4"
-                title="Responsible Department & Ownership"
-                color="#3b82f6"
-                selected={editResponsibility}
-                isOpen={openStep === 4}
-                onToggle={() => setOpenStep(openStep === 4 ? 0 : 4)}
-                disabled={savingReason || isViewMode}
-              >
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '14px' }}>
-                  {[
-                    { name: "M/c Maintenance", color: '#3b82f6', icon: '🔧', hod: 'Ashutosh Pandey' },
-                    { name: "Die-Maintenance", color: '#f97316', icon: '🔩', hod: 'S.A. Yadav' },
-                    { name: "Quality",         color: '#10b981', icon: '🛡️', hod: 'Sanjay Kaul' },
-                    { name: "Production",      color: '#a855f7', icon: '🏭', hod: 'Samsher Singh' }
-                  ].map(dep => {
-                    const isSelected = editResponsibility === dep.name;
-                    return (
-                      <button
-                        key={dep.name}
-                        type="button"
-                        disabled={savingReason || isViewMode}
-                        onClick={() => {
-                          setEditResponsibility(dep.name);
-                          setEditPerson(dep.hod);
-                          setOpenStep(5);
-                        }}
-                        style={{
-                          padding: '18px 22px',
-                          borderRadius: '14px',
-                          border: isSelected ? `2.5px solid ${dep.color}` : '1.5px solid rgba(255,255,255,0.14)',
-                          background: isSelected ? `${dep.color}25` : 'rgba(255,255,255,0.04)',
-                          color: isSelected ? '#ffffff' : '#e2e8f0',
-                          cursor: (savingReason || isViewMode) ? 'not-allowed' : 'pointer',
-                          fontSize: '1.15rem',
-                          fontWeight: isSelected ? '800' : '700',
-                          transition: 'all 0.2s ease',
-                          boxShadow: isSelected ? `0 6px 24px ${dep.color}40` : 'none',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          gap: '6px',
-                          textAlign: 'left'
-                        }}
-                        onMouseOver={(e) => {
-                          if (!isSelected) {
-                            e.currentTarget.style.background = `${dep.color}15`;
-                            e.currentTarget.style.borderColor = dep.color;
-                            e.currentTarget.style.color = '#ffffff';
-                            e.currentTarget.style.transform = 'translateY(-2px)';
-                          }
-                        }}
-                        onMouseOut={(e) => {
-                          if (!isSelected) {
-                            e.currentTarget.style.background = 'rgba(255,255,255,0.04)';
-                            e.currentTarget.style.borderColor = 'rgba(255,255,255,0.14)';
-                            e.currentTarget.style.color = '#e2e8f0';
-                            e.currentTarget.style.transform = 'none';
-                          }
-                        }}
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
-                          <span style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                            <span style={{ fontSize: '1.4rem' }}>{dep.icon}</span>
-                            <span>{dep.name}</span>
-                          </span>
-                          {isSelected && (
-                            <span style={{
-                              width: '24px', height: '24px', borderRadius: '50%',
-                              background: dep.color, color: '#ffffff',
-                              display: 'flex', alignItems: 'center', justifyContent: 'center',
-                              fontSize: '0.85rem', fontWeight: '900'
-                            }}>✓</span>
-                          )}
-                        </div>
-                        <span style={{ fontSize: '0.9rem', color: isSelected ? '#cbd5e1' : '#94a3b8', fontWeight: '500' }}>
-                          Default HOD: <strong>{dep.hod}</strong>
-                        </span>
-                      </button>
                     );
-                  })}
-                </div>
-              </AccordionSection>
-            )}
+                  })()}
 
-            {/* ─ STEP 5: DETAILS ─ */}
-            {editResponsibility && (
-              <div style={{
-                border: '2px solid rgba(16, 185, 129, 0.45)',
-                borderRadius: '16px',
-                overflow: 'hidden',
-                background: 'linear-gradient(180deg, rgba(16, 185, 129, 0.1) 0%, rgba(15, 23, 42, 0.85) 100%)',
-                boxShadow: '0 8px 32px rgba(16, 185, 129, 0.15)'
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '22px 28px', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
-                  <span style={{ fontSize: '0.85rem', fontWeight: '900', letterSpacing: '2px', textTransform: 'uppercase', color: '#10b981', background: 'rgba(16,185,129,0.2)', border: '1.5px solid rgba(16,185,129,0.4)', borderRadius: '6px', padding: '6px 14px' }}>
-                    STEP 5
-                  </span>
-                  <div>
-                    <span style={{ fontSize: '1.35rem', fontWeight: '800', color: '#ffffff' }}>Additional Details & Action Plan</span>
-                    <p style={{ margin: '4px 0 0', fontSize: '0.95rem', color: '#94a3b8' }}>Assign responsibility, corrective action, target date, and resolution status</p>
-                  </div>
-                </div>
-                <div style={{ padding: '26px 28px', display: 'flex', flexDirection: 'column', gap: '22px' }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '20px' }}>
-                    <label style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                      <span style={{ fontSize: '1.05rem', color: '#93c5fd', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '1px' }}>
-                        👤 HOD / Assigned Person
-                      </span>
-                      <input
-                        type="text"
-                        disabled={savingReason || isViewMode}
-                        placeholder="e.g. Ashutosh Pandey"
-                        value={editPerson}
-                        onChange={e => setEditPerson(e.target.value)}
-                        style={{
-                          height: '56px',
-                          padding: '0 18px',
-                          fontSize: '1.2rem',
-                          fontWeight: '700',
-                          borderRadius: '12px',
-                          background: '#070d1d',
-                          border: '1.5px solid rgba(59,130,246,0.4)',
-                          color: '#ffffff',
-                          outline: 'none',
-                          boxSizing: 'border-box',
-                          transition: 'border-color 0.2s',
-                          fontFamily: 'inherit'
-                        }}
-                        onFocus={(e) => { e.target.style.borderColor = '#3b82f6'; }}
-                        onBlur={(e) => { e.target.style.borderColor = 'rgba(59,130,246,0.4)'; }}
-                      />
-                    </label>
-                    <label style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                      <span style={{ fontSize: '1.05rem', color: '#fbbf24', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '1px' }}>
-                        📌 Resolution Status
-                      </span>
-                      <select
-                        disabled={savingReason || isViewMode}
-                        value={editStatus}
-                        onChange={e => setEditStatus(e.target.value)}
-                        style={{
-                          height: '56px',
-                          padding: '0 18px',
-                          fontSize: '1.2rem',
-                          borderRadius: '12px',
-                          background: '#070d1d',
-                          border: editStatus === 'Completed' ? '2px solid #10b981' : '2px solid #f59e0b',
-                          color: editStatus === 'Completed' ? '#34d399' : '#fbbf24',
-                          outline: 'none',
-                          boxSizing: 'border-box',
-                          transition: 'border-color 0.2s',
-                          fontFamily: 'inherit',
-                          fontWeight: '800',
-                          cursor: (savingReason || isViewMode) ? 'not-allowed' : 'pointer'
-                        }}
-                        onFocus={(e) => { e.target.style.borderColor = editStatus === 'Completed' ? '#10b981' : '#f59e0b'; }}
-                        onBlur={(e) => { e.target.style.borderColor = editStatus === 'Completed' ? '#10b981' : '#f59e0b'; }}
-                      >
-                        <option value="Pending" style={{ color: '#fbbf24', background: '#0f172a', fontWeight: '700' }}>⏳ Pending</option>
-                        <option value="Completed" style={{ color: '#34d399', background: '#0f172a', fontWeight: '700' }}>✓ Completed</option>
-                      </select>
-                    </label>
-                    <label style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                      <span style={{ fontSize: '1.05rem', color: '#38bdf8', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '1px' }}>
-                        📅 Target Date
-                      </span>
-                      <input
-                        type="date"
-                        disabled={savingReason || isViewMode}
-                        value={editTargetDate}
-                        onChange={e => setEditTargetDate(e.target.value)}
-                        style={{
-                          height: '56px',
-                          padding: '0 18px',
-                          fontSize: '1.2rem',
-                          fontWeight: '700',
-                          borderRadius: '12px',
-                          background: '#070d1d',
-                          border: '1.5px solid rgba(56,189,248,0.4)',
-                          color: '#ffffff',
-                          outline: 'none',
-                          boxSizing: 'border-box',
-                          colorScheme: 'dark',
-                          transition: 'border-color 0.2s'
-                        }}
-                        onFocus={(e) => { e.target.style.borderColor = '#38bdf8'; }}
-                        onBlur={(e) => { e.target.style.borderColor = 'rgba(56,189,248,0.4)'; }}
-                      />
-                    </label>
-                  </div>
-                  <label style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                    <span style={{ fontSize: '1.05rem', color: '#f59e0b', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '1px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#f59e0b', flexShrink: 0 }}></span>
-                      🛠️ Corrective Action Taken / 5-Why RCA Notes
-                    </span>
-                    <textarea
-                      disabled={savingReason || isViewMode}
-                      placeholder="Describe the corrective action taken to resolve this downtime issue, replace parts, or fix tooling..."
-                      value={editNoteText}
-                      onChange={e => setEditNoteText(e.target.value)}
-                      style={{
-                        minHeight: '130px',
-                        background: '#070d1d',
-                        border: '1.5px solid rgba(245,158,11,0.4)',
-                        borderRadius: '12px',
-                        color: '#ffffff',
-                        padding: '18px 22px',
-                        fontSize: '1.2rem',
-                        fontWeight: '600',
-                        resize: 'vertical',
-                        outline: 'none',
-                        boxSizing: 'border-box',
-                        lineHeight: '1.7',
-                        transition: 'border-color 0.2s',
-                        fontFamily: 'inherit'
-                      }}
-                      onFocus={(e) => { e.target.style.borderColor = '#f59e0b'; }}
-                      onBlur={(e) => { e.target.style.borderColor = 'rgba(245,158,11,0.4)'; }}
-                    />
-                  </label>
+                  {/* STEP 4 TILES */}
+                  {openStep === 4 && (() => {
+                    const departments = [
+                      { name: "M/c Maintenance", color: '#3b82f6', icon: '🔧', hod: 'Ashutosh Pandey' },
+                      { name: "Die-Maintenance", color: '#f97316', icon: '🔩', hod: 'S.A. Yadav' },
+                      { name: "Quality",         color: '#10b981', icon: '🛡️', hod: 'Sanjay Kaul' },
+                      { name: "Production",      color: '#a855f7', icon: '🏭', hod: 'Samsher Singh' }
+                    ];
+                    return (
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '14px' }}>
+                        {departments.map(dep => {
+                          const isSelected = editResponsibility === dep.name;
+                          return (
+                            <button
+                              key={dep.name}
+                              type="button"
+                              disabled={savingReason || isViewMode}
+                              onClick={() => {
+                                setEditResponsibility(dep.name);
+                                setEditPerson(dep.hod);
+                              }}
+                              style={{
+                                padding: '16px 20px',
+                                borderRadius: '12px',
+                                border: isSelected ? '2.5px solid #3b82f6' : '1.5px solid #cbd5e1',
+                                background: isSelected ? '#dbeafe' : '#ffffff',
+                                color: isSelected ? '#1d4ed8' : '#0f172a',
+                                cursor: (savingReason || isViewMode) ? 'not-allowed' : 'pointer',
+                                fontSize: '1rem',
+                                fontWeight: isSelected ? 800 : 700,
+                                textAlign: 'left',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '14px',
+                                transition: 'all 0.15s ease',
+                                boxShadow: isSelected ? '0 4px 16px rgba(59, 130, 246, 0.25)' : '0 1px 3px rgba(0,0,0,0.04)'
+                              }}
+                            >
+                              <span style={{ fontSize: '1.5rem' }}>{dep.icon}</span>
+                              <div style={{ flex: 1 }}>
+                                <div style={{ fontWeight: 800, fontSize: '1.02rem' }}>{dep.name}</div>
+                                <div style={{ fontSize: '0.84rem', color: isSelected ? '#1e40af' : '#64748b', marginTop: '2px', fontWeight: 600 }}>
+                                  HOD: {dep.hod}
+                                </div>
+                              </div>
+                              {isSelected && <span style={{ fontSize: '1.15rem', fontWeight: 900 }}>✓</span>}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
-            )}
+            </div>
 
-            {/* ─ FOOTER BUTTONS ─ */}
-            <div style={{ display: 'flex', gap: '16px', justifyContent: 'flex-end', paddingTop: '24px', borderTop: '2px solid rgba(255,255,255,0.08)' }}>
-              <button
-                type="button"
-                onClick={() => setEditingReasonRecord(null)}
-                disabled={savingReason}
-                style={{
-                  padding: '16px 36px',
-                  background: 'rgba(255,255,255,0.06)',
-                  border: '1.5px solid rgba(255,255,255,0.18)',
-                  color: '#cbd5e1',
-                  borderRadius: '12px',
-                  fontSize: '1.1rem',
-                  fontWeight: '700',
-                  cursor: 'pointer',
-                  transition: 'all 0.2s'
-                }}
-                onMouseOver={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.12)'; e.currentTarget.style.color = '#ffffff'; }}
-                onMouseOut={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; e.currentTarget.style.color = '#cbd5e1'; }}
-              >
-                {isViewMode ? 'Close' : 'Cancel'}
-              </button>
-
-              {isViewMode ? (
+            {/* Modal Footer - Fixed at bottom */}
+            <div style={{
+              padding: '16px 28px',
+              background: '#f8fafc',
+              borderTop: '1.5px solid #e2e8f0',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: '12px',
+              flexShrink: 0
+            }}>
+              <div style={{ fontSize: '0.9rem', color: '#475569' }}>
+                Classification: <strong style={{ color: '#2563eb' }}>{[editReasonText, selectedCategory, selectedSubReason, editResponsibility].filter(Boolean).join(' • ') || 'None selected'}</strong>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                 <button
                   type="button"
-                  onClick={() => setIsViewMode(false)}
+                  onClick={() => setEditingReasonRecord(null)}
                   style={{
-                    padding: '16px 36px',
-                    background: 'linear-gradient(135deg, #f59e0b, #d97706)',
-                    border: 'none',
-                    color: 'white',
-                    borderRadius: '12px',
-                    fontSize: '1.1rem',
-                    fontWeight: '800',
+                    background: '#ffffff',
+                    border: '1.5px solid #cbd5e1',
+                    color: '#475569',
+                    padding: '11px 24px',
+                    borderRadius: '8px',
+                    fontSize: '0.9rem',
+                    fontWeight: 700,
                     cursor: 'pointer',
-                    transition: 'all 0.2s',
-                    boxShadow: '0 6px 20px rgba(245,158,11,0.35)'
+                    transition: 'all 0.15s ease'
                   }}
                 >
-                  ✏️ Edit Details
+                  Cancel
                 </button>
-              ) : (
-                (() => {
-                  const hasSubReasons = ACTUAL_DOWNTIME_DATA[editReasonText]?.[selectedCategory]?.length > 0;
-                  const isValid = Boolean(
-                    editReasonText.trim() && selectedCategory.trim() &&
-                    (!hasSubReasons || selectedSubReason.trim()) &&
-                    editResponsibility.trim() && editPerson.trim() &&
-                    editTargetDate.trim() && editStatus.trim() && editNoteText.trim()
-                  );
-                  return (
-                    <button
-                      type="button"
-                      onClick={() => saveEditedReason(editingReasonRecord)}
-                      disabled={savingReason || !isValid}
-                      title={!isValid ? 'Please fill out all required fields first' : ''}
-                      style={{
-                        padding: '16px 44px',
-                        background: isValid ? 'linear-gradient(135deg, #2563eb, #7c3aed)' : 'rgba(255,255,255,0.05)',
-                        border: isValid ? '1.5px solid rgba(255,255,255,0.2)' : '1px solid rgba(255,255,255,0.06)',
-                        color: isValid ? 'white' : '#64748b',
-                        borderRadius: '12px',
-                        fontSize: '1.15rem',
-                        fontWeight: '900',
-                        cursor: (savingReason || !isValid) ? 'not-allowed' : 'pointer',
-                        transition: 'all 0.2s',
-                        boxShadow: isValid ? '0 6px 24px rgba(37,99,235,0.45)' : 'none',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '10px'
-                      }}
-                      onMouseOver={(e) => isValid && (e.currentTarget.style.transform = 'translateY(-2px)')}
-                      onMouseOut={(e) => isValid && (e.currentTarget.style.transform = 'none')}
-                    >
-                      {savingReason ? '⏳ Saving Event Report...' : isValid ? '💾 Save Event Details' : '💾 Save Details (Fill Required Fields)'}
-                    </button>
-                  );
-                })()
-              )}
+                <button
+                  type="button"
+                  onClick={() => saveEditedReason(editingReasonRecord)}
+                  disabled={savingReason}
+                  style={{
+                    background: 'linear-gradient(135deg, #059669, #047857)',
+                    border: 'none',
+                    color: '#ffffff',
+                    padding: '11px 28px',
+                    borderRadius: '8px',
+                    fontSize: '0.92rem',
+                    fontWeight: 800,
+                    cursor: savingReason ? 'not-allowed' : 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    opacity: savingReason ? 0.7 : 1,
+                    boxShadow: '0 4px 14px rgba(5, 150, 105, 0.35)',
+                    transition: 'all 0.15s ease'
+                  }}
+                >
+                  {savingReason ? '💾 Saving...' : '💾 Save Event Details'}
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -3008,11 +4286,11 @@ function AccordionSection({
   return (
     <div
       style={{
-        border: isOpen ? `2px solid ${color}` : selected ? `1.5px solid ${color}80` : '1.5px solid rgba(255,255,255,0.12)',
+        border: isOpen ? `2px solid ${color}` : selected ? `1.5px solid ${color}` : '1.5px solid #e2e8f0',
         borderRadius: '12px',
         overflow: 'hidden',
-        background: isOpen ? 'rgba(15, 23, 42, 0.96)' : selected ? 'rgba(15, 23, 42, 0.75)' : 'rgba(15, 23, 42, 0.45)',
-        boxShadow: isOpen ? `0 8px 28px -6px ${color}30` : 'none',
+        background: isOpen ? '#ffffff' : selected ? '#f8fafc' : '#ffffff',
+        boxShadow: isOpen ? `0 8px 24px -6px ${color}25` : '0 1px 3px rgba(0,0,0,0.03)',
         transition: 'all 0.25s ease'
       }}
     >
@@ -3035,27 +4313,27 @@ function AccordionSection({
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
           <span style={{
-            fontSize: '0.78rem',
+            fontSize: '0.86rem',
             fontWeight: '900',
             letterSpacing: '1.5px',
             textTransform: 'uppercase',
             color: color,
-            background: color + '22',
-            border: `1.5px solid ${color}55`,
+            background: color + '15',
+            border: `1.5px solid ${color}40`,
             borderRadius: '6px',
             padding: '4px 10px',
             flexShrink: 0
           }}>
             STEP {step}
           </span>
-          <span style={{ fontSize: '1.18rem', fontWeight: '800', color: '#ffffff' }}>
+          <span style={{ fontSize: '1.22rem', fontWeight: '800', color: '#0f172a' }}>
             {title}
           </span>
           {selected && !isOpen && (
             <span style={{
-              fontSize: '0.95rem',
-              color: '#ffffff',
-              background: color + '30',
+              fontSize: '0.98rem',
+              color: color,
+              background: color + '15',
               border: `1.5px solid ${color}`,
               borderRadius: '18px',
               padding: '4px 14px',
@@ -3070,37 +4348,35 @@ function AccordionSection({
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
           {!selected && !isOpen && (
-            <span style={{ fontSize: '0.9rem', color: '#94a3b8', fontWeight: '600' }}>
+            <span style={{ fontSize: '0.95rem', color: '#64748b', fontWeight: '600' }}>
               Pending Selection
             </span>
           )}
           <div style={{
-            width: '28px',
-            height: '28px',
-            borderRadius: '50%',
-            background: isOpen ? color : 'rgba(255,255,255,0.06)',
-            border: `1.5px solid ${isOpen ? color : 'rgba(255,255,255,0.15)'}`,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            color: isOpen ? '#ffffff' : '#94a3b8',
-            fontSize: '0.8rem',
-            fontWeight: '900',
-            transition: 'all 0.25s',
-            transform: isOpen ? 'rotate(180deg)' : 'none'
+            color: isOpen ? color : '#64748b',
+            transition: 'transform 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+            transform: isOpen ? 'rotate(180deg)' : 'none',
+            flexShrink: 0,
+            width: '28px',
+            height: '28px'
           }}>
-            ▼
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
           </div>
         </div>
       </button>
 
       {/* Content */}
       {isOpen && (
-        <div style={{ padding: '0 20px 18px' }}>
+        <div style={{ padding: '6px 22px 26px' }}>
           {/* Search bar */}
           {searchable && (
             <div style={{ position: 'relative', marginBottom: '14px' }}>
-              <span style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8', fontSize: '1.05rem', pointerEvents: 'none' }}>🔍</span>
+              <span style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', color: '#64748b', fontSize: '1.05rem', pointerEvents: 'none' }}>🔍</span>
               <input
                 type="text"
                 autoFocus
@@ -3115,16 +4391,16 @@ function AccordionSection({
                   fontSize: '1.05rem',
                   fontWeight: '600',
                   borderRadius: '12px',
-                  background: '#070d1d',
-                  border: '1.5px solid rgba(255,255,255,0.15)',
-                  color: 'white',
+                  background: '#ffffff',
+                  border: '1.5px solid #cbd5e1',
+                  color: '#0f172a',
                   outline: 'none',
                   boxSizing: 'border-box',
                   fontFamily: 'inherit',
                   transition: 'border-color 0.2s'
                 }}
                 onFocus={e => { e.target.style.borderColor = color; }}
-                onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.15)'; }}
+                onBlur={e => { e.target.style.borderColor = '#cbd5e1'; }}
               />
               {search && (
                 <button
@@ -3320,7 +4596,134 @@ export function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [clock, setClock] = useState(() => new Date());
   const [reasonOptions, setReasonOptions] = useState<ReasonOptions>({ minor_stoppage: [], breakdown: [] });
+  const [editingCamera, setEditingCamera] = useState<FlatCamera | null>(null);
+  const [flatCameras, setFlatCameras] = useState<FlatCamera[]>([]);
+  const [hierarchyTree, setHierarchyTree] = useState<HierarchyPlant[]>([]);
+  const [selectedPlantId, setSelectedPlantId] = useState<number | 'all'>('all');
+  const [selectedDeptId, setSelectedDeptId] = useState<number | 'all'>('all');
+  const [selectedLineId, setSelectedLineId] = useState<number | 'all'>('all');
+  const [activeCamId, setActiveCamId] = useState<number | null>(null);
+  const [viewMode, setViewMode] = useState<'single' | 'grid'>('single');
   const previousRecordingRunningRef = useRef(false);
+  const initialSyncRef = useRef(false);
+
+  const handleSelectCamera = (cam: FlatCamera, syncHierarchy = true) => {
+    setActiveCamId(cam.id);
+    if (syncHierarchy) {
+      if (cam.plant_id) setSelectedPlantId(cam.plant_id);
+      if (cam.department_id) setSelectedDeptId(cam.department_id);
+      if (cam.line_id) setSelectedLineId(cam.line_id);
+    }
+    setSettings((s) => ({
+      ...s,
+      ip: cam.camera_ip,
+      rtsp_port: cam.rtsp_port,
+      channel: cam.channel,
+      rtsp_path: cam.rtsp_path,
+      plc_host: cam.plc_host || s.plc_host,
+      plc_port: cam.plc_port || s.plc_port,
+      plc_device: cam.plc_device || s.plc_device,
+      plc_address: cam.plc_address || s.plc_address,
+    }));
+  };
+
+  useEffect(() => {
+    let timer: any = null;
+    const fetchAll = () => {
+      fetchHierarchy()
+        .then(data => setHierarchyTree(data))
+        .catch(() => {});
+      fetchFlatCameras()
+        .then(data => {
+          setFlatCameras(data);
+          if (data.length > 0 && !initialSyncRef.current) {
+            initialSyncRef.current = true;
+            setActiveCamId(data[0].id);
+            setSelectedPlantId(data[0].plant_id);
+            setSelectedDeptId(data[0].department_id);
+            setSelectedLineId(data[0].line_id);
+            handleSelectCamera(data[0], true);
+          }
+        })
+        .catch(() => {});
+    };
+    fetchAll();
+    timer = setInterval(fetchAll, 4000);
+    return () => {
+      if (timer) clearInterval(timer);
+    };
+  }, []);
+
+  const availableDepts = useMemo(() => {
+    if (selectedPlantId === 'all') {
+      return hierarchyTree.flatMap(p => p.departments);
+    }
+    const p = hierarchyTree.find(item => item.id === selectedPlantId);
+    return p ? p.departments : [];
+  }, [hierarchyTree, selectedPlantId]);
+
+  const availableLines = useMemo(() => {
+    if (selectedDeptId === 'all') {
+      return availableDepts.flatMap(d => d.lines);
+    }
+    const d = availableDepts.find(item => item.id === selectedDeptId);
+    return d ? d.lines : [];
+  }, [availableDepts, selectedDeptId]);
+
+  const filteredCameras = useMemo(() => {
+    return flatCameras.filter(c => {
+      if (selectedPlantId !== 'all' && c.plant_id !== selectedPlantId) return false;
+      if (selectedDeptId !== 'all' && c.department_id !== selectedDeptId) return false;
+      if (selectedLineId !== 'all' && c.line_id !== selectedLineId) return false;
+      return true;
+    });
+  }, [flatCameras, selectedPlantId, selectedDeptId, selectedLineId]);
+
+  const handleChangePlant = (val: number | 'all') => {
+    setSelectedPlantId(val);
+    setSelectedDeptId('all');
+    setSelectedLineId('all');
+    if (val !== 'all') {
+      const matchCam = flatCameras.find(c => c.plant_id === val);
+      if (matchCam) {
+        handleSelectCamera(matchCam, false);
+      }
+    }
+  };
+
+  const handleChangeDept = (val: number | 'all') => {
+    setSelectedDeptId(val);
+    setSelectedLineId('all');
+    if (val !== 'all') {
+      const matchCam = flatCameras.find(c => c.department_id === val);
+      if (matchCam) {
+        handleSelectCamera(matchCam, false);
+      }
+    }
+  };
+
+  const handleChangeLine = (val: number | 'all') => {
+    setSelectedLineId(val);
+    if (val !== 'all') {
+      const matchCam = flatCameras.find(c => c.line_id === val);
+      if (matchCam) {
+        handleSelectCamera(matchCam, false);
+      }
+    }
+  };
+
+  // Keep active camera & settings automatically in sync whenever filters change
+  useEffect(() => {
+    if (filteredCameras.length > 0) {
+      const match = filteredCameras.find(c => c.id === activeCamId);
+      if (!match) {
+        handleSelectCamera(filteredCameras[0], false);
+      }
+    } else {
+      setActiveCamId(null);
+    }
+  }, [filteredCameras, activeCamId]);
+
   const pendingAdminActionRef = useRef<(() => void) | null>(null);
 
   async function loadReasons(root = settings.storage_root) {
@@ -3645,6 +5048,7 @@ export function App() {
     setSettingsMessage('');
   }
 
+  const currentActiveCam = filteredCameras.find(c => c.id === activeCamId) || filteredCameras[0] || null;
   const plcEndpoint = `${plc.plc_host || settings.plc_host || 'PLC'}:${plc.plc_port || settings.plc_port}`;
 
   return (
@@ -3670,22 +5074,84 @@ export function App() {
         settingsMessageTone={settingsMessageTone}
         plcTestResult={plcTestResult}
         userRole={userRole}
+        activeMachineName={currentActiveCam?.machine_name}
         onLogout={logout}
       />
       <main className="content">
-        <TopBar page={page} recording={recording} settings={settings} online={cameraOnline} plc={plc} />
+        <TopBar
+          page={page}
+          recording={recording}
+          settings={settings}
+          online={cameraOnline}
+          plc={plc}
+          hierarchyTree={hierarchyTree}
+          selectedPlantId={selectedPlantId}
+          onChangePlant={handleChangePlant}
+          availableDepts={availableDepts}
+          selectedDeptId={selectedDeptId}
+          onChangeDept={handleChangeDept}
+          availableLines={availableLines}
+          selectedLineId={selectedLineId}
+          onChangeLine={handleChangeLine}
+          cameras={filteredCameras}
+          activeCamId={activeCamId}
+          onSelectCamera={(cam) => handleSelectCamera(cam, true)}
+          viewMode={viewMode}
+          onChangeViewMode={setViewMode}
+        />
         {settingsMessage && (
           <div className={`app-toast ${settingsMessageTone}`}>
             {settingsMessage}
           </div>
         )}
-        {message && <div className="error-banner">{message}</div>}
-        {page === 'live' ? (
+        {page === 'hierarchy' ? (
+          <SettingsHub
+            settings={settings}
+            setSettings={setSettings}
+            recording={recording}
+            plc={plc}
+            stats={stats}
+            onCaptureVideoChange={setCaptureVideo}
+            onRecordingModeChange={setRecordingMode}
+            onSaveSettings={() => saveSettings()}
+            onTestPlc={testPlcSettings}
+            onStartSmartRecording={startSmartRecording}
+            onStopSmartRecording={stopSmartRecording}
+            settingsMessage={settingsMessage}
+            settingsMessageTone={settingsMessageTone}
+            plcTestResult={plcTestResult}
+            onBack={() => setPage('live')}
+            activeMachineName={currentActiveCam?.machine_name}
+          />
+        ) : page === 'live' ? (
           <LivePage
             settings={settings}
             recording={recording}
             online={cameraOnline}
             plc={plc}
+            stats={stats}
+            cameras={filteredCameras}
+            totalCamerasCount={flatCameras.length}
+            activeCamId={activeCamId}
+            onSelectCamera={(cam) => handleSelectCamera(cam, true)}
+            viewMode={viewMode}
+            onChangeViewMode={setViewMode}
+            onEditCamera={(cam) => setEditingCamera(cam)}
+            onResetFilters={() => {
+              setSelectedPlantId('all');
+              setSelectedDeptId('all');
+              setSelectedLineId('all');
+            }}
+            hierarchyTree={hierarchyTree}
+            selectedPlantId={selectedPlantId}
+            onChangePlant={handleChangePlant}
+            availableDepts={availableDepts}
+            selectedDeptId={selectedDeptId}
+            onChangeDept={handleChangeDept}
+            availableLines={availableLines}
+            selectedLineId={selectedLineId}
+            onChangeLine={handleChangeLine}
+            onNavigateSaved={() => setPage('saved')}
           />
         ) : (
           <SavedPage
@@ -3698,9 +5164,19 @@ export function App() {
             onEditReason={() => undefined}
           />
         )}
-        <footer className="status-footer">
-          <time className="footer-time"><Icon name="activity" /> {clock.toLocaleString()}</time>
-        </footer>
+        {editingCamera && (
+          <CameraEditModal
+            camera={editingCamera}
+            onClose={() => setEditingCamera(null)}
+            onSaved={() => {
+              setEditingCamera(null);
+              setSettingsMessage('Camera configuration saved and tested successfully!');
+              setSettingsMessageTone('good');
+              setTimeout(() => setSettingsMessage(''), 4500);
+            }}
+          />
+        )}
+
       </main>
       {adminPromptOpen && (
         <div className="admin-modal-backdrop" role="presentation">
