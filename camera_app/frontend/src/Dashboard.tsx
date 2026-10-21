@@ -72,22 +72,39 @@ function hasRca(r: RecordingRecord) {
   return !(!reason || reason.toLowerCase() === 'pending reason');
 }
 
-/* ── Clean Industrial Tooltip ──────────────────────────────────── */
+/* ── Clean Enterprise Tooltip ──────────────────────────────────── */
 const ttStyle = {
-  background: '#0b1329',
-  border: '1px solid rgba(255, 255, 255, 0.18)',
-  borderRadius: '8px',
-  color: '#f8fafc',
-  padding: '8px 12px',
-  boxShadow: '0 8px 24px rgba(0, 0, 0, 0.6)',
+  background: '#ffffff',
+  border: '1px solid #cbd5e1',
+  borderRadius: '10px',
+  color: '#0f172a',
+  padding: '10px 14px',
+  boxShadow: '0 8px 24px rgba(0, 0, 0, 0.12)',
 };
-const ttItemStyle = { color: '#e2e8f0', fontSize: '12px', padding: '2px 0' };
-const ttLabelStyle = { color: '#38bdf8', fontWeight: 700, fontSize: '13px', marginBottom: 4 };
+const ttItemStyle = { color: '#334155', fontSize: '12px', padding: '2px 0', fontWeight: 600 };
+const ttLabelStyle = { color: '#0f172a', fontWeight: 800, fontSize: '13px', marginBottom: 4 };
 
 /* ── Custom Pie Slice Label (Direct On-Chart Data Label) ────────── */
-const renderShiftSliceLabel = (entry: any) => {
-  if (!entry || entry.value <= 0) return null;
-  return `${entry.name}: ${entry.value}h (${entry.pct}%)`;
+const renderShiftSliceLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, value, name, pct }: any) => {
+  if (!value || value <= 0) return null;
+  const RADIAN = Math.PI / 180;
+  const radius = outerRadius + 22;
+  const x = cx + radius * Math.cos(-midAngle * RADIAN);
+  const y = cy + radius * Math.sin(-midAngle * RADIAN);
+
+  return (
+    <text
+      x={x}
+      y={y}
+      fill="#334155"
+      textAnchor={x > cx ? 'start' : 'end'}
+      dominantBaseline="central"
+      fontSize={11.5}
+      fontWeight={700}
+    >
+      {`${name}: ${value}h (${pct}%)`}
+    </text>
+  );
 };
 
 /* ─── Component ───────────────────────────────────────────────── */
@@ -378,11 +395,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ records, businessRange, th
               margin={{ top: 25, right: 25, left: 10, bottom: 25 }}
               barGap={hourlyViewMode === 'sideBySide' ? 2 : 0}
             >
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(255, 255, 255, 0.08)" />
+              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
               <XAxis
                 dataKey="name"
-                tick={{ fill: '#94a3b8', fontSize: 11, fontWeight: 500 }}
-                axisLine={{ stroke: '#334155' }}
+                tick={{ fill: '#64748b', fontSize: 11, fontWeight: 600 }}
+                axisLine={{ stroke: '#cbd5e1' }}
                 tickLine={false}
                 interval={0}
                 angle={-45}
@@ -392,10 +409,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ records, businessRange, th
               <YAxis
                 allowDecimals={false}
                 domain={[0, (dataMax: number) => Math.max(4, Math.ceil(dataMax * 1.15))]}
-                tick={{ fill: '#94a3b8', fontSize: 11 }}
-                axisLine={{ stroke: '#334155' }}
+                tick={{ fill: '#64748b', fontSize: 11, fontWeight: 600 }}
+                axisLine={{ stroke: '#cbd5e1' }}
                 tickLine={false}
-                label={{ value: 'Incidents', angle: -90, position: 'insideLeft', fill: '#cbd5e1', fontSize: 12, fontWeight: 600, offset: 12 }}
+                label={{ value: 'Incidents', angle: -90, position: 'insideLeft', fill: '#475569', fontSize: 12, fontWeight: 700, offset: 12 }}
               />
 
               <RechartsTooltip
@@ -439,7 +456,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ records, businessRange, th
                 <LabelList
                   dataKey={hourlyViewMode === 'stacked' ? 'totalLabel' : 'minLabel'}
                   position="top"
-                  fill={hourlyViewMode === 'stacked' ? '#f8fafc' : '#f59e0b'}
+                  fill={hourlyViewMode === 'stacked' ? '#0f172a' : '#d97706'}
                   fontSize={11}
                   fontWeight={700}
                   offset={4}
@@ -448,8 +465,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ records, businessRange, th
             </BarChart>
           </ResponsiveContainer>
 
-          <div style={{ fontSize: '0.78rem', color: '#64748b', marginTop: '6px', textAlign: 'left', paddingLeft: '8px' }}>
-            Factory day 06:00 to 06:00 next morning. Numbers read from your line graph.
+          <div style={{ fontSize: '0.8rem', color: '#64748b', marginTop: '8px', textAlign: 'left', paddingLeft: '8px', fontWeight: 500 }}>
+            Factory day 06:00 to 06:00 next morning. Numbers read from your live graph.
           </div>
         </div>
       </div>
@@ -479,11 +496,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ records, businessRange, th
                     outerRadius={88}
                     dataKey="value"
                     nameKey="name"
-                    stroke="#0b1329"
+                    stroke="#ffffff"
                     strokeWidth={3}
                     paddingAngle={stats.shiftData.length > 1 ? 4 : 0}
                     label={renderShiftSliceLabel}
-                    labelLine={{ stroke: '#64748b', strokeWidth: 1.5 }}
+                    labelLine={{ stroke: '#94a3b8', strokeWidth: 1.5 }}
                   >
                     {stats.shiftData.map((d, i) => (
                       <Cell key={i} fill={d.fill} />
@@ -503,17 +520,17 @@ export const Dashboard: React.FC<DashboardProps> = ({ records, businessRange, th
                     verticalAlign="bottom"
                     height={32}
                     iconType="circle"
-                    wrapperStyle={{ fontSize: '12px', color: '#cbd5e1' }}
+                    wrapperStyle={{ fontSize: '12px', color: '#475569', fontWeight: 600 }}
                   />
                 </PieChart>
               </ResponsiveContainer>
 
               {/* Total Loss Centered inside Donut */}
               <div style={{ position: 'absolute', top: '48%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center', pointerEvents: 'none' }}>
-                <div style={{ fontSize: 9.5, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>
+                <div style={{ fontSize: 10, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>
                   TOTAL LOSS
                 </div>
-                <div style={{ fontSize: 24, fontWeight: 800, color: '#f8fafc', lineHeight: 1.15, marginTop: 2 }}>
+                <div style={{ fontSize: 24, fontWeight: 800, color: '#0f172a', lineHeight: 1.15, marginTop: 2 }}>
                   {fmtShort(stats.totalSec)}
                 </div>
               </div>
@@ -535,18 +552,18 @@ export const Dashboard: React.FC<DashboardProps> = ({ records, businessRange, th
                 layout="vertical"
                 margin={{ top: 10, right: 85, left: 15, bottom: 10 }}
               >
-                <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="rgba(255, 255, 255, 0.12)" />
+                <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9" />
                 <XAxis
                   type="number"
-                  tick={{ fill: '#cbd5e1', fontSize: 12, fontWeight: 500 }}
-                  axisLine={{ stroke: '#475569' }}
+                  tick={{ fill: '#64748b', fontSize: 11, fontWeight: 600 }}
+                  axisLine={{ stroke: '#cbd5e1' }}
                   tickLine={false}
                 />
                 <YAxis
                   dataKey="name"
                   type="category"
-                  tick={{ fill: '#f8fafc', fontSize: 12, fontWeight: 600 }}
-                  axisLine={{ stroke: '#475569' }}
+                  tick={{ fill: '#0f172a', fontSize: 12, fontWeight: 700 }}
+                  axisLine={{ stroke: '#cbd5e1' }}
                   tickLine={false}
                   width={150}
                 />
@@ -573,7 +590,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ records, businessRange, th
                   <LabelList
                     dataKey="displayLabel"
                     position="right"
-                    fill="#f8fafc"
+                    fill="#0f172a"
                     fontSize={11.5}
                     fontWeight={700}
                     offset={10}
@@ -602,12 +619,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ records, businessRange, th
                 data={stats.topReasons}
                 margin={{ top: 20, right: 30, left: 15, bottom: 40 }}
               >
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(255, 255, 255, 0.12)" />
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
 
                 <XAxis
                   dataKey="name"
-                  tick={{ fill: '#e2e8f0', fontSize: 12, fontWeight: 600 }}
-                  axisLine={{ stroke: '#475569' }}
+                  tick={{ fill: '#0f172a', fontSize: 12, fontWeight: 600 }}
+                  axisLine={{ stroke: '#cbd5e1' }}
                   tickLine={false}
                   interval={0}
                   angle={-15}
@@ -616,10 +633,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ records, businessRange, th
                 />
 
                 <YAxis
-                  tick={{ fill: '#f87171', fontSize: 12, fontWeight: 600 }}
-                  axisLine={{ stroke: '#475569' }}
+                  tick={{ fill: '#dc2626', fontSize: 11, fontWeight: 700 }}
+                  axisLine={{ stroke: '#cbd5e1' }}
                   tickLine={false}
-                  label={{ value: 'Hours', angle: -90, position: 'insideLeft', fill: '#f87171', fontSize: 12, fontWeight: 600, offset: 12 }}
+                  label={{ value: 'Hours', angle: -90, position: 'insideLeft', fill: '#dc2626', fontSize: 12, fontWeight: 700, offset: 12 }}
                 />
 
                 <RechartsTooltip
@@ -644,7 +661,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ records, businessRange, th
                   <LabelList
                     dataKey="displayLabel"
                     position="top"
-                    fill="#fca5a5"
+                    fill="#dc2626"
                     fontSize={12}
                     fontWeight={700}
                     offset={6}
@@ -661,7 +678,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ records, businessRange, th
       ══════════════════════════════════════════════════════ */}
       <div className="tpm-table-section" style={{ marginTop: '16px' }}>
         <div className="tpm-section-header">
-          <h4 style={{ fontSize: '17px', fontWeight: 700, margin: '0 0 4px 0' }}>Top 5 Longest Stoppages</h4>
+          <h4 style={{ fontSize: '17px', fontWeight: 800, margin: '0 0 4px 0' }}>Top 5 Longest Stoppages</h4>
           <p className="chart-sub">Ranked by lost duration · High-priority investigation targets</p>
         </div>
 
@@ -681,20 +698,20 @@ export const Dashboard: React.FC<DashboardProps> = ({ records, businessRange, th
               {stats.top5.map(item => (
                 <tr key={item.rank}>
                   <td>
-                    <span style={{ fontWeight: 800, color: item.rank === 1 ? '#ef4444' : '#f8fafc', fontSize: '14px' }}>
+                    <span style={{ fontWeight: 800, color: item.rank === 1 ? '#dc2626' : '#0f172a', fontSize: '14px' }}>
                       #{item.rank}
                     </span>
                   </td>
-                  <td style={{ fontSize: '13px', fontWeight: 500, color: '#e2e8f0' }}>{item.date}</td>
+                  <td style={{ fontSize: '13px', fontWeight: 500, color: '#475569' }}>{item.date}</td>
                   <td>
                     <span className={`tpm-badge ${item.isBd ? 'danger' : 'warning'}`}>
                       {item.category}
                     </span>
                   </td>
-                  <td className="dur" style={{ color: '#f8fafc', fontWeight: 800, fontSize: '14px', fontFamily: 'monospace' }}>
+                  <td className="dur" style={{ color: '#0f172a', fontWeight: 800, fontSize: '14px', fontFamily: 'monospace' }}>
                     {item.duration}
                   </td>
-                  <td className="reason-col" style={{ fontSize: '13px', fontWeight: 500 }}>
+                  <td className="reason-col" style={{ fontSize: '13px', fontWeight: 600, color: '#0f172a' }}>
                     {item.reason}
                   </td>
                   <td>
