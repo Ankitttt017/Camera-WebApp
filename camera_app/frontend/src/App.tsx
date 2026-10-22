@@ -1,6 +1,5 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
-import { Dashboard } from './Dashboard';
 import { HierarchyManager } from './HierarchyManager';
 import { SettingsHub } from './SettingsHub';
 import { MultiCamGrid } from './MultiCamGrid';
@@ -142,7 +141,7 @@ const APP_TITLE = 'Automatic Video Capturing Ube 850 T-2';
 const APP_MARK = 'RCC';
 const RICO_LOGO_SRC = '/rico-logo.png';
 
-type Page = 'live' | 'saved' | 'analytics' | 'hierarchy';
+type Page = 'live' | 'saved' | 'hierarchy';
 type UserRole = 'superadmin' | 'admin' | 'user';
 
 function normalizePublicHelperUrl(value?: string | null) {
@@ -1004,10 +1003,6 @@ function Sidebar({
           }}>
             {reportCount}
           </span>
-        </button>
-        <button className={page === 'analytics' ? 'active' : ''} onClick={() => setPage('analytics')}>
-          <span className="nav-icon" style={{ fontSize: '1.15rem' }}>📊</span>
-          <span className="nav-text">Analytics</span>
         </button>
         <button className={page === 'hierarchy' ? 'active' : ''} onClick={() => setPage('hierarchy')}>
           <span className="nav-icon" style={{ fontSize: '1.15rem' }}>⚙️</span>
@@ -2168,7 +2163,6 @@ function SavedPage({
   const [list, setList] = useState<RecordingList>({ total: 0, page: 1, page_size: PAGE_SIZE, records: [] });
   const [latest, setLatest] = useState<RecordingRecord | null>(null);
   const [selected, setSelected] = useState<RecordingRecord | null>(null);
-  const [dashboardRecords, setDashboardRecords] = useState<RecordingRecord[]>([]);
 
   const activeBusinessRange = useMemo(
     () => businessDateTimeRange(presetDateRange(appliedFilters.datePreset, appliedFilters.fromDate, appliedFilters.toDate)),
@@ -2182,28 +2176,6 @@ function SavedPage({
     || appliedFilters.shift !== shift
   );
 
-  useEffect(() => {
-    if (activeAppPage === 'analytics') {
-      const payload: any = {
-        storage_root: settings.storage_root,
-        start_at: activeBusinessRange?.startAt,
-        end_at: activeBusinessRange?.endAt,
-        page: 1,
-        page_size: 5000,
-      };
-      if (appliedFilters.category !== 'all') {
-        payload.event_type = appliedFilters.category;
-      }
-      if (appliedFilters.shift !== 'all') {
-        payload.shift = appliedFilters.shift;
-      }
-      setLoading(true);
-      postJson<RecordingList>('/recording-index/list', payload)
-        .then(res => setDashboardRecords(res.records || []))
-        .catch(err => setError(String(err)))
-        .finally(() => setLoading(false));
-    }
-  }, [activeAppPage, activeBusinessRange, appliedFilters, settings.storage_root]);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -2588,14 +2560,10 @@ function SavedPage({
       <div className="library-column" style={{ width: '100%' }}>
         <header className="er-header">
           <div className="er-title">
-            <span className="er-title-icon"><Icon name={activeAppPage === 'analytics' ? 'chart' : 'file'} /></span>
+            <span className="er-title-icon"><Icon name="file" /></span>
             <div>
-              <h1>{activeAppPage === 'analytics' ? 'Machine Stoppage Analytics' : 'Incident & Event Report'}</h1>
-              <p>
-                {activeAppPage === 'analytics'
-                  ? `Downtime by hour, shift, category and reason · ${reportRangeSummary(appliedFilters)}`
-                  : 'Machine stoppages and breakdowns with video, downtime reason and voice notes.'}
-              </p>
+              <h1>Incident &amp; Event Report</h1>
+              <p>Machine stoppages and breakdowns with video, downtime reason and voice notes.</p>
             </div>
           </div>
           <div className="er-header-actions">
@@ -2608,9 +2576,7 @@ function SavedPage({
           </div>
         </header>
 
-        {activeAppPage !== 'analytics' && (
-          <KpiCards stats={reportStats} thresholdSeconds={settings.max_record_seconds} />
-        )}
+        <KpiCards stats={reportStats} thresholdSeconds={settings.max_record_seconds} />
 
         <div className="er-filters">
           <label className="er-field">
@@ -2677,10 +2643,7 @@ function SavedPage({
           </div>
         </div>
 
-        {activeAppPage === 'analytics' ? (
-          <Dashboard records={dashboardRecords} businessRange={activeBusinessRange} thresholdSeconds={settings.max_record_seconds} />
-        ) : (
-          <>
+        <>
             {error && <div className="error-banner">{error}</div>}
 
             <section className="er-table-card">
@@ -2825,8 +2788,7 @@ function SavedPage({
                 </footer>
               )}
             </section>
-          </>
-        )}
+        </>
       </div>
 
       {selected && videoReady(selected) && (
