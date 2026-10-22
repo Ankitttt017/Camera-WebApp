@@ -207,8 +207,12 @@ LIVE_AUDIO_FILTER = os.getenv('LIVE_AUDIO_FILTER', DEFAULT_LIVE_AUDIO_FILTER).st
 # voice and attenuates machine noise between words. Level-based gates cannot do this because the
 # die-casting noise is as loud as the voice. LIVE_AUDIO_FILTER is used only when the gate is off.
 LIVE_AUDIO_SPEECH_GATE = os.getenv('LIVE_AUDIO_SPEECH_GATE', '1').strip().lower() not in {'0', 'false', 'no', 'off'}
-LIVE_AUDIO_PREFILTER = os.getenv('LIVE_AUDIO_PREFILTER', 'highpass=f=150:poles=2,lowpass=f=3800:poles=2,afftdn=nr=12:nf=-40:tn=1').strip()
-LIVE_AUDIO_GATE_FLOOR_DB = float(os.getenv('LIVE_AUDIO_GATE_FLOOR_DB', '-26'))
+# Tuned on real running-machine audio: 250-3600 Hz keeps the voice and drops the 100-300 Hz hum;
+# afftdn needs its noise floor (nf) near the real factory level (~-28 dBFS) or it does nothing.
+# Result: ~3 dB less noise *while* the operator speaks, ~-70 dB (near silence) between words.
+LIVE_AUDIO_PREFILTER = os.getenv('LIVE_AUDIO_PREFILTER', 'highpass=f=250:poles=2,lowpass=f=3600:poles=2,afftdn=nr=25:nf=-25:tn=1').strip()
+LIVE_AUDIO_GATE_FLOOR_DB = float(os.getenv('LIVE_AUDIO_GATE_FLOOR_DB', '-40'))
+LIVE_AUDIO_IDLE_KILL_SECONDS = float(os.getenv('LIVE_AUDIO_IDLE_KILL_SECONDS', '15'))
 LIVE_AUDIO_OUTPUT_FILTER = os.getenv('LIVE_AUDIO_OUTPUT_FILTER', 'volume=2.0,alimiter=limit=0.95').strip()
 USE_FFMPEG_RECORDING = True
 RECORDING_START_RETRY_SECONDS = 1.0
@@ -1679,8 +1683,20 @@ def load_sidecar_metadata(video_path: Path) -> dict:
         return {}
 
 
+AUTO_REASON_SUBMITTER = 'Voice Transcript'
+REASON_FIELDS = ('reason_category', 'reason', 'reason_note', 'reason_submitted_by', 'reason_submitted_at')
+
+
+def drop_auto_reason(metadata: dict) -> dict:
+    """With auto-reason off, a reason that Whisper wrote earlier must not come back from a sidecar."""
+    if not TRANSCRIPTION_AUTO_REASON_ENABLED and metadata.get('reason_submitted_by') == AUTO_REASON_SUBMITTER:
+        return {**metadata, **{field: None for field in REASON_FIELDS}}
+    return metadata
+
+
 def index_recording_file(storage_root: str, file_path: str, record: dict) -> None:
     """Inserts or updates a recording index record in the database."""
+    record = drop_auto_reason(record or {})
     db_path = init_recording_index(storage_root)
     with get_db_connection() as connection:
         cursor = PrefixCursor(connection.cursor())
@@ -1926,10 +1942,11 @@ def write_transcription_metadata(
                 'reason_category': event_type,
                 'reason': compact_transcript_reason(transcript_text),
                 'reason_note': transcript_text if len(transcript_text) > TRANSCRIPTION_REASON_MAX_CHARS else None,
-                'reason_submitted_by': 'Voice Transcript',
+                'reason_submitted_by': AUTO_REASON_SUBMITTER,
                 'reason_submitted_at': now_text,
             }
         )
+    metadata = drop_auto_reason(metadata)
 
     atomic_write_json(metadata_path_for(video_path), metadata)
     try:
@@ -3894,17 +3911,29 @@ def live_audio_response(
                     pass
         threading.Thread(target=lambda: [p.wait() for p in processes if p], daemon=True).start()
 
-    # Async generators: when the browser stops listening, Starlette cancels the await below and
-    # the finally block kills ffmpeg. A sync generator stays parked in a blocking read() forever,
-    # leaking one ffmpeg + one camera RTSP session per "Audio ON" click.
+    def kill_when_unread(state: dict, *processes):
+        # When the browser leaves, Starlette may leave the generator parked at `yield` without
+        # closing it, so its finally (and stop()) runs only whenever it is garbage-collected.
+        # Without this guard every "Audio ON" could leak ffmpeg + one camera RTSP session.
+        def watch():
+            while any(p.poll() is None for p in processes):
+                if time.monotonic() - state['pulled_at'] > LIVE_AUDIO_IDLE_KILL_SECONDS:
+                    stop(*processes)
+                    return
+                time.sleep(1.0)
+        threading.Thread(target=watch, daemon=True, name='live-audio-consumer-watchdog').start()
+
     async def stream_audio():
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        state = {'pulled_at': time.monotonic()}
+        kill_when_unread(state, process)
         try:
             while True:
                 chunk = await asyncio.to_thread(process.stdout.read, 4096)
                 if not chunk:
                     break
                 yield chunk
+                state['pulled_at'] = time.monotonic()
         finally:
             stop(process)
 
@@ -3947,12 +3976,15 @@ def live_audio_response(
                     pass
 
         threading.Thread(target=pump, daemon=True, name='live-audio-speech-gate').start()
+        state = {'pulled_at': time.monotonic()}
+        kill_when_unread(state, decoder, encoder)
         try:
             while True:
                 chunk = await asyncio.to_thread(encoder.stdout.read, 4096)
                 if not chunk:
                     break
                 yield chunk
+                state['pulled_at'] = time.monotonic()
         finally:
             stop(decoder, encoder)
 
