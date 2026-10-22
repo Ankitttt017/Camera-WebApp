@@ -319,11 +319,15 @@ export function audioUrl(settings: CameraSettings) {
   });
 }
 
-export function recordingFileUrl(storageRoot: string, filePath: string, download = false) {
+/** clean=true: copy with machine noise between words muted (original recording is untouched).
+ *  download=true: server sends it as an attachment — needed because the page and the API are on
+ *  different ports, where the browser ignores the <a download> attribute and just plays the video. */
+export function recordingFileUrl(storageRoot: string, filePath: string, download = false, clean = true) {
   return queryUrl('/recording-file', {
     storage_root: storageRoot,
     file_path: filePath,
     download,
+    clean,
   });
 }
 
