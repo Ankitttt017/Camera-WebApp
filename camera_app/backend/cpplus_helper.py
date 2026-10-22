@@ -115,8 +115,10 @@ app.include_router(hierarchy_router)
 
 try:
     from .speech_gate import SAMPLE_RATE as SPEECH_GATE_SAMPLE_RATE, SpeechGate, load_vad_session
+    from .hinglish import devanagari_to_hinglish
 except (ImportError, ValueError):
     from speech_gate import SAMPLE_RATE as SPEECH_GATE_SAMPLE_RATE, SpeechGate, load_vad_session
+    from hinglish import devanagari_to_hinglish
 
 _SPEECH_GATE_SESSION: list = []
 
@@ -208,9 +210,10 @@ LIVE_AUDIO_FILTER = os.getenv('LIVE_AUDIO_FILTER', DEFAULT_LIVE_AUDIO_FILTER).st
 # die-casting noise is as loud as the voice. LIVE_AUDIO_FILTER is used only when the gate is off.
 LIVE_AUDIO_SPEECH_GATE = os.getenv('LIVE_AUDIO_SPEECH_GATE', '1').strip().lower() not in {'0', 'false', 'no', 'off'}
 # Tuned on real running-machine audio: 250-3600 Hz keeps the voice and drops the 100-300 Hz hum;
-# afftdn needs its noise floor (nf) near the real factory level (~-28 dBFS) or it does nothing.
-# Result: ~3 dB less noise *while* the operator speaks, ~-70 dB (near silence) between words.
-LIVE_AUDIO_PREFILTER = os.getenv('LIVE_AUDIO_PREFILTER', 'highpass=f=250:poles=2,lowpass=f=3600:poles=2,afftdn=nr=25:nf=-25:tn=1').strip()
+# afftdn needs its noise floor (nf) near the real factory level (~-28 dBFS) or it does nothing;
+# nf=-20 is ffmpeg's upper limit. Result: ~4 dB less noise *while* the operator speaks (voice
+# unchanged) and ~-70 dB (near silence) between words.
+LIVE_AUDIO_PREFILTER = os.getenv('LIVE_AUDIO_PREFILTER', 'highpass=f=250:poles=2,lowpass=f=3600:poles=2,afftdn=nr=40:nf=-20:tn=1').strip()
 LIVE_AUDIO_GATE_FLOOR_DB = float(os.getenv('LIVE_AUDIO_GATE_FLOOR_DB', '-40'))
 LIVE_AUDIO_IDLE_KILL_SECONDS = float(os.getenv('LIVE_AUDIO_IDLE_KILL_SECONDS', '15'))
 LIVE_AUDIO_OUTPUT_FILTER = os.getenv('LIVE_AUDIO_OUTPUT_FILTER', 'volume=2.0,alimiter=limit=0.95').strip()
@@ -243,6 +246,8 @@ TRANSCRIPTION_AUTO_REASON_ENABLED = os.getenv('TRANSCRIPTION_AUTO_REASON_ENABLED
 # makes the report look plausible but wrong. Set these only after testing on real recordings.
 TRANSCRIPTION_INITIAL_PROMPT = os.getenv('TRANSCRIPTION_INITIAL_PROMPT', '').strip()
 TRANSCRIPTION_HOTWORDS = os.getenv('TRANSCRIPTION_HOTWORDS', '').strip()
+# 'roman' = Hinglish (e.g. "Machine band hai"), 'devanagari' = Hindi script as Whisper wrote it
+TRANSCRIPTION_OUTPUT_SCRIPT = os.getenv('TRANSCRIPTION_OUTPUT_SCRIPT', 'roman').strip().lower()
 os.environ.setdefault('HF_HOME', str(TRANSCRIPTION_MODEL_CACHE / 'hf_home'))
 os.environ.setdefault('HF_HUB_CACHE', str(TRANSCRIPTION_MODEL_CACHE / 'hf_hub'))
 KNOWN_FFMPEG_PATHS = [
@@ -2160,8 +2165,15 @@ def transcribe_with_faster_whisper(audio_path: Path) -> str | None:
     raw_transcript = ' '.join(accepted_segments).strip()
     transcript = clean_factory_hindi_text(raw_transcript)
     if transcript and meaningful_transcript_text(transcript):
-        return transcript
-    return raw_transcript if meaningful_transcript_text(raw_transcript) else None
+        return transcript_for_display(transcript)
+    return transcript_for_display(raw_transcript) if meaningful_transcript_text(raw_transcript) else None
+
+
+def transcript_for_display(text: str) -> str:
+    # Whisper hears factory Hindi best with language='hi'; only the script changes here.
+    if TRANSCRIPTION_OUTPUT_SCRIPT == 'roman':
+        return devanagari_to_hinglish(text) or text
+    return text
 
 
 _TRANSCRIPTION_WORKER_LOCK = threading.Lock()
