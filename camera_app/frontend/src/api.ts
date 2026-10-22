@@ -453,7 +453,7 @@ export async function fetchFlatCameras(params?: {
 }
 
 export async function createPlant(data: { code: string; name: string; location?: string; is_active?: boolean }) {
-  return postJson('/api/hierarchy/plants', data);
+  return postJson<{ id: number; message: string }>('/api/hierarchy/plants', data);
 }
 
 export async function updatePlant(id: number, data: Partial<{ code: string; name: string; location?: string; is_active?: boolean }>) {
@@ -462,7 +462,7 @@ export async function updatePlant(id: number, data: Partial<{ code: string; name
     headers: { 'Content-Type': 'application/json', ...(AUTH_TOKEN ? { 'x-auth-token': AUTH_TOKEN } : {}) },
     body: JSON.stringify(data),
   });
-  return res.json();
+  return parseResponse<{ message: string }>(res);
 }
 
 export async function deletePlant(id: number) {
@@ -470,11 +470,11 @@ export async function deletePlant(id: number) {
     method: 'DELETE',
     headers: AUTH_TOKEN ? { 'x-auth-token': AUTH_TOKEN } : {},
   });
-  return res.json();
+  return parseResponse<{ message: string }>(res);
 }
 
 export async function createDepartment(data: { plant_id: number; code: string; name: string; is_active?: boolean }) {
-  return postJson('/api/hierarchy/departments', data);
+  return postJson<{ id: number; message: string }>('/api/hierarchy/departments', data);
 }
 
 export async function updateDepartment(id: number, data: Partial<{ plant_id?: number; code?: string; name?: string; is_active?: boolean }>) {
@@ -483,7 +483,7 @@ export async function updateDepartment(id: number, data: Partial<{ plant_id?: nu
     headers: { 'Content-Type': 'application/json', ...(AUTH_TOKEN ? { 'x-auth-token': AUTH_TOKEN } : {}) },
     body: JSON.stringify(data),
   });
-  return res.json();
+  return parseResponse<{ message: string }>(res);
 }
 
 export async function deleteDepartment(id: number) {
@@ -491,11 +491,11 @@ export async function deleteDepartment(id: number) {
     method: 'DELETE',
     headers: AUTH_TOKEN ? { 'x-auth-token': AUTH_TOKEN } : {},
   });
-  return res.json();
+  return parseResponse<{ message: string }>(res);
 }
 
 export async function createLine(data: { department_id: number; code: string; name: string; is_active?: boolean }) {
-  return postJson('/api/hierarchy/lines', data);
+  return postJson<{ id: number; message: string }>('/api/hierarchy/lines', data);
 }
 
 export async function updateLine(id: number, data: Partial<{ department_id?: number; code?: string; name?: string; is_active?: boolean }>) {
@@ -504,7 +504,7 @@ export async function updateLine(id: number, data: Partial<{ department_id?: num
     headers: { 'Content-Type': 'application/json', ...(AUTH_TOKEN ? { 'x-auth-token': AUTH_TOKEN } : {}) },
     body: JSON.stringify(data),
   });
-  return res.json();
+  return parseResponse<{ message: string }>(res);
 }
 
 export async function deleteLine(id: number) {
@@ -512,7 +512,7 @@ export async function deleteLine(id: number) {
     method: 'DELETE',
     headers: AUTH_TOKEN ? { 'x-auth-token': AUTH_TOKEN } : {},
   });
-  return res.json();
+  return parseResponse<{ message: string }>(res);
 }
 
 export async function createMachine(data: {
@@ -526,7 +526,7 @@ export async function createMachine(data: {
   plc_address?: string;
   is_active?: boolean;
 }) {
-  return postJson('/api/hierarchy/machines', data);
+  return postJson<{ id: number; message: string }>('/api/hierarchy/machines', data);
 }
 
 export async function updateMachine(id: number, data: Partial<{
@@ -545,7 +545,7 @@ export async function updateMachine(id: number, data: Partial<{
     headers: { 'Content-Type': 'application/json', ...(AUTH_TOKEN ? { 'x-auth-token': AUTH_TOKEN } : {}) },
     body: JSON.stringify(data),
   });
-  return res.json();
+  return parseResponse<{ message: string }>(res);
 }
 
 export async function deleteMachine(id: number) {
@@ -553,7 +553,7 @@ export async function deleteMachine(id: number) {
     method: 'DELETE',
     headers: AUTH_TOKEN ? { 'x-auth-token': AUTH_TOKEN } : {},
   });
-  return res.json();
+  return parseResponse<{ message: string }>(res);
 }
 
 export async function createCamera(data: {
@@ -569,7 +569,7 @@ export async function createCamera(data: {
   sub_rtsp_path?: string;
   is_active?: boolean;
 }) {
-  return postJson('/api/hierarchy/cameras', data);
+  return postJson<{ id: number; message: string }>('/api/hierarchy/cameras', data);
 }
 
 export async function updateCamera(id: number, data: Partial<{
@@ -590,7 +590,7 @@ export async function updateCamera(id: number, data: Partial<{
     headers: { 'Content-Type': 'application/json', ...(AUTH_TOKEN ? { 'x-auth-token': AUTH_TOKEN } : {}) },
     body: JSON.stringify(data),
   });
-  return res.json();
+  return parseResponse<{ message: string }>(res);
 }
 
 export async function deleteCamera(id: number) {
@@ -598,7 +598,7 @@ export async function deleteCamera(id: number) {
     method: 'DELETE',
     headers: AUTH_TOKEN ? { 'x-auth-token': AUTH_TOKEN } : {},
   });
-  return res.json();
+  return parseResponse<{ message: string }>(res);
 }
 
 export async function testCameraConnection(data: {
@@ -609,6 +609,7 @@ export async function testCameraConnection(data: {
   password?: string;
   channel?: number;
   rtsp_path?: string;
+  camera_id?: number;
 }) {
   return postJson<{
     ip: string;
@@ -627,6 +628,35 @@ export async function testPlcConnection(data: {
   plc_address?: string;
 }) {
   return postJson<{ ok: boolean; message: string }>('/api/hierarchy/test-plc', data);
+}
+
+export type RecordingMode = 'live' | 'event';
+
+/** The one camera + PLC that the backend currently uses for event (PLC-triggered) recording. */
+export type RecordingTarget = {
+  camera_ip: string;
+  rtsp_port: number;
+  channel: number;
+  event_recording: boolean;
+  plc_host?: string;
+  plc_port: number;
+  plc_device: string;
+  plc_address: string;
+  monitor_running: boolean;
+  machine_state?: string | null;
+  recording_running: boolean;
+};
+
+export async function fetchRecordingTarget() {
+  return getJson<RecordingTarget>('/api/hierarchy/recording-target');
+}
+
+export async function setCameraRecordingMode(cameraId: number, mode: RecordingMode) {
+  return postJson<RecordingTarget>(`/api/hierarchy/cameras/${cameraId}/recording-mode`, { mode });
+}
+
+export function cameraIsRecordingTarget(camera: { camera_ip: string; channel: number }, target: RecordingTarget | null) {
+  return Boolean(target?.event_recording && target.camera_ip === camera.camera_ip && Number(target.channel) === Number(camera.channel));
 }
 
 export function hierarchyCameraSnapshotUrl(cameraId: number) {

@@ -103,15 +103,29 @@ app.add_middleware(
 )
 
 try:
-    from .hierarchy_api import router as hierarchy_router
+    from .hierarchy_api import get_table_name as hierarchy_table_name, router as hierarchy_router
 except (ImportError, ValueError):
     import sys
     from pathlib import Path
     _backend_dir = str(Path(__file__).resolve().parent)
     if _backend_dir not in sys.path:
         sys.path.insert(0, _backend_dir)
-    from hierarchy_api import router as hierarchy_router
+    from hierarchy_api import get_table_name as hierarchy_table_name, router as hierarchy_router
 app.include_router(hierarchy_router)
+
+try:
+    from .speech_gate import SAMPLE_RATE as SPEECH_GATE_SAMPLE_RATE, SpeechGate, load_vad_session
+except (ImportError, ValueError):
+    from speech_gate import SAMPLE_RATE as SPEECH_GATE_SAMPLE_RATE, SpeechGate, load_vad_session
+
+_SPEECH_GATE_SESSION: list = []
+
+
+def speech_gate_session():
+    """Silero VAD session shared by all live-audio listeners (loaded once; None if unavailable)."""
+    if not _SPEECH_GATE_SESSION:
+        _SPEECH_GATE_SESSION.append(load_vad_session())
+    return _SPEECH_GATE_SESSION[0]
 
 VIDEO_FILE_EXTENSIONS = {'.mp4', '.webm', '.mov', '.m4v', '.avi', '.mkv', '.dav'}
 DEFAULT_CAMERA_IP = '192.168.119.205'
@@ -133,15 +147,14 @@ RECORDING_CRF = int(os.getenv('RECORDING_CRF', '24'))
 RECORDING_VIDEO_CODEC = os.getenv('RECORDING_VIDEO_CODEC', 'copy').strip()
 RECORDING_PRESET = os.getenv('RECORDING_PRESET', 'ultrafast').strip()
 RECORDING_BITRATE = os.getenv('RECORDING_BITRATE', '2000k').strip()
+# Recording/transcription audio: light clean-up only. The saved file is what Whisper reads later, so
+# nothing here may cut speech. A level gate (agate) chopped words (SI-SDR -16 dB in benchmarks)
+# without reducing the factory noise, which is as loud as the voice.
 DEFAULT_SPEECH_AUDIO_FILTER = (
-    'highpass=f=260:poles=2,'
-    'lowpass=f=3400:poles=2,'
-    'bandreject=f=411:width_type=q:w=4.0,'
-    'bandreject=f=822:width_type=q:w=4.0,'
-    'afftdn=nr=40:nf=-25:tn=1:gs=4,'
-    'agate=threshold=0.08:range=0.001:attack=1:release=220:knee=1.5,'
-    'equalizer=f=1800:width_type=q:w=1.2:g=3.5,'
-    'alimiter=limit=0.92'
+    'highpass=f=100:poles=2,'
+    'lowpass=f=3800:poles=2,'
+    'afftdn=nr=12:nf=-40:tn=1,'
+    'alimiter=limit=0.95'
 )
 
 
@@ -160,6 +173,7 @@ def resolve_speech_audio_filter(env_var_name: str) -> str:
         'bandreject=f=413',
         'equalizer=f=1200',
         'equalizer=f=1600',
+        'agate=',  # any level gate cuts the operator's words; fall back to the default
     ]
     if any(marker in val for marker in obsolete_markers):
         return DEFAULT_SPEECH_AUDIO_FILTER
@@ -171,6 +185,12 @@ LIVE_PREVIEW_MAX_WIDTH = int(os.getenv('LIVE_PREVIEW_MAX_WIDTH', '1280'))
 LIVE_PREVIEW_TARGET_FPS = float(os.getenv('LIVE_PREVIEW_TARGET_FPS', '12'))
 LIVE_PREVIEW_JPEG_QUALITY = int(os.getenv('LIVE_PREVIEW_JPEG_QUALITY', '82'))
 LIVE_PREVIEW_STALE_SECONDS = float(os.getenv('LIVE_PREVIEW_STALE_SECONDS', '3'))
+# Self-healing for camera streams: without these, a silent RTSP connection blocks ffmpeg forever
+# and the live view stays on "Camera reconnecting" until the backend is restarted.
+RTSP_SOCKET_TIMEOUT_SECONDS = float(os.getenv('RTSP_SOCKET_TIMEOUT_SECONDS', '10'))
+RECORDING_RTSP_TIMEOUT_SECONDS = float(os.getenv('RECORDING_RTSP_TIMEOUT_SECONDS', '20'))
+LIVE_PREVIEW_STALL_SECONDS = float(os.getenv('LIVE_PREVIEW_STALL_SECONDS', '10'))
+SHARED_WORKER_RESTART_SECONDS = float(os.getenv('SHARED_WORKER_RESTART_SECONDS', '30'))
 LIVE_PREVIEW_RTSP_PATH = os.getenv('LIVE_PREVIEW_RTSP_PATH', '/video/live?channel=1&subtype=0').strip()
 LIVE_VIDEO_MAX_WIDTH = int(os.getenv('LIVE_VIDEO_MAX_WIDTH', str(LIVE_PREVIEW_MAX_WIDTH)))
 LIVE_VIDEO_TARGET_FPS = float(os.getenv('LIVE_VIDEO_TARGET_FPS', str(LIVE_PREVIEW_TARGET_FPS)))
@@ -183,6 +203,13 @@ DEFAULT_LIVE_AUDIO_FILTER = os.getenv(
     'volume=2.2,highpass=f=120:poles=2,lowpass=f=4200:poles=2,alimiter=limit=0.95',
 ).strip()
 LIVE_AUDIO_FILTER = os.getenv('LIVE_AUDIO_FILTER', DEFAULT_LIVE_AUDIO_FILTER).strip() or DEFAULT_LIVE_AUDIO_FILTER
+# Live audio "speech only" mode: a Silero VAD gate (backend/speech_gate.py) passes the operator's
+# voice and attenuates machine noise between words. Level-based gates cannot do this because the
+# die-casting noise is as loud as the voice. LIVE_AUDIO_FILTER is used only when the gate is off.
+LIVE_AUDIO_SPEECH_GATE = os.getenv('LIVE_AUDIO_SPEECH_GATE', '1').strip().lower() not in {'0', 'false', 'no', 'off'}
+LIVE_AUDIO_PREFILTER = os.getenv('LIVE_AUDIO_PREFILTER', 'highpass=f=150:poles=2,lowpass=f=3800:poles=2,afftdn=nr=12:nf=-40:tn=1').strip()
+LIVE_AUDIO_GATE_FLOOR_DB = float(os.getenv('LIVE_AUDIO_GATE_FLOOR_DB', '-26'))
+LIVE_AUDIO_OUTPUT_FILTER = os.getenv('LIVE_AUDIO_OUTPUT_FILTER', 'volume=2.0,alimiter=limit=0.95').strip()
 USE_FFMPEG_RECORDING = True
 RECORDING_START_RETRY_SECONDS = 1.0
 RECORDING_START_STALE_SECONDS = 4.0
@@ -197,20 +224,21 @@ TRANSCRIPTION_AUDIO_SECONDS = int(os.getenv('TRANSCRIPTION_AUDIO_SECONDS', '0'))
 TRANSCRIPTION_TMP_DIR = APP_BASE_DIR / 'transcription_tmp'
 TRANSCRIPTION_MODEL_CACHE = Path(os.getenv('TRANSCRIPTION_MODEL_CACHE', APP_BASE_DIR / 'model_cache'))
 TRANSCRIPTION_VAD_FILTER = os.getenv('TRANSCRIPTION_VAD_FILTER', '1').strip().lower() not in {'0', 'false', 'no', 'off'}
-TRANSCRIPTION_VAD_THRESHOLD = float(os.getenv('TRANSCRIPTION_VAD_THRESHOLD', '0.40'))
+TRANSCRIPTION_VAD_THRESHOLD = float(os.getenv('TRANSCRIPTION_VAD_THRESHOLD', '0.50'))
 TRANSCRIPTION_AUDIO_FILTER = resolve_speech_audio_filter('TRANSCRIPTION_AUDIO_FILTER')
 TRANSCRIPTION_BEAM_SIZE = int(os.getenv('TRANSCRIPTION_BEAM_SIZE', '1'))
 TRANSCRIPTION_CPU_THREADS = int(os.getenv('TRANSCRIPTION_CPU_THREADS', '1'))
 TRANSCRIPTION_NO_SPEECH_THRESHOLD = float(os.getenv('TRANSCRIPTION_NO_SPEECH_THRESHOLD', '0.60'))
-TRANSCRIPTION_MAX_SEGMENT_NO_SPEECH_PROB = float(os.getenv('TRANSCRIPTION_MAX_SEGMENT_NO_SPEECH_PROB', '0.60'))
-TRANSCRIPTION_MIN_AVG_LOGPROB = float(os.getenv('TRANSCRIPTION_MIN_AVG_LOGPROB', '-1.10'))
+TRANSCRIPTION_MAX_SEGMENT_NO_SPEECH_PROB = float(os.getenv('TRANSCRIPTION_MAX_SEGMENT_NO_SPEECH_PROB', '0.50'))
+TRANSCRIPTION_MIN_AVG_LOGPROB = float(os.getenv('TRANSCRIPTION_MIN_AVG_LOGPROB', '-0.80'))
 TRANSCRIPTION_MIN_REASON_CHARS = int(os.getenv('TRANSCRIPTION_MIN_REASON_CHARS', '6'))
 TRANSCRIPTION_MIN_REASON_WORDS = int(os.getenv('TRANSCRIPTION_MIN_REASON_WORDS', '2'))
 TRANSCRIPTION_AUTO_REASON_ENABLED = os.getenv('TRANSCRIPTION_AUTO_REASON_ENABLED', '0').strip().lower() not in {'0', 'false', 'no', 'off'}
-TRANSCRIPTION_INITIAL_PROMPT = os.getenv(
-    'TRANSCRIPTION_INITIAL_PROMPT',
-    'यह फैक्ट्री और प्लांट का हिंदी और हिंग्लिश ऑडियो है। ऑपरेटर, मशीन ब्रेकडाउन, सेल, लाइन, गेट खुला है, काम रुका हुआ है, मेंटेनेंस बुलाओ, टूल चेंज, प्रॉब्लम है, पार्ट रिजेक्ट, शिफ्ट हैंडओवर, स्टॉपेज।',
-).strip()
+# No prompt / hotwords by default: on machine noise Whisper copies the prompt's vocabulary into the
+# transcript (e.g. "ब्रेकडाउन स्टूल लीकेज प्रॉब्लम..." repeated for 30 minutes), so a domain word list
+# makes the report look plausible but wrong. Set these only after testing on real recordings.
+TRANSCRIPTION_INITIAL_PROMPT = os.getenv('TRANSCRIPTION_INITIAL_PROMPT', '').strip()
+TRANSCRIPTION_HOTWORDS = os.getenv('TRANSCRIPTION_HOTWORDS', '').strip()
 os.environ.setdefault('HF_HOME', str(TRANSCRIPTION_MODEL_CACHE / 'hf_home'))
 os.environ.setdefault('HF_HUB_CACHE', str(TRANSCRIPTION_MODEL_CACHE / 'hf_hub'))
 KNOWN_FFMPEG_PATHS = [
@@ -229,6 +257,34 @@ def ffmpeg_executable() -> str | None:
         if path.exists():
             return str(path)
     return None
+
+
+_RTSP_TIMEOUT_FLAG: dict[str, str] = {}
+
+
+def rtsp_timeout_args(ffmpeg_path: str, seconds: float = RTSP_SOCKET_TIMEOUT_SECONDS) -> list[str]:
+    """Input options that make ffmpeg exit when the camera stops sending data.
+
+    FFmpeg 5+ uses -timeout (microseconds) for RTSP socket I/O; FFmpeg 4.x calls it -stimeout
+    (there -timeout means "listen", which would break the connection).
+    """
+    if seconds <= 0:
+        return []
+    flag = _RTSP_TIMEOUT_FLAG.get(ffmpeg_path)
+    if flag is None:
+        flag = '-timeout'
+        try:
+            version = subprocess.run(
+                [ffmpeg_path, '-hide_banner', '-version'],
+                capture_output=True, text=True, timeout=10,
+            ).stdout
+            match = re.search(r'ffmpeg version n?(\d+)\.', version)
+            if match and int(match.group(1)) < 5:
+                flag = '-stimeout'
+        except Exception:
+            pass
+        _RTSP_TIMEOUT_FLAG[ffmpeg_path] = flag
+    return [flag, str(int(seconds * 1_000_000))]
 
 
 def ffprobe_executable() -> str | None:
@@ -718,6 +774,7 @@ def shared_camera_worker(
             if shared_camera_state.get('worker_id') != worker_id:
                 return
             shared_camera_state.update({'key': key, 'running': True, 'last_error': None})
+        consecutive_failures = 0
         while not shared_camera_stop_event.is_set():
             if not is_current_worker():
                 break
@@ -766,6 +823,7 @@ def shared_camera_worker(
                     '500000',
                     '-use_wallclock_as_timestamps',
                     '1',
+                    *rtsp_timeout_args(ffmpeg_path),
                     '-i',
                     url,
                     '-an',
@@ -795,6 +853,22 @@ def shared_camera_worker(
                 opened_any = True
                 buffer = bytearray()
                 last_frame_at = time.monotonic()
+                progress = {'frame_at': last_frame_at, 'frames': 0}
+
+                # os.read() below blocks while ffmpeg is alive, so the stall checks in the read loop
+                # never run if the camera goes silent. Kill ffmpeg from outside; the read then
+                # returns EOF and the outer loop reconnects.
+                def stall_watchdog(proc=process, state=progress):
+                    while proc.poll() is None:
+                        if time.monotonic() - state['frame_at'] > LIVE_PREVIEW_STALL_SECONDS:
+                            try:
+                                proc.kill()
+                            except Exception:
+                                pass
+                            return
+                        time.sleep(1.0)
+
+                threading.Thread(target=stall_watchdog, daemon=True, name=f'live-preview-watchdog-{worker_id}').start()
                 curr_w = None
                 curr_h = None
                 try:
@@ -820,7 +894,9 @@ def shared_camera_worker(
                             jpg = bytes(buffer[start:end + 2])
                             del buffer[:end + 2]
                             last_frame_at = time.monotonic()
-                            
+                            progress['frame_at'] = last_frame_at
+                            progress['frames'] += 1
+
                             # Cache width/height once without continuous full-frame cv2.imdecode
                             if curr_w is None or curr_h is None:
                                 img = cv2.imdecode(np.frombuffer(jpg, dtype=np.uint8), cv2.IMREAD_COLOR)
@@ -847,7 +923,15 @@ def shared_camera_worker(
                         if shared_camera_state.get('worker_id') == worker_id:
                             shared_camera_state['last_error'] = 'Live preview reconnecting.'
                 if opened_any:
-                    time.sleep(0.25)
+                    # Back off when ffmpeg exits without a single frame (wrong password, camera
+                    # busy/locked). Retrying every few hundred ms makes the camera lock the account.
+                    if progress['frames'] > 0:
+                        consecutive_failures = 0
+                        retry_delay = 0.25
+                    else:
+                        consecutive_failures += 1
+                        retry_delay = min(60.0, 2.0 ** min(consecutive_failures, 6))
+                    shared_camera_stop_event.wait(retry_delay)
                     break
     finally:
         stop_process()
@@ -862,7 +946,10 @@ def ensure_shared_camera_worker(ip: str, rtsp_port: int, username: str, password
     with shared_camera_lock:
         current_key = shared_camera_state.get('key')
         running = bool(shared_camera_state.get('running'))
-    if running and current_key == key and shared_camera_thread and shared_camera_thread.is_alive():
+        last_progress_at = shared_camera_state.get('frame_at') or shared_camera_state.get('started_at')
+    # A worker thread can be alive but stuck; only reuse it while it is still delivering frames.
+    stalled = bool(last_progress_at) and time.monotonic() - float(last_progress_at) > SHARED_WORKER_RESTART_SECONDS
+    if running and current_key == key and shared_camera_thread and shared_camera_thread.is_alive() and not stalled:
         return
     if running and shared_camera_thread and shared_camera_thread.is_alive():
         shared_camera_stop_event.set()
@@ -880,6 +967,7 @@ def ensure_shared_camera_worker(ip: str, rtsp_port: int, username: str, password
                 'frame': None,
                 'frame_jpeg': None,
                 'frame_at': None,
+                'started_at': time.monotonic(),
                 'width': None,
                 'height': None,
                 'fps': RECORDING_TARGET_FPS,
@@ -2028,8 +2116,8 @@ def transcribe_with_faster_whisper(audio_path: Path) -> str | None:
     segments, _ = model.transcribe(
         str(audio_path),
         language=TRANSCRIPTION_LANGUAGE,
-        initial_prompt=TRANSCRIPTION_INITIAL_PROMPT,
-        hotwords="डाई कास्टिंग ब्रेकडाउन स्टॉपेज हाइड्रोलिक प्रेशर टेम्परेचर डाई प्लंजर इजेक्टर मेंटेनेंस प्रॉब्लम टूल चेंज मोल्ड लीकेज",
+        initial_prompt=TRANSCRIPTION_INITIAL_PROMPT or None,
+        hotwords=TRANSCRIPTION_HOTWORDS or None,
         vad_filter=TRANSCRIPTION_VAD_FILTER,
         vad_parameters=vad_params,
         beam_size=TRANSCRIPTION_BEAM_SIZE,
@@ -2910,6 +2998,7 @@ def mjpeg_frames(ip: str, rtsp_port: int, username: str, password: str, channel:
     frame_delay = 1.0 / max(LIVE_PREVIEW_TARGET_FPS, 1.0)
     next_frame_at = 0.0
     ensure_shared_camera_worker(ip, rtsp_port, username, password, channel, rtsp_path)
+    last_ensure_at = time.monotonic()
     while True:
         now = time.monotonic()
         if now < next_frame_at:
@@ -2917,6 +3006,10 @@ def mjpeg_frames(ip: str, rtsp_port: int, username: str, password: str, channel:
             continue
         frame_jpeg, _, _, source_frame_at = latest_shared_jpeg(max_age_seconds=LIVE_PREVIEW_STALE_SECONDS, include_frame_at=True)
         if frame_jpeg is None:
+            # Long-lived viewer: keep checking that the shared worker is alive and progressing.
+            if now - last_ensure_at >= 10.0:
+                last_ensure_at = now
+                ensure_shared_camera_worker(ip, rtsp_port, username, password, channel, rtsp_path)
             if now - last_placeholder_at >= 1.0:
                 last_placeholder_at = now
                 placeholder = placeholder_jpeg()
@@ -2989,6 +3082,7 @@ def record_camera_ffmpeg_worker(request: RecordingRequest) -> bool:
         '1',
         '-rtsp_transport',
         'tcp',
+        *rtsp_timeout_args(ffmpeg_path, RECORDING_RTSP_TIMEOUT_SECONDS),
         '-i',
         working_url,
         '-map',
@@ -3649,6 +3743,7 @@ def live_video_response(
         '1',
         '-rtsp_transport',
         LIVE_RTSP_TRANSPORT,
+        *rtsp_timeout_args(ffmpeg_path),
         '-i',
         working_url,
         '-map',
@@ -3769,6 +3864,7 @@ def live_audio_response(
         'low_delay',
         '-use_wallclock_as_timestamps',
         '1',
+        *rtsp_timeout_args(ffmpeg_path),
         '-i',
         working_url,
         '-vn',
@@ -3787,26 +3883,82 @@ def live_audio_response(
         'pipe:1',
     ]
 
-    def stream_audio():
+    def stop(*processes):
+        # Called from the generator's finally while the request is being cancelled: never block
+        # (or await) here. Kill now, reap in a background thread.
+        for process in processes:
+            if process and process.poll() is None:
+                try:
+                    process.kill()
+                except Exception:
+                    pass
+        threading.Thread(target=lambda: [p.wait() for p in processes if p], daemon=True).start()
+
+    # Async generators: when the browser stops listening, Starlette cancels the await below and
+    # the finally block kills ffmpeg. A sync generator stays parked in a blocking read() forever,
+    # leaking one ffmpeg + one camera RTSP session per "Audio ON" click.
+    async def stream_audio():
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         try:
-            if not process.stdout:
-                return
             while True:
-                chunk = process.stdout.read(4096)
+                chunk = await asyncio.to_thread(process.stdout.read, 4096)
                 if not chunk:
                     break
                 yield chunk
         finally:
-            if process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    process.kill()
+            stop(process)
 
+    async def stream_audio_speech_only(session):
+        # camera -> ffmpeg (decode + light denoise, 16 kHz PCM) -> SpeechGate -> ffmpeg (MP3) -> browser
+        decode_command = command[:command.index('-vn') + 1] + [
+            '-af', LIVE_AUDIO_PREFILTER, '-ac', '1', '-ar', str(SPEECH_GATE_SAMPLE_RATE), '-f', 's16le', 'pipe:1',
+        ]
+        encode_command = [
+            ffmpeg_path, '-nostdin', '-hide_banner', '-loglevel', 'error',
+            '-f', 's16le', '-ar', str(SPEECH_GATE_SAMPLE_RATE), '-ac', '1', '-i', 'pipe:0',
+            *(['-af', LIVE_AUDIO_OUTPUT_FILTER] if LIVE_AUDIO_OUTPUT_FILTER else []),
+            '-ar', '22050', '-f', 'mp3', '-codec:a', 'libmp3lame', '-b:a', '64k', '-flush_packets', '1', 'pipe:1',
+        ]
+        decoder = subprocess.Popen(decode_command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        encoder = subprocess.Popen(encode_command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        gate = SpeechGate(session, floor_db=LIVE_AUDIO_GATE_FLOOR_DB)
+
+        def pump():
+            leftover = b''
+            try:
+                while True:
+                    raw = decoder.stdout.read(4096)
+                    if not raw:
+                        break
+                    raw = leftover + raw
+                    usable = len(raw) - (len(raw) % 2)
+                    leftover = raw[usable:]
+                    samples = np.frombuffer(raw[:usable], dtype=np.int16).astype(np.float32) / 32768.0
+                    gated = gate.process(samples)
+                    if len(gated):
+                        encoder.stdin.write((np.clip(gated, -1.0, 1.0) * 32767).astype(np.int16).tobytes())
+                        encoder.stdin.flush()
+            except (BrokenPipeError, OSError, ValueError):
+                pass
+            finally:
+                try:
+                    encoder.stdin.close()
+                except Exception:
+                    pass
+
+        threading.Thread(target=pump, daemon=True, name='live-audio-speech-gate').start()
+        try:
+            while True:
+                chunk = await asyncio.to_thread(encoder.stdout.read, 4096)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            stop(decoder, encoder)
+
+    vad_session = speech_gate_session() if LIVE_AUDIO_SPEECH_GATE else None
     return StreamingResponse(
-        stream_audio(),
+        stream_audio_speech_only(vad_session) if vad_session is not None else stream_audio(),
         media_type='audio/mpeg',
         headers={
             'Cache-Control': 'no-store, no-cache, must-revalidate',
@@ -4325,9 +4477,7 @@ def get_settings():
     return load_helper_settings().model_dump()
 
 
-@app.post('/settings')
-def update_settings(settings: HelperSettings, x_auth_token: str | None = Header(default=None)):
-    require_role(x_auth_token, {'superadmin'})
+def apply_helper_settings(settings: HelperSettings) -> HelperSettings:
     saved = save_helper_settings(settings)
     if saved.plc_enabled:
         start_plc_monitor_internal(settings_to_plc_request(saved))
@@ -4335,7 +4485,102 @@ def update_settings(settings: HelperSettings, x_auth_token: str | None = Header(
         plc_monitor_state['enabled'] = False
         plc_monitor_stop_event.set()
         ensure_shared_camera_worker(saved.ip, saved.rtsp_port, saved.username, saved.password, saved.channel, saved.rtsp_path)
-    return saved.model_dump()
+    return saved
+
+
+@app.post('/settings')
+def update_settings(settings: HelperSettings, x_auth_token: str | None = Header(default=None)):
+    require_role(x_auth_token, {'superadmin'})
+    return apply_helper_settings(settings).model_dump()
+
+
+# --- Per-camera mode: "live only" or "live + event recording" -------------------------------
+# Event recording runs for one camera at a time: the camera/PLC in helper_settings.json. The
+# hierarchy page switches that target here, so what the page shows is what is actually running.
+
+class CameraRecordingModeRequest(BaseModel):
+    mode: str  # 'live' | 'event'
+
+
+def hierarchy_camera_with_machine(camera_id: int) -> dict:
+    t_cameras, t_machines = hierarchy_table_name('cameras'), hierarchy_table_name('machines')
+    with get_db_connection() as connection:
+        cursor = connection.cursor()
+        cursor.execute(
+            f"""SELECT c.camera_ip, c.http_port, c.rtsp_port, c.username, c.password, c.channel, c.rtsp_path,
+                       m.id, m.name, m.plc_host, m.plc_port, m.plc_device, m.plc_address
+                FROM {t_cameras} c JOIN {t_machines} m ON c.machine_id = m.id WHERE c.id = ?""",
+            (camera_id,),
+        )
+        row = cursor.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail='Camera not found')
+    keys = ['camera_ip', 'http_port', 'rtsp_port', 'username', 'password', 'channel', 'rtsp_path',
+            'machine_id', 'machine_name', 'plc_host', 'plc_port', 'plc_device', 'plc_address']
+    return dict(zip(keys, row))
+
+
+def recording_target_status() -> dict:
+    settings = load_helper_settings()
+    return {
+        'camera_ip': settings.ip,
+        'rtsp_port': settings.rtsp_port,
+        'channel': settings.channel,
+        'event_recording': bool(settings.plc_enabled and settings.capture_video),
+        'plc_host': settings.plc_host,
+        'plc_port': settings.plc_port,
+        'plc_device': settings.plc_device,
+        'plc_address': settings.plc_address,
+        'monitor_running': bool(plc_monitor_state.get('running')),
+        'machine_state': plc_monitor_state.get('machine_state'),
+        'recording_running': bool(recording_state.get('running')),
+    }
+
+
+@app.get('/api/hierarchy/recording-target')
+def get_recording_target():
+    return recording_target_status()
+
+
+@app.post('/api/hierarchy/cameras/{camera_id}/recording-mode')
+def set_camera_recording_mode(camera_id: int, request: CameraRecordingModeRequest, x_auth_token: str | None = Header(default=None)):
+    require_role(x_auth_token, {'superadmin', 'admin'})
+    mode = request.mode.strip().lower()
+    if mode not in {'live', 'event'}:
+        raise HTTPException(status_code=400, detail="mode must be 'live' or 'event'")
+    if recording_state.get('running') or plc_monitor_state.get('current_event_type'):
+        raise HTTPException(
+            status_code=409,
+            detail='A stoppage is being recorded right now. Change the mode after the machine is running again.',
+        )
+    camera = hierarchy_camera_with_machine(camera_id)
+    current = load_helper_settings()
+    is_current_target = current.ip == camera['camera_ip'] and int(current.channel) == int(camera['channel'] or 1)
+
+    if mode == 'event':
+        if not (camera['plc_host'] or '').strip():
+            raise HTTPException(
+                status_code=400,
+                detail=f"Machine '{camera['machine_name']}' has no PLC IP. Add the PLC details to the machine first.",
+            )
+        apply_helper_settings(current.model_copy(update={
+            'ip': camera['camera_ip'],
+            'http_port': int(camera['http_port'] or 80),
+            'rtsp_port': int(camera['rtsp_port'] or 554),
+            'username': camera['username'] or current.username,
+            'password': camera['password'] or current.password,
+            'channel': int(camera['channel'] or 1),
+            'rtsp_path': camera['rtsp_path'] or current.rtsp_path,
+            'plc_enabled': True,
+            'capture_video': True,
+            'plc_host': camera['plc_host'].strip(),
+            'plc_port': int(camera['plc_port'] or 5000),
+            'plc_device': camera['plc_device'] or 'X',
+            'plc_address': str(camera['plc_address'] or '4A'),
+        }))
+    elif is_current_target and current.plc_enabled:
+        apply_helper_settings(current.model_copy(update={'plc_enabled': False}))
+    return recording_target_status()
 
 
 def start_plc_monitor_internal(request: PlcMonitorRequest):

@@ -404,7 +404,6 @@ function KpiCards({ stats, thresholdSeconds }: { stats: RecordingStats; threshol
     { label: 'Total events', value: totalEvents, icon: 'calendar', tone: 'blue' },
     { label: `Minor stoppage (< ${threshold})`, value: stats.today.minor_stoppage_count || 0, icon: 'pause', tone: 'amber' },
     { label: `Breakdown (> ${threshold})`, value: stats.today.breakdown_count || 0, icon: 'alert', tone: 'red' },
-    { label: 'Storage used', value: stats.today.storage_used ? formatSize(stats.today.storage_used) : '—', icon: 'storage', tone: 'slate' },
     { label: 'Avg event duration', value: averageDuration > 0 ? formatDuration(averageDuration) : '—', icon: 'clock', tone: 'violet' },
   ];
 
