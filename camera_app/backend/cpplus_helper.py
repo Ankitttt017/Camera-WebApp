@@ -1741,6 +1741,13 @@ def index_recording_file(storage_root: str, file_path: str, record: dict) -> Non
         record_dict['storage_root'] = storage_root
         if not record_dict.get('metadata_path'):
             record_dict['metadata_path'] = str(metadata_path_for(Path(file_path)))
+        if not record_dict.get('file_size'):
+            # the recording worker's metadata has no file_size; without it the Excel "Video Link"
+            # and "Storage used" saw every event as "No video"
+            try:
+                record_dict['file_size'] = Path(file_path).stat().st_size
+            except OSError:
+                pass
 
         # Check if exists
         cursor = cursor.execute("SELECT 1 FROM recordings WHERE file_path = :file_path", {'file_path': str(file_path)})
@@ -2222,12 +2229,15 @@ def transcribe_recording_worker(storage_root: str | Path, video_path_text: str) 
 
 
 def schedule_recording_transcription(storage_root: str | Path, video_path: Path) -> None:
-    thread = threading.Thread(
-        target=transcribe_recording_worker,
-        args=(str(storage_root), str(video_path)),
-        daemon=True,
-    )
-    thread.start()
+    def run():
+        transcribe_recording_worker(str(storage_root), str(video_path))
+        # then prepare the clean-audio playback copy so "Play" opens instantly (one job at a time)
+        try:
+            clean_audio_copy(Path(video_path))
+        except Exception as exc:
+            print(f'[clean audio] {video_path}: {exc}')
+
+    threading.Thread(target=run, daemon=True, name='post-recording').start()
 
 
 def update_recording_reason(request: RecordingReasonRequest) -> dict:
@@ -2897,8 +2907,16 @@ def report_status_label(row: dict) -> str:
 
 def report_video_available(row: dict) -> bool:
     file_path = str(row.get('file_path') or '')
+    if not file_path or file_path.startswith('event://') or row.get('recording_engine') == 'event':
+        return False
     file_size = int(float(row.get('file_size') or 0))
-    return bool(file_path and file_size > 1024 and not file_path.startswith('event://') and row.get('recording_engine') != 'event')
+    if not file_size:
+        # older rows were indexed without file_size: check the file itself
+        try:
+            file_size = Path(file_path).stat().st_size
+        except OSError:
+            return False
+    return file_size > 1024
 
 
 def report_action_label(row: dict) -> str:
@@ -2920,7 +2938,8 @@ def report_video_url(row: dict, request: RecordingIndexRequest) -> str:
         return ''
     storage_root = quote(str(row.get('storage_root') or request.storage_root), safe='')
     file_path = quote(str(row.get('file_path') or ''), safe='')
-    return f'{base_url}/recording-file?storage_root={storage_root}&file_path={file_path}'
+    # clean=true: same noise-reduced playback copy as the Event Report's Play button
+    return f'{base_url}/recording-file?storage_root={storage_root}&file_path={file_path}&clean=true'
 
 
 def recording_export_hyperlinks(request: RecordingIndexRequest, start_row: int = 2, records: list[dict] | None = None) -> dict[str, str]:
@@ -4897,8 +4916,124 @@ def recording_index_export_excel(
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+CLEAN_CACHE_DIR = Path(os.getenv('CLEAN_AUDIO_CACHE_DIR', APP_BASE_DIR / 'clean_cache'))
+CLEAN_CACHE_HOURS = float(os.getenv('CLEAN_AUDIO_CACHE_HOURS', '24'))
+CLEAN_CACHE_MAX_BYTES = int(float(os.getenv('CLEAN_AUDIO_CACHE_MAX_GB', '10')) * 1024 ** 3)
+_CLEAN_COPY_LOCKS: dict[str, threading.Lock] = {}
+_CLEAN_COPY_LOCKS_GUARD = threading.Lock()
+
+
+def _clean_copy_path(video_path: Path) -> Path:
+    stat = video_path.stat()
+    # bump the version when the cleaning chain changes so old cached copies are not served
+    key = hashlib.sha1(f'v2|{LIVE_AUDIO_PREFILTER}|{LIVE_AUDIO_GATE_FLOOR_DB}|{video_path.resolve()}|{stat.st_size}|{int(stat.st_mtime)}'.encode()).hexdigest()[:16]
+    return CLEAN_CACHE_DIR / f'{video_path.stem}.{key}.clean.mp4'
+
+
+def _prune_clean_cache():
+    """Keep the playback cache bounded: drop copies older than CLEAN_CACHE_HOURS, then the oldest
+    ones until the folder is under CLEAN_AUDIO_CACHE_MAX_GB (copies are rebuilt on demand)."""
+    cutoff = time.time() - CLEAN_CACHE_HOURS * 3600
+    files = []
+    for path in CLEAN_CACHE_DIR.glob('*.mp4'):
+        try:
+            stat = path.stat()
+            if stat.st_mtime < cutoff:
+                path.unlink()
+            else:
+                files.append((stat.st_mtime, stat.st_size, path))
+        except OSError:
+            pass
+    total = sum(size for _, size, _ in files)
+    for _, size, path in sorted(files):
+        if total <= CLEAN_CACHE_MAX_BYTES:
+            break
+        try:
+            path.unlink()
+            total -= size
+        except OSError:
+            pass
+
+
+def clean_audio_copy(video_path: Path) -> Path:
+    """Copy of a recording for playback/download with the operator's voice kept and machine noise
+    between words muted (same chain as live audio). Video is stream-copied; the original file,
+    which Whisper and the evidence trail use, is never modified. Cached for CLEAN_CACHE_HOURS."""
+    target = _clean_copy_path(video_path)
+    if target.exists() and target.stat().st_size > 0:
+        return target
+    with _CLEAN_COPY_LOCKS_GUARD:
+        lock = _CLEAN_COPY_LOCKS.setdefault(str(target), threading.Lock())
+    with lock:
+        if target.exists() and target.stat().st_size > 0:
+            return target
+        session = speech_gate_session()
+        ffmpeg_path = ffmpeg_executable()
+        if session is None or not ffmpeg_path:
+            raise RuntimeError('Speech gate or FFmpeg not available')
+        CLEAN_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        _prune_clean_cache()
+        tmp = target.with_suffix('.tmp.mp4')
+        decoder = subprocess.Popen(
+            [ffmpeg_path, '-nostdin', '-v', 'error', '-i', str(video_path), '-vn', '-af', LIVE_AUDIO_PREFILTER,
+             '-ac', '1', '-ar', str(SPEECH_GATE_SAMPLE_RATE), '-f', 's16le', 'pipe:1'],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        )
+        encoder = subprocess.Popen(
+            [ffmpeg_path, '-nostdin', '-y', '-v', 'error', '-i', str(video_path),
+             '-f', 's16le', '-ar', str(SPEECH_GATE_SAMPLE_RATE), '-ac', '1', '-i', 'pipe:0',
+             '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'copy',
+             *(['-af', LIVE_AUDIO_OUTPUT_FILTER] if LIVE_AUDIO_OUTPUT_FILTER else []),
+             '-c:a', 'aac', '-b:a', '96k', '-ar', '44100', '-movflags', '+faststart', str(tmp)],
+            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        gate = SpeechGate(session, floor_db=LIVE_AUDIO_GATE_FLOOR_DB)
+        # Output sample i is input sample i (the lookahead only delays *when* samples come out),
+        # so nothing is trimmed at the start; the tail is flushed with zeros below. Lip-sync stays
+        # within ~25 ms (afftdn latency), well under what anyone can notice.
+        lag = gate.lookahead_frames * 512
+        written = total_in = 0
+        leftover = b''
+
+        def emit(samples: np.ndarray):
+            nonlocal written
+            out = gate.process(samples)
+            room = total_in - written
+            out = out[:max(room, 0)]
+            if len(out):
+                encoder.stdin.write((np.clip(out, -1.0, 1.0) * 32767).astype(np.int16).tobytes())
+                written += len(out)
+
+        try:
+            while True:
+                raw = decoder.stdout.read(65536)
+                if not raw:
+                    break
+                raw = leftover + raw
+                usable = len(raw) - (len(raw) % 2)
+                leftover = raw[usable:]
+                samples = np.frombuffer(raw[:usable], dtype=np.int16).astype(np.float32) / 32768.0
+                total_in += len(samples)
+                emit(samples)
+            emit(np.zeros(lag + 1024, dtype=np.float32))   # flush the lookahead so the tail is not lost
+            encoder.stdin.close()
+            encoder.wait(timeout=600)
+            decoder.wait(timeout=30)
+        except Exception:
+            for p in (decoder, encoder):
+                if p.poll() is None:
+                    p.kill()
+            tmp.unlink(missing_ok=True)
+            raise
+        if encoder.returncode != 0 or total_in == 0 or not tmp.exists() or tmp.stat().st_size == 0:
+            tmp.unlink(missing_ok=True)
+            raise RuntimeError('Clean audio copy failed (no audio track?)')
+        tmp.replace(target)
+        return target
+
+
 @app.get('/recording-file')
-def recording_file(storage_root: str, file_path: str, download: bool = False):
+def recording_file(storage_root: str, file_path: str, download: bool = False, clean: bool = False):
     root = recording_folder(storage_root).resolve()
     requested = Path(file_path).resolve()
     if not requested.exists() or not requested.is_file():
@@ -4908,10 +5043,17 @@ def recording_file(storage_root: str, file_path: str, download: bool = False):
     if requested.suffix.lower() not in VIDEO_FILE_EXTENSIONS:
         raise HTTPException(status_code=400, detail='Unsupported recording file')
 
+    served = requested
+    if clean:
+        try:
+            served = clean_audio_copy(requested)
+        except Exception as exc:
+            print(f'[clean audio] serving original for {requested}: {exc}')
+
     media_type = mimetypes.guess_type(requested.name)[0] or 'application/octet-stream'
     disposition = 'attachment' if download else 'inline'
     return FileResponse(
-        requested,
+        served,
         media_type=media_type,
         filename=requested.name,
         content_disposition_type=disposition,

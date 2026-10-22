@@ -98,3 +98,6 @@ camera_app/transcription_tmp/
 *.tar
 *.tmp
 
+
+# Clean-audio playback copies (regenerated on demand)
+camera_app/clean_cache/

@@ -2742,7 +2742,7 @@ function SavedPage({
                                 </button>
                                 <a
                                   className="er-icon-btn"
-                                  href={recordingFileUrl(recordStorageRoot(record), record.file_path)}
+                                  href={recordingFileUrl(recordStorageRoot(record), record.file_path, true)}
                                   download={record.file_name || 'event_recording.mp4'}
                                   title="Download video"
                                   aria-label="Download video"
