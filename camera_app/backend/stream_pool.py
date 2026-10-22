@@ -142,8 +142,11 @@ class CameraStreamWorker:
                 if not connected:
                     self.error = f"Cannot open RTSP at {self.ip}:{self.rtsp_port} (Auth / Path failed)"
                     self.status = "error"
-                    time.sleep(reconnect_delay)
+                    # Exponential backoff: rapid failed logins make CP Plus cameras lock the account.
+                    self.stop_event.wait(reconnect_delay)
+                    reconnect_delay = min(reconnect_delay * 2, 60.0)
                     continue
+                reconnect_delay = 2.0
 
             ok, frame = capture.read()
             if not ok or frame is None:

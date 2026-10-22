@@ -7,6 +7,7 @@ import re
 import socket
 import time
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 import cv2
 from fastapi import APIRouter, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
@@ -118,9 +119,10 @@ class TestCameraRequest(BaseModel):
     http_port: int = 80
     rtsp_port: int = 554
     username: str = "admin"
-    password: str = "Admin@123"
+    password: str = ""
     channel: int = 1
     rtsp_path: str = "/video/live?channel=1&subtype=0"
+    camera_id: Optional[int] = None  # editing a saved camera with a blank password: test with the stored one
 
 
 class TestPlcRequest(BaseModel):
@@ -282,8 +284,16 @@ def test_camera_connection(req: TestCameraRequest):
     except Exception:
         pass
 
+    password = req.password
+    if not password and req.camera_id:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(f"SELECT password FROM {get_table_name('cameras')} WHERE id = ?", (req.camera_id,))
+            row = cursor.fetchone()
+            password = (row[0] if row else '') or ''
+
     # Test RTSP stream via OpenCV
-    rtsp_url = f"rtsp://{req.username}:{req.password}@{req.camera_ip}:{req.rtsp_port}{req.rtsp_path}"
+    rtsp_url = f"rtsp://{quote(req.username, safe='')}:{quote(password, safe='')}@{req.camera_ip}:{req.rtsp_port}{req.rtsp_path}"
     try:
         cap = cv2.VideoCapture()
         cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 4000)
@@ -568,7 +578,8 @@ def update_camera(camera_id: int, req: CameraUpdate):
     if req.http_port is not None: fields.append("http_port = ?"); values.append(req.http_port)
     if req.rtsp_port is not None: fields.append("rtsp_port = ?"); values.append(req.rtsp_port)
     if req.username is not None: fields.append("username = ?"); values.append(req.username)
-    if req.password is not None: fields.append("password = ?"); values.append(req.password)
+    # The UI never receives the stored password; an empty value means "keep the current one".
+    if req.password: fields.append("password = ?"); values.append(req.password)
     if req.channel is not None: fields.append("channel = ?"); values.append(req.channel)
     if req.rtsp_path is not None: fields.append("rtsp_path = ?"); values.append(req.rtsp_path)
     if req.sub_rtsp_path is not None: fields.append("sub_rtsp_path = ?"); values.append(req.sub_rtsp_path)

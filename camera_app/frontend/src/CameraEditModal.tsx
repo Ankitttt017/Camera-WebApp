@@ -13,7 +13,8 @@ export function CameraEditModal({ camera, onClose, onSaved }: CameraEditModalPro
   const [httpPort, setHttpPort] = useState(camera.http_port || 80);
   const [rtspPort, setRtspPort] = useState(camera.rtsp_port || 554);
   const [username, setUsername] = useState(camera.username || 'admin');
-  const [password, setPassword] = useState(camera.password || 'Admin@123');
+  // The API never returns the stored password; blank means "keep the current one".
+  const [password, setPassword] = useState('');
   const [channel, setChannel] = useState(camera.channel || 1);
   const [rtspPath, setRtspPath] = useState(camera.rtsp_path || '/video/live?channel=1&subtype=0');
   const [subRtspPath, setSubRtspPath] = useState(camera.sub_rtsp_path || '/video/live?channel=1&subtype=1');
@@ -36,7 +37,8 @@ export function CameraEditModal({ camera, onClose, onSaved }: CameraEditModalPro
         username,
         password,
         channel: Number(channel),
-        rtsp_path: rtspPath
+        rtsp_path: rtspPath,
+        camera_id: camera.id
       });
       setTestResult({
         ok: res.rtsp_stream_ok || (res.ping && res.rtsp_open),
@@ -63,7 +65,7 @@ export function CameraEditModal({ camera, onClose, onSaved }: CameraEditModalPro
         http_port: Number(httpPort),
         rtsp_port: Number(rtspPort),
         username,
-        password,
+        ...(password ? { password } : {}),
         channel: Number(channel),
         rtsp_path: rtspPath,
         sub_rtsp_path: subRtspPath,
@@ -245,8 +247,10 @@ export function CameraEditModal({ camera, onClose, onSaved }: CameraEditModalPro
                 Password
               </label>
               <input
-                type="text"
+                type="password"
                 value={password}
+                placeholder="Leave blank to keep current"
+                autoComplete="new-password"
                 onChange={(e) => setPassword(e.target.value)}
                 style={inputStyle}
               />

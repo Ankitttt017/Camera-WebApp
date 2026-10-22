@@ -5056,7 +5056,7 @@ nav button.active .nav-count {
 .er-btn-play:hover:not(:disabled) { background: #dbeafe; color: #1d4ed8; border-color: #93c5fd; }
 .er-btn-play .icon { width: 13px; height: 13px; fill: currentColor; }
 .er-icon-btn {
-  width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; padding: 0; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
   border-radius: 8px; border: 1px solid #e2e8f0; background: #ffffff; color: #475569;
 }
 .er-icon-btn:hover { border-color: #94a3b8; color: #0f172a; }
@@ -5169,3 +5169,183 @@ nav button.active .nav-count {
 @media (max-width: 640px) {
   .an-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* ==========================================================================
+   Plants & Cameras page (hm-*) — uses the er-* buttons/badges
+   ========================================================================== */
+.hm-page { padding: 16px 28px 32px; background: #f8fafc; min-height: 100%; box-sizing: border-box; }
+.hm-sm { height: 32px; padding: 0 12px; font-size: 0.8rem; }
+.hm-danger { color: #b91c1c; }
+.hm-danger:hover { border-color: #fca5a5; color: #991b1b; background: #fef2f2; }
+
+.hm-notice { margin: 0 0 14px; padding: 10px 14px; border-radius: 8px; font-size: 0.86rem; border: 1px solid; }
+.hm-notice-ok { background: #f0fdf4; border-color: #bbf7d0; color: #166534; }
+.hm-notice-error { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
+.hm-notice-warn { background: #fffbeb; border-color: #fde68a; color: #92400e; }
+
+/* recording target banner */
+.hm-rec {
+  display: flex; align-items: center; gap: 14px; margin-bottom: 16px; padding: 14px 18px;
+  background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px;
+}
+.hm-rec > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.hm-rec strong { font-size: 0.95rem; color: #0f172a; }
+.hm-rec span { font-size: 0.82rem; color: #64748b; }
+.hm-rec-icon {
+  width: 38px; height: 38px; flex-shrink: 0; border-radius: 10px;
+  display: inline-flex; align-items: center; justify-content: center; background: #f1f5f9; color: #64748b;
+}
+.hm-rec-on { border-color: #fecaca; background: #fff7f7; }
+.hm-rec-on .hm-rec-icon { background: #fee2e2; color: #dc2626; }
+.hm-rec-on .hm-rec-icon .icon { fill: currentColor; }
+
+/* plant tabs */
+.hm-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.hm-tab {
+  width: auto; flex: 0 0 auto; min-height: 0; height: 38px; padding: 0 14px; border-radius: 999px; gap: 8px;
+  background: #ffffff; border: 1px solid #e2e8f0; color: #334155; font-size: 0.86rem; font-weight: 600;
+}
+.hm-tab span { min-width: 22px; padding: 1px 7px; border-radius: 999px; background: #f1f5f9; color: #475569; font-size: 0.74rem; }
+.hm-tab:hover { border-color: #94a3b8; background: #ffffff; color: #0f172a; }
+.hm-tab.is-active { background: #1d4ed8; border-color: #1d4ed8; color: #ffffff; }
+.hm-tab.is-active span { background: rgba(255, 255, 255, 0.2); color: #ffffff; }
+.hm-tab.is-active:hover { background: #1e40af; color: #ffffff; }
+.hm-tab-add { border-style: dashed; color: #1d4ed8; }
+.hm-tab .icon, .hm-sm .icon { width: 14px; height: 14px; }
+.hm-tab:active, .hm-mode button:active, .hm-link:active { transform: none; }
+
+/* hierarchy blocks */
+.hm-plant { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 18px 20px; }
+.hm-row-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+.hm-row-actions { display: flex; align-items: center; gap: 6px; }
+.hm-plant-head { padding-bottom: 14px; margin-bottom: 4px; border-bottom: 1px solid #e2e8f0; }
+.hm-plant-head h2 { margin: 0; font-size: 1.2rem; color: #0f172a; }
+.hm-plant-head p { margin: 2px 0 0; font-size: 0.82rem; color: #64748b; }
+.hm-row-head small { margin-left: 6px; font-size: 0.72rem; font-weight: 600; color: #94a3b8; letter-spacing: 0.03em; }
+.hm-dept { padding-top: 16px; }
+.hm-dept + .hm-dept { border-top: 1px solid #f1f5f9; margin-top: 16px; }
+.hm-dept h3 { margin: 0; font-size: 1rem; color: #0f172a; }
+.hm-line { margin: 12px 0 0 14px; padding-left: 14px; border-left: 2px solid #e2e8f0; }
+.hm-line h4 { margin: 0; font-size: 0.92rem; color: #334155; }
+.hm-machine { margin-top: 10px; padding: 12px 14px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; }
+.hm-machine-title { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 0.9rem; color: #0f172a; }
+.hm-machine-title small { font-size: 0.72rem; color: #94a3b8; font-weight: 600; }
+.hm-chip {
+  display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 6px;
+  background: #eef2ff; color: #3730a3; font-size: 0.74rem; font-weight: 600;
+}
+.hm-chip .icon { width: 12px; height: 12px; }
+.hm-chip-warn { background: #fffbeb; color: #92400e; }
+.hm-empty { margin: 8px 0 0; font-size: 0.82rem; color: #94a3b8; }
+
+/* camera cards */
+.hm-cams { display: grid; grid-template-columns: repeat(auto-fill, minmax(400px, 1fr)); gap: 12px; margin-top: 12px; }
+.hm-cam { display: flex; gap: 12px; padding: 10px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; }
+.hm-cam.is-rec { border-color: #fca5a5; box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.08); }
+.hm-cam-thumb { position: relative; width: 128px; flex-shrink: 0; aspect-ratio: 16 / 10; border-radius: 8px; overflow: hidden; background: #0f172a; }
+.hm-cam-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.hm-badge {
+  position: absolute; left: 6px; bottom: 6px; padding: 2px 6px; border-radius: 4px;
+  background: rgba(15, 23, 42, 0.8); color: #86efac; font-size: 0.64rem; font-weight: 800; letter-spacing: 0.04em;
+}
+.hm-badge-rec { color: #ffffff; background: #dc2626; }
+.hm-cam-body { display: flex; flex-direction: column; gap: 8px; min-width: 0; flex: 1; }
+.hm-cam-name strong { display: block; font-size: 0.92rem; color: #0f172a; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hm-cam-name span { font-size: 0.76rem; color: #64748b; }
+.hm-mode { display: inline-flex; padding: 3px; gap: 2px; background: #f1f5f9; border-radius: 8px; align-self: flex-start; max-width: 100%; }
+.hm-mode button {
+  min-height: 0; height: 28px; padding: 0 9px; gap: 5px; border: none; border-radius: 6px;
+  background: transparent; color: #475569; font-size: 0.74rem; font-weight: 600; white-space: nowrap;
+}
+.hm-mode button .icon { width: 13px; height: 13px; }
+.hm-mode button:hover:not(:disabled) { background: #e2e8f0; color: #0f172a; border: none; }
+.hm-mode button:disabled { opacity: 1; cursor: default; }
+.hm-mode button.is-active { background: #ffffff; color: #0f172a; box-shadow: 0 1px 2px rgba(15, 23, 42, 0.12); }
+.hm-mode button.is-rec { color: #b91c1c; }
+.hm-mode button.is-rec .icon { fill: currentColor; }
+.hm-cam-actions { display: flex; gap: 6px; margin-top: auto; }
+
+/* modal */
+.hm-overlay {
+  position: fixed; inset: 0; z-index: 20000; display: flex; align-items: flex-start; justify-content: center;
+  padding: 6vh 16px 16px; background: rgba(15, 23, 42, 0.45); overflow-y: auto;
+}
+.hm-modal { width: min(760px, 100%); background: #ffffff; border-radius: 14px; box-shadow: 0 24px 60px rgba(15, 23, 42, 0.3); }
+.hm-modal-sm { width: min(560px, 100%); }
+.hm-modal-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid #e2e8f0; }
+.hm-modal-head h3 { margin: 0; font-size: 1.05rem; color: #0f172a; }
+.hm-modal-body { padding: 18px 20px; display: flex; flex-direction: column; gap: 14px; }
+.hm-modal-foot { display: flex; justify-content: space-between; gap: 10px; padding: 14px 20px; border-top: 1px solid #e2e8f0; }
+.hm-help { margin: 0; font-size: 0.86rem; color: #475569; }
+
+.hm-steps { display: flex; gap: 6px; margin: 0; padding: 12px 20px 0; list-style: none; }
+.hm-steps li { flex: 1; }
+.hm-steps button {
+  width: 100%; min-height: 0; height: 36px; justify-content: flex-start; gap: 8px; padding: 0 10px;
+  border: none; border-bottom: 3px solid #e2e8f0; border-radius: 0; background: transparent; color: #94a3b8; font-size: 0.84rem;
+}
+.hm-steps button:hover { background: transparent; border: none; border-bottom: 3px solid #cbd5e1; color: #475569; }
+.hm-steps button:active { transform: none; }
+.hm-steps span {
+  width: 20px; height: 20px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+  background: #e2e8f0; color: #475569; font-size: 0.72rem; font-weight: 700;
+}
+.hm-steps .is-current button, .hm-steps .is-current button:hover { color: #1d4ed8; border-bottom-color: #1d4ed8; }
+.hm-steps .is-current span { background: #1d4ed8; color: #ffffff; }
+.hm-steps .is-done button { color: #15803d; border-bottom-color: #86efac; }
+.hm-steps .is-done span { background: #dcfce7; color: #15803d; }
+
+.hm-grid-2, .hm-grid-3, .hm-grid-4 { display: grid; gap: 12px; }
+.hm-grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.hm-grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.hm-grid-4 { grid-template-columns: 2fr 1fr 1fr 1fr; }
+.hm-wide { grid-column: 1 / -1; }
+.hm-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.hm-field > span { font-size: 0.74rem; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: 0.04em; }
+.hm-field small { font-size: 0.74rem; color: #94a3b8; }
+.hm-field input, .hm-field select {
+  height: 38px; padding: 0 10px; border: 1px solid #cbd5e1; border-radius: 8px; background: #ffffff;
+  font-size: 0.88rem; color: #0f172a; outline: none; box-sizing: border-box; width: 100%;
+}
+.hm-field input:focus, .hm-field select:focus { border-color: #1d4ed8; box-shadow: 0 0 0 3px rgba(29, 78, 216, 0.12); }
+.hm-field select + input { margin-top: 2px; border-style: dashed; }
+.hm-link {
+  align-self: flex-start; min-height: 0; height: auto; padding: 0; border: none; background: none;
+  color: #1d4ed8; font-size: 0.82rem; font-weight: 600;
+}
+.hm-link:hover { background: none; border: none; color: #1e40af; text-decoration: underline; }
+.hm-test-row { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.hm-test-ok { color: #15803d; font-size: 0.84rem; font-weight: 600; }
+.hm-test-fail { color: #b91c1c; font-size: 0.84rem; font-weight: 600; }
+
+.hm-mode-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.hm-mode-card {
+  position: relative; display: flex; gap: 12px; padding: 14px; cursor: pointer;
+  border: 1.5px solid #e2e8f0; border-radius: 12px; background: #ffffff;
+}
+.hm-mode-card input { position: absolute; opacity: 0; pointer-events: none; }
+.hm-mode-card strong { display: block; font-size: 0.92rem; color: #0f172a; }
+.hm-mode-card small { display: block; margin-top: 3px; font-size: 0.8rem; color: #64748b; line-height: 1.4; }
+.hm-mode-icon {
+  width: 34px; height: 34px; flex-shrink: 0; border-radius: 9px; display: inline-flex; align-items: center; justify-content: center;
+  background: #f1f5f9; color: #475569;
+}
+.hm-mode-card.is-active { border-color: #1d4ed8; background: #f8faff; }
+.hm-mode-card.is-active .hm-mode-icon { background: #dbeafe; color: #1d4ed8; }
+.hm-mode-card.is-rec { border-color: #dc2626; background: #fffafa; }
+.hm-mode-card.is-rec .hm-mode-icon { background: #fee2e2; color: #dc2626; }
+.hm-mode-card.is-rec .hm-mode-icon .icon { fill: currentColor; }
+.hm-mode-card:has(input:focus-visible) { outline: 2px solid #1d4ed8; outline-offset: 2px; }
+
+.hm-plc { margin: 0; padding: 12px 14px 14px; border: 1px solid #e2e8f0; border-radius: 10px; }
+.hm-plc legend { padding: 0 6px; font-size: 0.78rem; font-weight: 700; color: #334155; }
+
+@media (max-width: 760px) {
+  .hm-page { padding: 12px 16px 24px; }
+  .hm-grid-2, .hm-grid-3, .hm-grid-4, .hm-mode-cards { grid-template-columns: 1fr; }
+  .hm-line { margin-left: 4px; padding-left: 10px; }
+  .hm-cams { grid-template-columns: 1fr; }
+}
+/* plain-text labels inside the Plants & Cameras page (global label rule is uppercase) */
+.hm-mode-card, .hm-field { margin: 0; text-transform: none; letter-spacing: normal; font-size: inherit; color: inherit; }
+.hm-field small { text-transform: none; }
