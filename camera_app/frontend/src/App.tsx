@@ -1153,65 +1153,6 @@ function TopBar({
           ONLINE
         </span>
 
-        {/* Real-time Machine Breakdown / Status Timer Badge */}
-        {(() => {
-          const timerInfo = getLiveMachineTimerSeconds(plc);
-          const isBreakdown = timerInfo.state === 'breakdown';
-          const isMinor = timerInfo.state === 'minor_stoppage';
-          const timerText = formatTimerDisplay(timerInfo.seconds);
-
-          if (isBreakdown) {
-            return (
-              <span
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  background: '#fee2e2',
-                  color: '#dc2626',
-                  border: '1.5px solid #f87171',
-                  fontSize: '0.82rem',
-                  fontWeight: 900,
-                  padding: '4px 14px',
-                  borderRadius: '999px',
-                  letterSpacing: '0.04em',
-                  boxShadow: '0 2px 10px rgba(220, 38, 38, 0.35)',
-                  animation: 'pulse-breakdown-badge 1.8s infinite'
-                }}
-                title={`Machine in Breakdown. Started: ${timerInfo.startedAt ? new Date(timerInfo.startedAt).toLocaleTimeString() : 'N/A'}`}
-              >
-                <span>🚨 BREAKDOWN:</span>
-                <strong style={{ fontFamily: 'monospace', fontSize: '0.94rem' }}>⏱ {timerText}</strong>
-              </span>
-            );
-          }
-
-          if (isMinor) {
-            return (
-              <span
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  background: '#fef3c7',
-                  color: '#b45309',
-                  border: '1.5px solid #fcd34d',
-                  fontSize: '0.82rem',
-                  fontWeight: 800,
-                  padding: '4px 14px',
-                  borderRadius: '999px',
-                  letterSpacing: '0.04em'
-                }}
-                title="Machine in Minor Stoppage"
-              >
-                <span>⚡ STOPPAGE:</span>
-                <strong style={{ fontFamily: 'monospace', fontSize: '0.94rem' }}>⏱ {timerText}</strong>
-              </span>
-            );
-          }
-
-          return null;
-        })()}
       </div>
 
       {/* Right: Status Pills & Admin Profile Logo */}
