@@ -116,9 +116,11 @@ app.include_router(hierarchy_router)
 try:
     from .speech_gate import SAMPLE_RATE as SPEECH_GATE_SAMPLE_RATE, SpeechGate, load_vad_session
     from .hinglish import devanagari_to_hinglish
+    from .shop_vocabulary import correct_shop_terms, parse_terms as parse_shop_terms
 except (ImportError, ValueError):
     from speech_gate import SAMPLE_RATE as SPEECH_GATE_SAMPLE_RATE, SpeechGate, load_vad_session
     from hinglish import devanagari_to_hinglish
+    from shop_vocabulary import correct_shop_terms, parse_terms as parse_shop_terms
 
 _SPEECH_GATE_SESSION: list = []
 
@@ -248,6 +250,10 @@ TRANSCRIPTION_INITIAL_PROMPT = os.getenv('TRANSCRIPTION_INITIAL_PROMPT', '').str
 TRANSCRIPTION_HOTWORDS = os.getenv('TRANSCRIPTION_HOTWORDS', '').strip()
 # 'roman' = Hinglish (e.g. "Machine band hai"), 'devanagari' = Hindi script as Whisper wrote it
 TRANSCRIPTION_OUTPUT_SCRIPT = os.getenv('TRANSCRIPTION_OUTPUT_SCRIPT', 'roman').strip().lower()
+# Shop terms snapped to their spelling after decoding ("Gay polis" -> "Die polish"). Unlike a prompt
+# this cannot invent words on noise. Extra plant terms: comma-separated; '0' turns correction off.
+TRANSCRIPTION_VOCABULARY = os.getenv('TRANSCRIPTION_VOCABULARY', '').strip()
+SHOP_TERMS = None if TRANSCRIPTION_VOCABULARY == '0' else parse_shop_terms(TRANSCRIPTION_VOCABULARY)
 os.environ.setdefault('HF_HOME', str(TRANSCRIPTION_MODEL_CACHE / 'hf_home'))
 os.environ.setdefault('HF_HUB_CACHE', str(TRANSCRIPTION_MODEL_CACHE / 'hf_hub'))
 KNOWN_FFMPEG_PATHS = [
@@ -2179,7 +2185,8 @@ def transcribe_with_faster_whisper(audio_path: Path) -> str | None:
 def transcript_for_display(text: str) -> str:
     # Whisper hears factory Hindi best with language='hi'; only the script changes here.
     if TRANSCRIPTION_OUTPUT_SCRIPT == 'roman':
-        return devanagari_to_hinglish(text) or text
+        roman = devanagari_to_hinglish(text) or text
+        return correct_shop_terms(roman, SHOP_TERMS) if SHOP_TERMS else roman
     return text
 
 
