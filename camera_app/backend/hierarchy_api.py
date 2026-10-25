@@ -15,10 +15,10 @@ from pydantic import BaseModel, Field
 
 try:
     from .db import get_db_connection, PrefixCursor
-    from .stream_pool import stream_pool
+    from .stream_pool import placeholder_jpeg, stream_pool
 except (ImportError, ValueError):
     from db import get_db_connection, PrefixCursor
-    from stream_pool import stream_pool
+    from stream_pool import placeholder_jpeg, stream_pool
 
 router = APIRouter(prefix="/api/hierarchy", tags=["Hierarchy"])
 
@@ -378,6 +378,9 @@ def camera_live_jpeg(camera_id: int):
     return Response(content=jpeg, media_type="image/jpeg", headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"})
 
 
+LIVE_FRAME_MAX_AGE_SECONDS = 5.0
+
+
 @router.get("/cameras/{camera_id}/mjpeg")
 def camera_mjpeg_stream(camera_id: int):
     """Streams MJPEG stream for this specific camera."""
@@ -393,17 +396,27 @@ def camera_mjpeg_stream(camera_id: int):
     path_to_use = sub_rtsp_path or rtsp_path
     worker = stream_pool.get_worker(camera_id, ip, rtsp_port, username, password, channel, path_to_use)
 
+    def part(jpeg: bytes) -> bytes:
+        return b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + jpeg + b'\r\n'
+
     def frame_gen():
+        # Each new camera frame is sent once (~12 fps). Without a fresh frame the viewer gets a
+        # "reconnecting" card once a second instead of a frozen picture, which also lets the
+        # server notice a closed browser tab (a generator that never yields would run forever).
+        sent_at = 0.0
+        last_frame = 0.0
         while True:
-            jpeg, _, _ = stream_pool.get_latest_jpeg(camera_id)
-            if jpeg:
-                yield (
-                    b'--frame\r\n'
-                    b'Content-Type: image/jpeg\r\n\r\n'
-                    + jpeg
-                    + b'\r\n'
-                )
-            time.sleep(0.08) # ~12 fps
+            jpeg, frame_time, _ = stream_pool.get_frame(camera_id)
+            now = time.monotonic()
+            fresh = jpeg is not None and now - frame_time <= LIVE_FRAME_MAX_AGE_SECONDS
+            if fresh and frame_time > last_frame:
+                last_frame = frame_time
+                sent_at = now
+                yield part(jpeg)
+            elif now - sent_at >= 1.0:
+                sent_at = now
+                yield part(jpeg if fresh else placeholder_jpeg())
+            time.sleep(0.08)
 
     return StreamingResponse(
         frame_gen(),

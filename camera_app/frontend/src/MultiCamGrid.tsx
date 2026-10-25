@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { FlatCamera, hierarchyCameraMjpegUrl } from './api';
+import LiveStreamImage from './LiveStreamImage';
 
 interface MultiCamGridProps {
   cameras: FlatCamera[];
@@ -272,7 +273,7 @@ export function MultiCamGrid({
                 overflow: 'hidden'
               }}
             >
-              <img
+              <LiveStreamImage
                 key={liveUrl}
                 src={liveUrl}
                 alt={cam.name}
@@ -281,9 +282,6 @@ export function MultiCamGrid({
                   height: '100%',
                   objectFit: 'fill',
                   display: 'block'
-                }}
-                onError={(e) => {
-                  (e.target as HTMLElement).style.opacity = '0.4';
                 }}
               />
 
