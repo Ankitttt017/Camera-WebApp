@@ -5,7 +5,7 @@ import { SettingsHub } from './SettingsHub';
 import { MultiCamGrid } from './MultiCamGrid';
 import { CameraEditModal } from './CameraEditModal';
 import LiveStreamImage from './LiveStreamImage';
-import { TranscriptPanel, VideoCaption } from './VideoTranscript';
+import { CaptionTrack, TranscriptPanel } from './VideoTranscript';
 import {
   API_BASE,
   AuthSession,
@@ -2804,7 +2804,6 @@ function SavedPage({
         <div className="record-player-wrap report-fullscreen-player" ref={playerWrapRef} aria-hidden={!playerFullscreen}>
           <div className="modal-player-card has-transcript">
             <div className="modal-video-container">
-              <VideoCaption playerRef={playerRef} videoKey={selected.file_path} segments={transcriptData?.segments || []} />
               <div className="video-player-toolbar">
                 <button
                   type="button"
@@ -2951,9 +2950,23 @@ function SavedPage({
                   setPlaybackState('error');
                   setError('Playback error. Click Reload or verify camera connectivity.');
                 }}
-              />
+              >
+                <CaptionTrack playerRef={playerRef} segments={transcriptData?.segments || []} />
+              </video>
             </div>
-            <TranscriptPanel playerRef={playerRef} videoKey={selected.file_path} data={transcriptData} loading={transcriptLoading} />
+            <TranscriptPanel
+              playerRef={playerRef}
+              videoKey={selected.file_path}
+              data={transcriptData}
+              loading={transcriptLoading}
+              summary={{
+                typeLabel: eventTypeLabel(selected.event_type),
+                tone: selected.event_type === 'breakdown' ? 'red' : selected.event_type === 'self_capture' ? 'slate' : 'amber',
+                when: formatDateTime(selected.event_started_at || selected.started_at),
+                duration: formatDuration(liveBreakdownDuration(selected)),
+                reason: selected.reason || '',
+              }}
+            />
           </div>
         </div>
       )}
