@@ -7,7 +7,7 @@ Production-floor camera recording system for CP Plus IP cameras. The app uses a 
 - Live MJPEG camera view from RTSP
 - Manual start/stop PC recording
 - Automatic PLC gate-triggered recording
-- Local recording archive with metadata and SQLite index
+- Local recording archive with metadata, indexed in SQL Server
 - Background voice-to-text transcription after recordings complete
 - React operator console
 - FastAPI helper API

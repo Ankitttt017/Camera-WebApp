@@ -331,6 +331,21 @@ export function recordingFileUrl(storageRoot: string, filePath: string, download
   });
 }
 
+export type TranscriptSegment = { start: number; end: number; text: string };
+
+export type RecordingTranscript = {
+  transcript: string | null;
+  transcript_status: string | null;
+  started_at: string | null;
+  segments: TranscriptSegment[];
+};
+
+export function fetchRecordingTranscript(storageRoot: string, filePath: string) {
+  return getJson<RecordingTranscript>(
+    `/recording-transcript?${new URLSearchParams({ storage_root: storageRoot, file_path: filePath }).toString()}`,
+  );
+}
+
 export function reasonsPath(storageRoot: string) {
   return `/reasons?${new URLSearchParams({ storage_root: storageRoot }).toString()}`;
 }
