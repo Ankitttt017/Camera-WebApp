@@ -21,6 +21,9 @@ DEFAULT_TERMS = (
     'electrical', 'mechanical', 'breakdown', 'quality', 'trial', 'setting', 'cleaning', 'polish',
     'runner', 'broken', 'feeder', 'signal', 'problem', 'machine', 'robot', 'conveyor', 'insert', 'core',
     'jam', 'stuck', 'leakage', 'manpower', 'operator', 'mould',
+    'metal temperature low', 'metal temperature high', 'temperature low', 'temperature high',
+    'pressure low', 'pressure high', 'oil temperature high', 'water temperature high', 'metal low',
+    'oil level low', 'water level low', 'air pressure low',
 )
 
 # Everyday Hindi words: a window containing one of these is only replaced when the term itself
@@ -45,7 +48,8 @@ _REPEATS = re.compile(r'(.)\1+')
 
 def sound_key(text: str) -> str:
     """Rough pronunciation key: 'Povar kat' and 'power cut' both become 'pawarkat'."""
-    s = re.sub(r'[^a-z]', '', text.lower())
+    s = re.sub(r'(?<=[aeiou])w\b', '', text.lower())   # silent final w: low = lo
+    s = re.sub(r'[^a-z]', '', s)
     for src, dst in _DIGRAPHS:
         s = s.replace(src, dst)
     s = _VOWELS.sub('a', s)
@@ -67,10 +71,12 @@ def _keyed_terms(terms):
 
 
 def _edge_word_spare(tokens, span, term_key, score):
-    """True when the first or last heard word adds nothing ("ejector pin tut" vs "ejector pin")."""
+    """True when the first or last heard word adds nothing ("ejector pin tut" vs "ejector pin",
+    "presar lo" vs "pressure"): the term matches about as well without it."""
+    longer = len(sound_key(' '.join(tokens[i] for i in span))) > len(term_key)
     for part in (span[1:], span[:-1]):
         key = sound_key(' '.join(tokens[i] for i in part))
-        if SequenceMatcher(None, key, term_key).ratio() >= score:
+        if SequenceMatcher(None, key, term_key).ratio() >= score - (0.03 if longer else 0):
             return True
     return False
 
@@ -98,6 +104,10 @@ def correct_shop_terms(text: str, terms: list[str] | None = None) -> str:
                 continue
             for term, term_key in keyed:
                 if hindi - set(term.lower().split()):
+                    continue
+                # A longer term must not add words that were not said ("metal temperature" is not
+                # "metal temperature low").
+                if len(term.split()) > size and len(term_key) - len(key) >= 2:
                     continue
                 if heard.lower() == term.lower():
                     score = 1.0

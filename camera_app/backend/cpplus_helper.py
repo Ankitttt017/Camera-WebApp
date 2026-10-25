@@ -92,6 +92,11 @@ async def _lifespan(app):
 
     threading.Thread(target=_start_background, daemon=True).start()
     yield
+    # Backend stopping (deploy, pm2 restart): finish an open recording properly so the file keeps
+    # its index and is renamed/indexed, instead of being killed half-written.
+    if recording_state.get('running'):
+        import asyncio
+        await asyncio.to_thread(stop_recording_internal)
 
 app = FastAPI(title='CP Plus Camera Helper', lifespan=_lifespan)
 app.add_middleware(
@@ -185,6 +190,7 @@ def resolve_speech_audio_filter(env_var_name: str) -> str:
 
 
 RECORDING_AUDIO_FILTER = resolve_speech_audio_filter('RECORDING_AUDIO_FILTER')
+RECORDING_FINALIZE_SECONDS = float(os.getenv('RECORDING_FINALIZE_SECONDS', '30'))
 LIVE_PREVIEW_MAX_WIDTH = int(os.getenv('LIVE_PREVIEW_MAX_WIDTH', '1280'))
 LIVE_PREVIEW_TARGET_FPS = float(os.getenv('LIVE_PREVIEW_TARGET_FPS', '12'))
 LIVE_PREVIEW_JPEG_QUALITY = int(os.getenv('LIVE_PREVIEW_JPEG_QUALITY', '82'))
@@ -3196,8 +3202,10 @@ def record_camera_ffmpeg_worker(request: RecordingRequest) -> bool:
         '96k',
         '-max_muxing_queue_size',
         '1024',
-        '-movflags',
-        '+faststart',
+        # No +faststart: it rewrites the whole file when recording stops (many seconds for a
+        # one-hour breakdown), and a stop during that rewrite left a file without its index
+        # ("moov atom not found"). Without it the index is written in well under a second;
+        # browsers still play/seek it via range requests, and playback uses the faststart clean copy.
         str(output_path),
     ])
 
@@ -3207,7 +3215,7 @@ def record_camera_ffmpeg_worker(request: RecordingRequest) -> bool:
             time.sleep(0.25)
         if recording_process.poll() is None:
             try:
-                recording_process.communicate(input=b'q', timeout=3)
+                recording_process.communicate(input=b'q', timeout=RECORDING_FINALIZE_SECONDS)
             except Exception:
                 try:
                     recording_process.terminate()
@@ -4182,7 +4190,8 @@ def stop_recording_internal():
     global recording_process
     recording_stop_event.set()
     if recording_thread and recording_thread.is_alive():
-        recording_thread.join(timeout=5)
+        # the worker sends 'q' and waits for FFmpeg to finish the file; killing it earlier corrupts it
+        recording_thread.join(timeout=RECORDING_FINALIZE_SECONDS + 5)
     if recording_process and recording_process.poll() is None:
         try:
             recording_process.terminate()

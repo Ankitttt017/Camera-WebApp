@@ -4,6 +4,7 @@ import { HierarchyManager } from './HierarchyManager';
 import { SettingsHub } from './SettingsHub';
 import { MultiCamGrid } from './MultiCamGrid';
 import { CameraEditModal } from './CameraEditModal';
+import LiveStreamImage from './LiveStreamImage';
 import {
   API_BASE,
   AuthSession,
@@ -1957,12 +1958,11 @@ function LivePage({
             </div>
 
             {/* Video Image - Fills full width and height with zero distortion */}
-            <img
+            <LiveStreamImage
               key={liveUrl}
               src={liveUrl}
               alt={activeCam?.name || "Live camera feed"}
-              onLoad={() => setStreamLoaded(true)}
-              onError={() => setStreamLoaded(false)}
+              onStatus={(status) => setStreamLoaded(status === 'live')}
               style={{
                 width: '100%',
                 height: '100%',
@@ -2181,6 +2181,45 @@ function SavedPage({
     setOpenStep(isStandardType ? (reasonParts[1] ? (reasonParts[2] ? 4 : 3) : 2) : 1);
   }
   const [playbackState, setPlaybackState] = useState<PlaybackState>('idle');
+  const [isVideoBuffering, setIsVideoBuffering] = useState(false);
+  const audioFadeRafRef = useRef<number | null>(null);
+  // Volume the user chose with the player controls; the start-of-video ramp ends there, not at 100%.
+  const userVolumeRef = useRef(1);
+
+  const applySmoothAudioRamp = (player: HTMLVideoElement) => {
+    if (audioFadeRafRef.current) {
+      cancelAnimationFrame(audioFadeRafRef.current);
+      audioFadeRafRef.current = null;
+    }
+    const targetVol = userVolumeRef.current;
+    // If the video is playing past 1.5 seconds, leave volume where the user set it
+    if (player.currentTime > 1.5) {
+      player.volume = targetVol;
+      return;
+    }
+
+    // Avoid a sudden blast of machine noise when playback starts: ramp up over 750 ms
+    const startVol = Math.min(0.05, targetVol);
+    const durationMs = 750;
+    player.volume = startVol;
+    const startT = performance.now();
+
+    const step = (now: number) => {
+      const elapsed = now - startT;
+      const progress = Math.min(elapsed / durationMs, 1);
+      const eased = 1 - Math.pow(1 - progress, 2);
+      const vol = startVol + (targetVol - startVol) * eased;
+      if (player) {
+        player.volume = Math.min(Math.max(vol, 0), 1);
+      }
+      if (progress < 1 && !player.paused) {
+        audioFadeRafRef.current = requestAnimationFrame(step);
+      } else {
+        audioFadeRafRef.current = null;
+      }
+    };
+    audioFadeRafRef.current = requestAnimationFrame(step);
+  };
 
   function changeDatePreset(value: ReportDatePreset) {
     setDatePreset(value);
@@ -2314,6 +2353,7 @@ function SavedPage({
     playerRef.current.pause();
     setPlayingPath('');
     setPlaybackState('loading');
+    setIsVideoBuffering(true);
     playerRef.current.load();
   }, [selectedVideoUrl]);
 
@@ -2321,8 +2361,13 @@ function SavedPage({
     function onFullscreenChange() {
       setPlayerFullscreen(document.fullscreenElement === playerWrapRef.current);
       if (!document.fullscreenElement) {
+        if (audioFadeRafRef.current) {
+          cancelAnimationFrame(audioFadeRafRef.current);
+          audioFadeRafRef.current = null;
+        }
         playerRef.current?.pause();
         setPlaybackState('idle');
+        setIsVideoBuffering(false);
         setSelected(null);
       }
     }
@@ -2344,6 +2389,7 @@ function SavedPage({
         pendingPlayPathRef.current = null;
         setPlayingPath('');
         setPlaybackState('error');
+        setIsVideoBuffering(false);
       }
     });
   }
@@ -2352,6 +2398,7 @@ function SavedPage({
     setError('');
     setPlayingPath('');
     setPlaybackState('loading');
+    setIsVideoBuffering(true);
     videoLoadRetryRef.current = 0;
     setVideoRetryNonce((value) => value + 1);
     pendingPlayPathRef.current = record.file_path;
@@ -2371,6 +2418,7 @@ function SavedPage({
     setError('');
     setPlayingPath('');
     setPlaybackState('loading');
+    setIsVideoBuffering(true);
     videoLoadRetryRef.current = 0;
     pendingPlayPathRef.current = selected.file_path;
     setVideoRetryNonce((value) => value + 1);
@@ -2739,7 +2787,7 @@ function SavedPage({
               <div className="video-player-toolbar">
                 <button
                   type="button"
-                  className="toolbar-btn reload-btn"
+                  className={`toolbar-btn reload-btn ${isVideoBuffering || playbackState === 'loading' ? 'is-spinning' : ''}`}
                   title="Reload video"
                   onClick={retrySelectedVideo}
                 >
@@ -2750,15 +2798,86 @@ function SavedPage({
                   className="toolbar-btn close-btn"
                   title="Close player (Esc)"
                   onClick={() => {
+                    if (audioFadeRafRef.current) {
+                      cancelAnimationFrame(audioFadeRafRef.current);
+                      audioFadeRafRef.current = null;
+                    }
                     if (document.fullscreenElement) {
                       document.exitFullscreen().catch(() => {});
                     }
                     setSelected(null);
+                    setIsVideoBuffering(false);
                   }}
                 >
                   <Icon name="close" />
                 </button>
               </div>
+
+              {/* Professional Full-Page / Modal Reloading & Buffering State */}
+              {(isVideoBuffering || playbackState === 'loading') && (
+                <div className="video-fullscreen-loader" aria-live="polite">
+                  <div className="loader-backdrop-glow" />
+                  <div className="loader-box">
+                    <div className="loader-spinner-container">
+                      <div className="loader-ring-pulse" />
+                      <div className="loader-ring-orbit" />
+                      <div className="loader-center-badge">
+                        <Icon name="reload" />
+                      </div>
+                    </div>
+                    <div className="loader-status-container">
+                      <h3 className="loader-headline">Loading Video Recording</h3>
+                      <p className="loader-subtext">Buffering high-definition stream &bull; Calibrating audio</p>
+                      {selected.file_name && (
+                        <div className="loader-file-chip">
+                          <Icon name="file" />
+                          <span className="file-chip-name">{selected.file_name}</span>
+                        </div>
+                      )}
+                    </div>
+                    <div className="loader-progress-bar">
+                      <div className="loader-progress-fill" />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Playback Error State */}
+              {playbackState === 'error' && (
+                <div className="video-fullscreen-loader is-error" aria-live="assertive">
+                  <div className="loader-box error-box">
+                    <div className="loader-error-badge">
+                      <Icon name="alert" />
+                    </div>
+                    <div className="loader-status-container">
+                      <h3 className="loader-headline text-danger">Playback Unavailable</h3>
+                      <p className="loader-subtext">{error || 'Could not stream recording. Click reload to retry.'}</p>
+                    </div>
+                    <div className="loader-action-buttons">
+                      <button
+                        type="button"
+                        className="er-btn er-btn-primary retry-action-btn"
+                        onClick={retrySelectedVideo}
+                      >
+                        <Icon name="reload" /> <span>Reload Stream</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="er-btn er-btn-ghost"
+                        onClick={() => {
+                          if (document.fullscreenElement) {
+                            document.exitFullscreen().catch(() => {});
+                          }
+                          setSelected(null);
+                        }}
+                      >
+                        <Icon name="close" /> <span>Close</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <video
                 ref={playerRef}
                 key={selected.file_path}
@@ -2769,11 +2888,40 @@ function SavedPage({
                 controlsList="nofullscreen"
                 disablePictureInPicture
                 preload="auto"
+                onLoadStart={() => {
+                  setIsVideoBuffering(true);
+                }}
+                onWaiting={() => {
+                  setIsVideoBuffering(true);
+                }}
+                onCanPlay={() => {
+                  setIsVideoBuffering(false);
+                }}
+                onPlaying={() => {
+                  setIsVideoBuffering(false);
+                  setPlaybackState('ready');
+                  videoLoadRetryRef.current = 0;
+                  if (playerRef.current) {
+                    applySmoothAudioRamp(playerRef.current);
+                  }
+                }}
                 onPlay={() => {
                   setPlaybackState('ready');
                   videoLoadRetryRef.current = 0;
+                  if (playerRef.current) {
+                    applySmoothAudioRamp(playerRef.current);
+                  }
+                }}
+                onVolumeChange={() => {
+                  if (!audioFadeRafRef.current && playerRef.current) userVolumeRef.current = playerRef.current.volume;
+                }}
+                onSeeked={() => {
+                  if (playerRef.current && playerRef.current.currentTime < 1.0) {
+                    applySmoothAudioRamp(playerRef.current);
+                  }
                 }}
                 onError={() => {
+                  setIsVideoBuffering(false);
                   if (videoLoadRetryRef.current < 2) {
                     videoLoadRetryRef.current += 1;
                     retrySelectedVideo();
