@@ -24,6 +24,7 @@ DEFAULT_TERMS = (
     'metal temperature low', 'metal temperature high', 'temperature low', 'temperature high',
     'pressure low', 'pressure high', 'oil temperature high', 'water temperature high', 'metal low',
     'oil level low', 'water level low', 'air pressure low',
+    'flash', 'die flash', 'flash check', 'die check', 'check',
 )
 
 # Everyday Hindi words: a window containing one of these is only replaced when the term itself

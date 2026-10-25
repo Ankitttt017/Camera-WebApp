@@ -1941,9 +1941,13 @@ def write_transcription_metadata(
     transcript: str | None,
     status: str,
     error: str | None = None,
+    segments: list | None = None,
 ) -> dict:
     now_text = datetime.now().isoformat(timespec='seconds')
     metadata = load_sidecar_metadata(video_path)
+    if status != 'processing':
+        # timed captions for the player; kept in the sidecar JSON only (no DB column needed)
+        metadata['transcript_segments'] = segments or []
     transcript_text = ' '.join(str(transcript or '').split()) or None
     metadata.update(
         {
@@ -2143,7 +2147,9 @@ def clean_factory_hindi_text(text: str) -> str:
     return cleaned.strip()
 
 
-def transcribe_with_faster_whisper(audio_path: Path) -> str | None:
+def transcribe_with_faster_whisper(audio_path: Path, segments_out: list | None = None) -> str | None:
+    """Transcript text; when segments_out is given it is filled with timed captions
+    ({'start', 'end', 'text'} in seconds from the start of the video)."""
     if not faster_whisper_available():
         return None
     model = get_shared_whisper_model()
@@ -2181,6 +2187,10 @@ def transcribe_with_faster_whisper(audio_path: Path) -> str | None:
         if avg_logprob < TRANSCRIPTION_MIN_AVG_LOGPROB:
             continue
         accepted_segments.append(text)
+        if segments_out is not None:
+            shown = transcript_for_display(clean_factory_hindi_text(text) or text)
+            if shown and shown.strip():
+                segments_out.append({'start': round(float(segment.start), 2), 'end': round(float(segment.end), 2), 'text': shown.strip()})
     raw_transcript = ' '.join(accepted_segments).strip()
     transcript = clean_factory_hindi_text(raw_transcript)
     if transcript and meaningful_transcript_text(transcript):
@@ -2208,11 +2218,12 @@ def transcribe_recording_worker(storage_root: str | Path, video_path_text: str) 
         try:
             write_transcription_metadata(storage_root, video_path, None, 'processing')
             audio_path = extract_transcription_audio(video_path)
+            segments: list = []
             transcript = transcribe_with_command(audio_path)
             provider_name = 'custom command' if transcript is not None else None
             if transcript is None:
                 provider_name = 'faster-whisper' if faster_whisper_available() else None
-                transcript = transcribe_with_faster_whisper(audio_path)
+                transcript = transcribe_with_faster_whisper(audio_path, segments)
             if not transcript:
                 message = (
                     'No operator speech detected in recording audio.'
@@ -2227,7 +2238,7 @@ def transcribe_recording_worker(storage_root: str | Path, video_path_text: str) 
                     message,
                 )
                 return
-            write_transcription_metadata(storage_root, video_path, transcript, 'completed')
+            write_transcription_metadata(storage_root, video_path, transcript, 'completed', segments=segments)
         except Exception as exc:
             try:
                 write_transcription_metadata(storage_root, video_path, None, 'failed', str(exc))
@@ -5074,6 +5085,29 @@ def recording_file(storage_root: str, file_path: str, download: bool = False, cl
         filename=requested.name,
         content_disposition_type=disposition,
     )
+
+
+@app.get('/recording-transcript')
+def recording_transcript(storage_root: str, file_path: str):
+    """What the operator said, with timings, for captions beside the video player."""
+    root = recording_folder(storage_root).resolve()
+    requested = Path(file_path).resolve()
+    if root != requested and root not in requested.parents:
+        raise HTTPException(status_code=403, detail='Recording path outside storage root')
+    if requested.suffix.lower() not in VIDEO_FILE_EXTENSIONS:
+        raise HTTPException(status_code=400, detail='Unsupported recording file')
+    metadata = load_sidecar_metadata(requested) if requested.exists() else {}
+    segments = [
+        {'start': float(seg.get('start') or 0), 'end': float(seg.get('end') or 0), 'text': str(seg.get('text') or '')}
+        for seg in (metadata.get('transcript_segments') or [])
+        if isinstance(seg, dict) and str(seg.get('text') or '').strip()
+    ]
+    return {
+        'transcript': metadata.get('transcript'),
+        'transcript_status': metadata.get('transcript_status'),
+        'started_at': metadata.get('started_at'),
+        'segments': segments,
+    }
 
 
 @app.post('/download')

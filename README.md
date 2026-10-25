@@ -11,39 +11,42 @@
 
 ```text
 Camera-WebApp/
-├── audio_benchmark_samples/       # Cleaned benchmark .wav samples for speech/noise isolation
+├── .github/workflows/deploy.yml   # Push to main → self-hosted runner deploys to the Linux server (PM2)
 ├── camera_app/
-│   ├── backend/                   # Python FastAPI & RTSP backend services
-│   │   ├── cpplus_helper.py       # Primary server (RTSP streaming, PLC monitor, event indexing)
-│   │   ├── hierarchy_api.py       # Plant ➔ Department ➔ Line ➔ Machine ➔ Camera CRUD APIs
-│   │   ├── stream_pool.py         # Multi-camera concurrent RTSP stream management
-│   │   ├── db.py                  # Database abstraction layer (SQLite / SQL Server)
-│   │   ├── init_hierarchy_db.py   # Database initialization and seed script
-│   │   ├── rnnoise_models/        # RNNoise recurrent neural network noise reduction models
-│   │   └── hierarchy.db           # SQLite database for plant & camera hierarchy
+│   ├── backend/                   # Python FastAPI backend (port 8010)
+│   │   ├── cpplus_helper.py       # Main server: live video/audio, PLC monitor, recording, transcription, reports
+│   │   ├── hierarchy_api.py       # Plant ➔ Department ➔ Line ➔ Machine ➔ Camera APIs (/api/hierarchy)
+│   │   ├── stream_pool.py         # Per-camera live stream workers (self-healing)
+│   │   ├── speech_gate.py         # Silero VAD speech gate: operator voice only in live/clean audio
+│   │   ├── hinglish.py            # Devanagari → Hinglish transcript transliteration
+│   │   ├── shop_vocabulary.py     # Corrects mis-heard shop-floor terms ("Gay polis" → "Die polish")
+│   │   ├── db.py                  # SQL Server connection (dev_ tables locally, production tables on server)
+│   │   └── init_hierarchy_db.py   # Creates the hierarchy tables (one-time setup)
 │   │
-│   ├── frontend/                  # React (TypeScript) + Vite Enterprise Web Application
+│   ├── frontend/                  # React 19 + TypeScript + Vite
 │   │   ├── src/
-│   │   │   ├── App.tsx            # Main application shell, Live View, Event Report & Modals
-│   │   │   ├── Dashboard.tsx      # Machine Stoppage Analytics, Pareto charts, MTBF/MTTR KPIs
-│   │   │   ├── HierarchyManager.tsx # Plant & Cameras management page with interactive deck
-│   │   │   ├── CameraEditModal.tsx# Camera edit and connection testing modal
-│   │   │   ├── MultiCamGrid.tsx   # Multi-camera grid live view component
-│   │   │   ├── api.ts             # API client, TypeScript interfaces, and REST handlers
-│   │   │   ├── downtimeData.ts    # Industrial downtime taxonomy and historical statistics
-│   │   │   ├── styles.css         # Enterprise Light design system and responsive styles
+│   │   │   ├── App.tsx            # App shell, Live View, Event Report, reason editor, video player
+│   │   │   ├── LiveStreamImage.tsx# Self-reconnecting live MJPEG viewer
+│   │   │   ├── VideoTranscript.tsx# Timed captions + operator voice panel in the video player
+│   │   │   ├── MultiCamGrid.tsx   # Multi-camera grid view
+│   │   │   ├── HierarchyManager.tsx # Plants & Cameras setup (live / event recording mode)
+│   │   │   ├── CameraEditModal.tsx# Camera edit and connection test
+│   │   │   ├── SettingsHub.tsx    # Settings & Admin page
+│   │   │   ├── api.ts             # API client and types
+│   │   │   ├── downtimeData.ts    # Downtime reason hierarchy (category → sub-reason)
+│   │   │   ├── styles.css         # Styles
 │   │   │   └── main.tsx           # React entry point
-│   │   ├── package.json           # Frontend dependencies & scripts
-│   │   └── vite.config.ts         # Vite build configuration
+│   │   ├── package.json
+│   │   └── vite.config.ts
 │   │
-│   ├── recordings/                # Local storage for captured event videos and transcripts
-│   ├── requirements.txt           # Python dependencies for the backend
-│   └── helper_settings.json       # Persisted camera and PLC runtime configurations
+│   ├── .env.example               # Environment variables template (copy to .env)
+│   ├── requirements.txt           # Python dependencies
+│   └── helper_settings.json       # Camera + PLC settings for event recording
 │
-├── runtime_logs/                  # Application runtime and process logs
-├── scripts/                       # Maintenance and service restart automation scripts
-├── TECHNICAL_DOCUMENTATION.md     # In-depth technical architecture documentation
-└── README.md                      # Project overview & operational guide
+├── scripts/                       # Windows helpers: start/restart backend locally
+├── PROJECT_DOCUMENTATION.md       # Full technical documentation
+├── PROJECT_PRESENTATION.md/.pptx  # Project presentation
+└── README.md
 ```
 
 ---
@@ -60,10 +63,9 @@ Camera-WebApp/
 * **TPM Root Cause Tracking:** Modal dialog for operators and maintenance engineers to log root cause category, machine reason, action note, responsible department, and target completion date.
 * **Excel Export:** Instant download of downtime reports formatted for operational management.
 
-### 3. Machine Stoppage Analytics (`Dashboard.tsx`)
-* **Pareto Loss Analysis:** Identifies top stoppage categories (Breakdown, Minor Stoppage, Changeover, Tool Change, Quality Loss).
-* **Operational KPIs:** Availability Rate, MTTR (Mean Time to Recover), MTBF (Mean Time Between Failures), and total lost hours.
-* **Visual Trends:** High-contrast bar charts and distribution graphs designed in Enterprise Light theme.
+### 3. Recording Player & Voice Notes
+* **Clean audio playback:** machine noise between words is muted; download gives the same clean copy.
+* **Timed captions:** what the operator says appears under the video, with a side panel of every voice note (video time + clock time); click a line to replay it.
 
 ### 4. Plant & Cameras Management (`HierarchyManager.tsx` & `CameraEditModal.tsx`)
 * **Organizational Hierarchy:** Full multi-tier structure (Plant ➔ Department ➔ Line ➔ Machine ➔ Camera).

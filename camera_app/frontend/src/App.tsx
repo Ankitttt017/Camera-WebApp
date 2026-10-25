@@ -5,6 +5,7 @@ import { SettingsHub } from './SettingsHub';
 import { MultiCamGrid } from './MultiCamGrid';
 import { CameraEditModal } from './CameraEditModal';
 import LiveStreamImage from './LiveStreamImage';
+import { TranscriptPanel, VideoCaption } from './VideoTranscript';
 import {
   API_BASE,
   AuthSession,
@@ -27,6 +28,8 @@ import {
   reasonsPath,
   recordingExportUrl,
   recordingFileUrl,
+  fetchRecordingTranscript,
+  type RecordingTranscript,
   setAuthToken,
   PlcTestResult,
   FlatCamera,
@@ -2348,6 +2351,23 @@ function SavedPage({
     [selected, settings.storage_root, videoRetryNonce],
   );
 
+  const [transcriptData, setTranscriptData] = useState<RecordingTranscript | null>(null);
+  const [transcriptLoading, setTranscriptLoading] = useState(false);
+  useEffect(() => {
+    setTranscriptData(null);
+    if (!selected || !videoReady(selected)) return;
+    let cancelled = false;
+    setTranscriptLoading(true);
+    fetchRecordingTranscript(recordStorageRoot(selected), selected.file_path)
+      .then((data) => { if (!cancelled) setTranscriptData(data); })
+      .catch(() => {
+        // older backend or no sidecar: fall back to the transcript text in the list row
+        if (!cancelled) setTranscriptData({ transcript: selected.transcript || null, transcript_status: selected.transcript_status || null, started_at: selected.started_at || null, segments: [] });
+      })
+      .finally(() => { if (!cancelled) setTranscriptLoading(false); });
+    return () => { cancelled = true; };
+  }, [selected?.file_path, selected?.transcript]);
+
   useEffect(() => {
     if (!selectedVideoUrl || !playerRef.current) return;
     playerRef.current.pause();
@@ -2782,8 +2802,9 @@ function SavedPage({
 
       {selected && videoReady(selected) && (
         <div className="record-player-wrap report-fullscreen-player" ref={playerWrapRef} aria-hidden={!playerFullscreen}>
-          <div className="modal-player-card">
+          <div className="modal-player-card has-transcript">
             <div className="modal-video-container">
+              <VideoCaption playerRef={playerRef} videoKey={selected.file_path} segments={transcriptData?.segments || []} />
               <div className="video-player-toolbar">
                 <button
                   type="button"
@@ -2932,6 +2953,7 @@ function SavedPage({
                 }}
               />
             </div>
+            <TranscriptPanel playerRef={playerRef} videoKey={selected.file_path} data={transcriptData} loading={transcriptLoading} />
           </div>
         </div>
       )}

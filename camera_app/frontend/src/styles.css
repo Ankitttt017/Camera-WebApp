@@ -5518,3 +5518,217 @@ nav button.active .nav-count {
 /* plain-text labels inside the Plants & Cameras page (global label rule is uppercase) */
 .hm-mode-card, .hm-field { margin: 0; text-transform: none; letter-spacing: normal; font-size: inherit; color: inherit; }
 .hm-field small { text-transform: none; }
+
+/* ---------- Recording player: live captions + operator voice transcript panel ---------- */
+.report-fullscreen-player .modal-player-card.has-transcript,
+.report-fullscreen-player:fullscreen .modal-player-card.has-transcript {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: stretch !important;
+}
+
+.report-fullscreen-player .modal-player-card.has-transcript .modal-video-container,
+.report-fullscreen-player:fullscreen .modal-player-card.has-transcript .modal-video-container {
+  flex: 1 1 auto;
+  width: auto !important;
+  min-width: 0;
+  max-width: none !important;
+  height: 100vh !important;
+}
+
+.report-fullscreen-player .modal-player-card.has-transcript .record-player,
+.report-fullscreen-player:fullscreen .modal-player-card.has-transcript .record-player {
+  max-width: 100% !important;
+}
+
+.vt-caption {
+  position: absolute;
+  left: 50%;
+  bottom: 84px;
+  transform: translateX(-50%);
+  max-width: min(78%, 900px);
+  z-index: 4;
+  pointer-events: none;
+  text-align: center;
+}
+
+.vt-caption-text {
+  display: inline;
+  padding: 6px 14px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.78);
+  color: #ffffff;
+  font-size: clamp(1rem, 1.6vw, 1.45rem);
+  font-weight: 600;
+  line-height: 1.6;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+.vt-panel {
+  flex: 0 0 340px;
+  width: 340px;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: #0b1220;
+  border-left: 1px solid rgba(148, 163, 184, 0.18);
+  color: #e2e8f0;
+  overflow: hidden;
+}
+
+.vt-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 20px 18px 16px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.vt-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  background: rgba(124, 58, 237, 0.2);
+  color: #c4b5fd;
+  flex-shrink: 0;
+}
+
+.vt-head h3 {
+  margin: 0;
+  font-size: 0.98rem;
+  font-weight: 700;
+  color: #f8fafc;
+}
+
+.vt-head p {
+  margin: 2px 0 0;
+  font-size: 0.76rem;
+  color: #94a3b8;
+}
+
+.vt-count {
+  margin-left: auto;
+  min-width: 24px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.16);
+  color: #cbd5e1;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.vt-list {
+  list-style: none;
+  margin: 0;
+  padding: 10px;
+  overflow-y: auto;
+  flex: 1 1 auto;
+}
+
+.vt-list li + li {
+  margin-top: 4px;
+}
+
+.vt-line {
+  display: flex;
+  gap: 12px;
+  width: 100%;
+  min-height: 0;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.vt-line:hover {
+  background: rgba(148, 163, 184, 0.1);
+}
+
+.vt-line:focus-visible {
+  outline: 2px solid #a78bfa;
+  outline-offset: 1px;
+}
+
+.vt-line.is-active {
+  background: rgba(124, 58, 237, 0.22);
+  border-color: rgba(167, 139, 250, 0.55);
+}
+
+.vt-time {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  width: 58px;
+  font-variant-numeric: tabular-nums;
+}
+
+.vt-time strong {
+  font-size: 0.82rem;
+  color: #c4b5fd;
+}
+
+.vt-time small {
+  font-size: 0.7rem;
+  color: #64748b;
+}
+
+.vt-text {
+  font-size: 0.92rem;
+  line-height: 1.45;
+  color: #f1f5f9;
+  word-break: break-word;
+}
+
+.vt-plain {
+  padding: 16px 18px;
+}
+
+.vt-note,
+.vt-empty {
+  margin: 0;
+  padding: 16px 18px;
+  font-size: 0.82rem;
+  color: #94a3b8;
+}
+
+.vt-plain .vt-note {
+  padding: 10px 0 0;
+}
+
+@media (max-width: 900px) {
+  .report-fullscreen-player .modal-player-card.has-transcript,
+  .report-fullscreen-player:fullscreen .modal-player-card.has-transcript {
+    flex-direction: column !important;
+  }
+
+  .report-fullscreen-player .modal-player-card.has-transcript .modal-video-container,
+  .report-fullscreen-player:fullscreen .modal-player-card.has-transcript .modal-video-container {
+    width: 100% !important;
+    height: 62vh !important;
+    flex: 0 0 auto;
+  }
+
+  .vt-panel {
+    flex: 1 1 auto;
+    width: 100%;
+    height: auto;
+    min-height: 0;
+    border-left: none;
+    border-top: 1px solid rgba(148, 163, 184, 0.18);
+  }
+
+  .vt-caption {
+    bottom: 64px;
+    max-width: 92%;
+  }
+}

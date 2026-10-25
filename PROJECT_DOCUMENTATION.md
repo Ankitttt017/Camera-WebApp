@@ -33,7 +33,7 @@ On die-casting and machining lines, stoppages happen without a visual record, an
 2. **Records the camera stream automatically** while the gate is open, and classifies the event as a *minor stoppage* or a *breakdown* by duration.
 3. **Indexes every event** in SQL Server with video, duration and an optional speech transcript (faster-whisper).
 4. **Lets operators tag a reason** (category + reason + note) against each event.
-5. **Shows live video/audio, an event log and downtime analytics** (Pareto, counts, durations) in a React web app.
+5. **Shows live video/audio, an event log with video playback, timed voice captions and Excel/CSV export** in a React web app.
 
 ---
 
@@ -76,8 +76,6 @@ graph LR
 
 **One process does everything.** `backend/cpplus_helper.py` is the production server. It starts the shared camera worker and the PLC monitor in a background thread during FastAPI startup (`_lifespan`, `cpplus_helper.py:80`) and mounts `hierarchy_api.router`.
 
-> `backend/main.py` and its modules (`config.py`, `camera_service.py`, `stream.py`, `detector.py`, `recorder.py`, `models.py`) are an **earlier prototype**. They run on port 8000 with their own SQLite database, and nothing in production uses them.
-
 ---
 
 ## 3. Network & Hardware
@@ -106,13 +104,10 @@ Versions are taken from `camera_app/requirements.txt` and `camera_app/frontend/p
 | API | FastAPI / Uvicorn | 0.136.3 / 0.46.0 |
 | Validation | Pydantic | 2.13.4 |
 | Video | ffmpeg (external binary), OpenCV | system / 4.13.0.92 |
-| Camera discovery | onvif-zeep | 0.2.12 |
-| Speech | faster-whisper (model `base`, CPU int8) | 1.2.1 |
+| Speech | faster-whisper (model `large-v3-turbo`, CPU int8) + Silero VAD | 1.2.1 |
 | Database driver | pyodbc + Microsoft ODBC Driver 17/18 | 5.3.0 |
-| Reports | python-pptx (presentation generator only) | 1.0.2 |
 | Frontend | React / React-DOM | ^19.2.3 |
 | | TypeScript / Vite / @vitejs/plugin-react | ^5.9.3 / ^7.3.0 / ^5.1.2 |
-| | Recharts | ^3.10.1 |
 | Database | Microsoft SQL Server | — |
 | Process manager | PM2 (Linux) / PowerShell scripts (Windows) | *outside repo* |
 
@@ -132,34 +127,31 @@ Camera-WebApp/
 │   ├── helper_settings.json       # Runtime settings written by POST /settings (camera, PLC, storage)
 │   ├── requirements.txt
 │   ├── backend/
-│   │   ├── cpplus_helper.py       # ★ Production server: streaming, PLC, recording, index, transcription, camera proxy
+│   │   ├── cpplus_helper.py       # ★ Production server: streaming, PLC, recording, index, transcription, reports
 │   │   ├── hierarchy_api.py       # /api/hierarchy: plant → department → line → machine → camera CRUD + camera streams
+│   │   ├── stream_pool.py         # Per-camera live frame workers (stall watchdog, auto-restart)
+│   │   ├── speech_gate.py         # Silero VAD gate: operator voice only (live audio, clean playback copy)
+│   │   ├── hinglish.py            # Devanagari → Roman (Hinglish) transcripts
+│   │   ├── shop_vocabulary.py     # Snaps mis-heard shop terms to their spelling ("Povar kat" → "Power cut")
 │   │   ├── db.py                  # SQL Server connection (retry) + PrefixCursor (dev_ table prefix, SQLite→T-SQL rewrite)
-│   │   ├── stream_pool.py         # Per-camera frame workers for multi-camera grid
-│   │   ├── init_hierarchy_db.py   # Creates/seeds hierarchy tables; adds hierarchy columns to recordings
-│   │   ├── migrate_to_sql_server.py  # One-off SQLite → SQL Server migration
-│   │   ├── generate_pptx.py       # Builds PROJECT_PRESENTATION.pptx
-│   │   ├── rnnoise_models/bd.rnnn # RNNoise model for ffmpeg arnndn audio filter
-│   │   └── main.py, config.py, camera_service.py, stream.py,
-│   │       detector.py, recorder.py, models.py   # Legacy prototype (unused)
+│   │   └── init_hierarchy_db.py   # Creates/seeds hierarchy tables; adds hierarchy columns to recordings
 │   ├── frontend/
 │   │   ├── src/
-│   │   │   ├── App.tsx            # Shell, login, Live page, Saved (event log) page, reason dialog, polling
-│   │   │   ├── Dashboard.tsx      # Analytics page (Pareto, KPIs)
-│   │   │   ├── HierarchyManager.tsx  # Hierarchy page (plants … cameras)
+│   │   │   ├── App.tsx            # Shell, login, Live page, Event Report, reason dialog, video player
+│   │   │   ├── LiveStreamImage.tsx   # Self-reconnecting live MJPEG viewer
+│   │   │   ├── VideoTranscript.tsx   # Timed captions + operator voice panel in the player
+│   │   │   ├── HierarchyManager.tsx  # Plants & Cameras page (live / event recording mode)
 │   │   │   ├── MultiCamGrid.tsx   # Multi-camera live grid
 │   │   │   ├── SettingsHub.tsx, CameraEditModal.tsx
 │   │   │   ├── api.ts             # API base URL + typed fetch helpers
 │   │   │   └── downtimeData.ts    # Downtime reason taxonomy
 │   │   └── vite.config.ts
-│   ├── scratch/                   # Ad-hoc verification scripts (not part of the app)
-│   ├── read_excel.py, verify_db.py   # One-off utilities
-│   └── (ignored) .venv/, model_cache/, recordings/, transcription_tmp/, camera_app.db
+│   └── (ignored) .venv/, model_cache/, recordings/, clean_cache/, transcription_tmp/
 ├── runtime_logs/                  # (ignored) output of start-camera-monitor.ps1
-└── README.md, PROJECT_DOCUMENTATION.md, TECHNICAL_DOCUMENTATION.md, …
+└── README.md, PROJECT_DOCUMENTATION.md, PROJECT_PRESENTATION.md/.pptx
 ```
 
-**Frontend pages** (`type Page` in `App.tsx`): `live`, `saved`, `analytics`, `hierarchy`.
+**Frontend pages** (`type Page` in `App.tsx`): `live`, `saved`, `hierarchy`.
 
 ---
 
@@ -360,7 +352,7 @@ There are two sources of configuration:
 
 2. **`camera_app/helper_settings.json`**, read and written by `GET/POST /settings`. It holds the camera (`ip`, ports, `username`, `password`, `channel`, `rtsp_path`), `storage_root`, the PLC (`plc_enabled`, `plc_host`, `plc_port`, `plc_device`, `plc_address`), `capture_video`, `capture_breakdown_video` and `max_record_seconds`.
 
-> **Unused variables in `.env.example`:** `.env.example` lists variables the production backend never reads, for example `PLC_HOST`, `PLC_PORT`, `PLC_GATE_*`, `MAX_GATE_RECORD_SECONDS`, `AUTO_START_PLC_MONITOR`, `CPPLUS_STORAGE_ROOT` and `CPPLUS_HELPER_URL`. PLC and storage settings come from `helper_settings.json`. `CAMERA_*`, `DATABASE_URL` and `RECORDINGS_ROOT` are used only by the legacy `main.py`. Changing those values has no effect on production.
+> `.env.example` lists only variables the backend reads. PLC, camera and storage settings for event recording come from `helper_settings.json` (set in the app).
 
 **Frontend:** `VITE_HELPER_URL` sets the API base. If it is unset, the frontend uses `http(s)://<page-host>:8010`. The `/api` proxy in `vite.config.ts` is not used by the app.
 
@@ -435,7 +427,7 @@ This list comes from a code and live-system review on 2026-10-21. It is ordered 
    - `/api/hierarchy` has no auth at all.
 2. **Hardcoded credentials.**
    - The camera password appears in about 20 places across backend and frontend.
-   - The SQL password is the env default in `db.py` and `migrate_to_sql_server.py`.
+   - The SQL password is still the env default in `db.py`; remove the default once the server `.env` is confirmed to set `DB_PASSWORD`.
    - App user passwords are in `AUTH_USERS`.
    - Admin passwords are in `api.ts`.
    - `helper_settings.json` (with a password) is tracked in git.
@@ -468,7 +460,7 @@ This list comes from a code and live-system review on 2026-10-21. It is ordered 
 18. **Oversized files.**
     - `cpplus_helper.py` (~4,900 lines) should be split into `api/`, `services/{recording,plc,streaming,transcription}.py` and `db/`.
     - `App.tsx` (~5,200 lines) should be split into `pages/`, `components/`, `hooks/` and `utils/`.
-19. **Leftover files.** The legacy prototype (`main.py` …) and `scratch/` scripts are still in the tree. There are four overlapping docs at the root.
+19. ~~**Leftover files.**~~ Removed on 25 Oct 2026: legacy prototype (`main.py` and its modules), one-off scripts, `scratch/`, unused RNNoise model, duplicate docs, unused Python/JS dependencies.
 20. **No safety net in the toolchain.**
     - There are no automated tests and no linter.
     - `npm run build` doesn't type-check; there is one TS error in `HierarchyManager.tsx:242`.
