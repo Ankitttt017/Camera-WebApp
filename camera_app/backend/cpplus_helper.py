@@ -150,6 +150,9 @@ load_dotenv(APP_BASE_DIR / '.env')
 FALLBACK_STORAGE_ROOT = APP_BASE_DIR / 'recordings'
 HELPER_SETTINGS_PATH = Path(os.getenv('HELPER_SETTINGS_PATH', APP_BASE_DIR / 'helper_settings.json'))
 MAX_GATE_RECORD_SECONDS = 300
+# A breakdown's video stops after this long (0 = until the machine runs again); the breakdown's
+# timing still runs until the PLC gate closes. An overnight stop once produced a 14 h, 27 GB file.
+BREAKDOWN_VIDEO_MAX_SECONDS = int(float(os.getenv('BREAKDOWN_VIDEO_MAX_MINUTES', '60')) * 60)
 RECORDING_MAX_WIDTH = int(os.getenv('RECORDING_MAX_WIDTH', '1280'))
 RECORDING_TARGET_FPS = float(os.getenv('RECORDING_TARGET_FPS', os.getenv('RECORDING_FPS', '20')))
 RECORDING_CRF = int(os.getenv('RECORDING_CRF', '24'))
@@ -2027,7 +2030,9 @@ def extract_transcription_audio(video_path: Path) -> Path:
     if TRANSCRIPTION_AUDIO_SECONDS > 0:
         command.extend(['-t', str(TRANSCRIPTION_AUDIO_SECONDS)])
     command.append(str(audio_path))
-    result = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=180)
+    # reading the audio out of a long recording takes a while (an hour of video ≈ 2 GB)
+    length = float(meta.get('duration_seconds') or 0)
+    result = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=180 + length / 10)
     if not audio_path.exists() or audio_path.stat().st_size == 0:
         message = result.stderr.decode(errors='ignore').strip() or 'Audio extraction failed.'
         raise RuntimeError(message[-800:])
@@ -4530,6 +4535,22 @@ def plc_monitor_worker(request: PlcMonitorRequest):
                         f'video {"continues until gate close" if request.capture_breakdown_video else "stopped at minor stoppage limit"}.'
                     )
 
+            if (
+                gate_open
+                and BREAKDOWN_VIDEO_MAX_SECONDS > 0
+                and recording_state.get('running')
+                and recording_state.get('event_type') == 'breakdown'
+                and recording_age is not None
+                and recording_age >= BREAKDOWN_VIDEO_MAX_SECONDS
+            ):
+                # same path as capture_breakdown_video=False: video saved now, end time added at gate close
+                recording_state['auto_stopped'] = True
+                stop_recording_internal()
+                plc_monitor_state['last_action'] = (
+                    f'Breakdown video stopped at the {BREAKDOWN_VIDEO_MAX_SECONDS // 60} min limit; '
+                    'breakdown timing continues until the machine runs again.'
+                )
+
             if reset_stale_recording_start():
                 plc_monitor_state['last_error'] = recording_state.get('error')
 
@@ -4946,6 +4967,8 @@ def recording_index_export_excel(
 CLEAN_CACHE_DIR = Path(os.getenv('CLEAN_AUDIO_CACHE_DIR', APP_BASE_DIR / 'clean_cache'))
 CLEAN_CACHE_HOURS = float(os.getenv('CLEAN_AUDIO_CACHE_HOURS', '24'))
 CLEAN_CACHE_MAX_BYTES = int(float(os.getenv('CLEAN_AUDIO_CACHE_MAX_GB', '10')) * 1024 ** 3)
+# Larger recordings are played as recorded: a copy would take minutes to build and fill the cache.
+CLEAN_COPY_MAX_SOURCE_BYTES = int(float(os.getenv('CLEAN_AUDIO_MAX_SOURCE_GB', '5')) * 1024 ** 3)
 _CLEAN_COPY_LOCKS: dict[str, threading.Lock] = {}
 _CLEAN_COPY_LOCKS_GUARD = threading.Lock()
 
@@ -4986,6 +5009,8 @@ def clean_audio_copy(video_path: Path) -> Path:
     """Copy of a recording for playback/download with the operator's voice kept and machine noise
     between words muted (same chain as live audio). Video is stream-copied; the original file,
     which Whisper and the evidence trail use, is never modified. Cached for CLEAN_CACHE_HOURS."""
+    if video_path.stat().st_size > CLEAN_COPY_MAX_SOURCE_BYTES:
+        raise RuntimeError('recording too large for a clean-audio copy; serving the original')
     target = _clean_copy_path(video_path)
     if target.exists() and target.stat().st_size > 0:
         return target
