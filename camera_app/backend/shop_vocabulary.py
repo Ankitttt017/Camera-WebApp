@@ -25,6 +25,7 @@ DEFAULT_TERMS = (
     'pressure low', 'pressure high', 'oil temperature high', 'water temperature high', 'metal low',
     'oil level low', 'water level low', 'air pressure low',
     'flash', 'die flash', 'flash check', 'die check', 'check',
+    'biscuit', 'auto spray', 'spray check', 'extractor', 'punch',
 )
 
 # Everyday Hindi words: a window containing one of these is only replaced when the term itself
@@ -33,7 +34,7 @@ HINDI_WORDS = frozenset('''
 hai hain ho hoga tha the thi ki ka ke ko se me mein men main mai par pe aur ya nahi nahin na bhi to
 hi ab abhi kal aaj hum ham ye yah yeh wo woh vo kya kyu kyon kar karo karna karne kiya raha rahi rahe
 gaya gayi gaye hua hui hue band chalu wajah vajah liye lie sab kuch ek do teen haan ha ji bhai sir
-kam zyada jyada thoda bahut baad pehle pahle phir fir wala wali wale isme usme iska uska apna
+kam zyada jyada thoda bahut baad pehle pahle phir fir wala wali wale isme usme iska uska apna kai log
 '''.split())
 
 MIN_SOUND_LENGTH = 5      # shorter phrases ("die", "jam") are never replaced on sound alone
@@ -82,9 +83,41 @@ def _edge_word_spare(tokens, span, term_key, score):
     return False
 
 
+# Exact mis-hearings seen in this plant's recordings (Bawal, Oct 2026), fixed before the
+# sound-alike pass. "Jai/Gai/Kai fles" is how Whisper writes "die flash".
+ALIASES = {
+    'die flash': ('jai fles', 'gai fles', 'kai fles', 'dai fles', 'day fles', 'die fles',
+                  'jai flash', 'gai flash', 'kai flash', 'dai flash', 'day flash', 'jai flais', 'gai flais'),
+    'flash': ('fles', 'flais'),
+    'runner tut': ('ran aur tut', 'runner thut', 'runner tud', 'ranar tut', 'ranar thut'),
+    'runner': ('ranar', 'runar', 'raanaar'),
+    'flash mar': ('ples mar', 'fles mar'),
+    'flash marne': ('ples marne', 'fles marne'),
+    'ki wajah se': ('ki bajay se', 'ki baze se', 'ki bajah se', 'ki bajsi se', 'ki baje se', 'ki wajay se'),
+    'biscuit': ('bisket', 'biskit', 'biscut', 'biskut'),
+    'auto spray': ('aur to saprej', 'auto saprej', 'aato spray', 'auto spre'),
+    'spray': ('saprej', 'sprej', 'spre'),
+    'extractor': ('istraktar', 'ekstraktar', 'extraktar', 'estraktar'),
+    'change': ('jainj', 'chainj', 'chenj'),
+    'check': ('chek',),
+}
+_ALIAS_PATTERNS = sorted(
+    ((re.compile(r'\b' + r'\s+'.join(map(re.escape, heard.split())) + r'\b', re.IGNORECASE), right)
+     for right, heard_list in ALIASES.items() for heard in heard_list),
+    key=lambda item: -len(item[0].pattern),
+)
+
+
+def apply_aliases(text: str) -> str:
+    for pattern, right in _ALIAS_PATTERNS:
+        text = pattern.sub(right, text)
+    return text
+
+
 def correct_shop_terms(text: str, terms: list[str] | None = None) -> str:
     if not text or not text.strip():
         return text
+    text = apply_aliases(text)
     keyed = _keyed_terms(terms or DEFAULT_TERMS)
     tokens = re.findall(r"[A-Za-z']+|[^A-Za-z'\s]+", text)
     words = [i for i, tok in enumerate(tokens) if re.match(r"[A-Za-z']", tok)]
