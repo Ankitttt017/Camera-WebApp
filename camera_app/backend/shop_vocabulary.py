@@ -9,6 +9,7 @@ ordinary Hindi words ("par", "hai", "band") are left alone.
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from difflib import SequenceMatcher
 
 # Terms operators say when reporting a stoppage. Extend per plant with TRANSCRIPTION_VOCABULARY.
@@ -68,7 +69,8 @@ def parse_terms(extra: str | None = None) -> list[str]:
     return terms
 
 
-def _keyed_terms(terms):
+@lru_cache(maxsize=8)
+def _keyed_terms(terms: tuple[str, ...]):
     return [(term, sound_key(term)) for term in terms if len(sound_key(term)) >= MIN_SOUND_LENGTH]
 
 
@@ -89,7 +91,7 @@ ALIASES = {
     'die flash': ('jai fles', 'gai fles', 'kai fles', 'dai fles', 'day fles', 'die fles',
                   'jai flash', 'gai flash', 'kai flash', 'dai flash', 'day flash', 'jai flais', 'gai flais'),
     'flash': ('fles', 'flais'),
-    'runner tut': ('ran aur tut', 'runner thut', 'runner tud', 'ranar tut', 'ranar thut'),
+    'runner tut': ('ran aur tut', 'runner thut', 'runner tud', 'ranar tut', 'ranar thut', 'rana sut', 'rana tut', 'ranar sut'),
     'runner': ('ranar', 'runar', 'raanaar'),
     'flash mar': ('ples mar', 'fles mar'),
     'flash marne': ('ples marne', 'fles marne'),
@@ -100,6 +102,10 @@ ALIASES = {
     'extractor': ('istraktar', 'ekstraktar', 'extraktar', 'estraktar'),
     'change': ('jainj', 'chainj', 'chenj'),
     'check': ('chek',),
+    'temperature': ('tanparechar', 'tamparechar', 'tamprechar', 'temprechar', 'temparechar', 'tempreture',
+                    'temprecher', 'tamparecher', 'tanprechar'),
+    'robot': ('robo',),
+    'mein': ('men',),
 }
 _ALIAS_PATTERNS = sorted(
     ((re.compile(r'\b' + r'\s+'.join(map(re.escape, heard.split())) + r'\b', re.IGNORECASE), right)
@@ -117,9 +123,19 @@ def apply_aliases(text: str) -> str:
 def correct_shop_terms(text: str, terms: list[str] | None = None) -> str:
     if not text or not text.strip():
         return text
+    # Cached: reports apply this to every row on every load (and to 2000 rows for Excel).
+    return _correct(text, tuple(terms) if terms else DEFAULT_TERMS)
+
+
+@lru_cache(maxsize=8192)
+def _correct(text: str, terms: tuple[str, ...]) -> str:
+    text = re.sub(r'(?<=[A-Za-z]{2})(?=\d)', ' ', text)
     text = apply_aliases(text)
-    keyed = _keyed_terms(terms or DEFAULT_TERMS)
-    tokens = re.findall(r"[A-Za-z']+|[^A-Za-z'\s]+", text)
+    keyed = _keyed_terms(terms)
+    matches = list(re.finditer(r"[A-Za-z']+|[^A-Za-z'\s]+", text))
+    tokens = [m.group() for m in matches]
+    # the original spacing before each token, so untouched text is rebuilt exactly
+    gaps = [text[(matches[i - 1].end() if i else 0):m.start()] for i, m in enumerate(matches)]
     words = [i for i, tok in enumerate(tokens) if re.match(r"[A-Za-z']", tok)]
 
     # Every window of 1..4 consecutive words, scored against every term.
@@ -146,7 +162,13 @@ def correct_shop_terms(text: str, terms: list[str] | None = None) -> str:
                 if heard.lower() == term.lower():
                     score = 1.0
                 else:
-                    score = SequenceMatcher(None, key, term_key).ratio()
+                    # cheap upper bounds first; the full ratio only for plausible pairs
+                    if 2 * min(len(key), len(term_key)) / (len(key) + len(term_key)) < MIN_SIMILARITY:
+                        continue
+                    matcher = SequenceMatcher(None, key, term_key)
+                    if matcher.quick_ratio() < MIN_SIMILARITY:
+                        continue
+                    score = matcher.ratio()
                 if score >= MIN_SIMILARITY and size > 1 and _edge_word_spare(tokens, span, term_key, score):
                     continue
                 if score >= MIN_SIMILARITY:
@@ -164,22 +186,17 @@ def correct_shop_terms(text: str, terms: list[str] | None = None) -> str:
         replace[start] = (size, term)
 
     out = []
-    w = 0
     pos = 0
     while pos < len(tokens):
         if pos in words:
             w = words.index(pos)
             if w in replace:
                 size, term = replace[w]
-                out.append(term)
+                out.append(gaps[pos] + term)
                 pos = words[w + size - 1] + 1
                 continue
-        out.append(tokens[pos])
+        out.append(gaps[pos] + tokens[pos])
         pos += 1
 
-    result = ''
-    for tok in out:
-        if result and re.match(r"[A-Za-z'(]", tok):
-            result += ' '
-        result += tok
+    result = ''.join(out).strip()
     return result[:1].upper() + result[1:] if result else result

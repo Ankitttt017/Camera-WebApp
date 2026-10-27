@@ -2203,6 +2203,14 @@ def transcribe_with_faster_whisper(audio_path: Path, segments_out: list | None =
     return transcript_for_display(raw_transcript) if meaningful_transcript_text(raw_transcript) else None
 
 
+def corrected_transcript(text: str | None) -> str | None:
+    """Shop-vocabulary fixes applied when a transcript is shown, so voice notes saved before a
+    vocabulary update read correctly too. The stored text is never changed."""
+    if not text or TRANSCRIPTION_OUTPUT_SCRIPT != 'roman' or not SHOP_TERMS:
+        return text
+    return correct_shop_terms(text, SHOP_TERMS)
+
+
 def transcript_for_display(text: str) -> str:
     # Whisper hears factory Hindi best with language='hi'; only the script changes here.
     if TRANSCRIPTION_OUTPUT_SCRIPT == 'roman':
@@ -2285,7 +2293,8 @@ def update_recording_reason(request: RecordingReasonRequest) -> dict:
     if request.status is not None:
         reason_data['status'] = request.status
     if request.manual_transcript is not None:
-        reason_data['transcript'] = request.manual_transcript
+        # kept apart from Whisper's text: the pair (heard, corrected) is what a voice model learns from
+        reason_data['manual_transcript'] = request.manual_transcript
     add_reason_option(ReasonRequest(storage_root=request.storage_root, category=category, reason=reason))
 
     target_path = str(request.file_path or '').strip()
@@ -2310,11 +2319,11 @@ def update_recording_reason(request: RecordingReasonRequest) -> dict:
                     reason_submitted_by = :reason_submitted_by,
                     reason_submitted_at = :reason_submitted_at,
                     status = COALESCE(:status, status),
-                    transcript = COALESCE(:transcript, transcript),
+                    manual_transcript = COALESCE(:manual_transcript, manual_transcript),
                     updated_at = :updated_at
                 WHERE file_path = :file_path
                 """,
-                {**{'status': None, 'transcript': None}, **reason_data, 'updated_at': now_text, 'file_path': target_path},
+                {**{'status': None, 'manual_transcript': None}, **reason_data, 'updated_at': now_text, 'file_path': target_path},
             )
             updated = cursor.rowcount
         if not updated and request.event_started_at:
@@ -2327,12 +2336,12 @@ def update_recording_reason(request: RecordingReasonRequest) -> dict:
                     reason_submitted_by = :reason_submitted_by,
                     reason_submitted_at = :reason_submitted_at,
                     status = COALESCE(:status, status),
-                    transcript = COALESCE(:transcript, transcript),
+                    manual_transcript = COALESCE(:manual_transcript, manual_transcript),
                     updated_at = :updated_at
                 WHERE event_started_at = :event_started_at
                   AND event_type = :event_type
                 """,
-                {**{'status': None, 'transcript': None}, **reason_data, 'updated_at': now_text, 'event_started_at': request.event_started_at, 'event_type': category},
+                {**{'status': None, 'manual_transcript': None}, **reason_data, 'updated_at': now_text, 'event_started_at': request.event_started_at, 'event_type': category},
             )
             updated = cursor.rowcount
             if updated and not target_path:
@@ -2586,6 +2595,9 @@ def list_recording_index(request: RecordingIndexRequest) -> dict:
         if not duplicate:
             total += 1
     records = records[:page_size]
+    for record in records:
+        if not record.get('manual_transcript'):   # never rewrite what a person typed
+            record['transcript'] = corrected_transcript(record.get('transcript'))
     return {'total': total, 'page': page, 'page_size': page_size, 'records': records}
 
 
@@ -5123,12 +5135,12 @@ def recording_transcript(storage_root: str, file_path: str):
         raise HTTPException(status_code=400, detail='Unsupported recording file')
     metadata = load_sidecar_metadata(requested) if requested.exists() else {}
     segments = [
-        {'start': float(seg.get('start') or 0), 'end': float(seg.get('end') or 0), 'text': str(seg.get('text') or '')}
+        {'start': float(seg.get('start') or 0), 'end': float(seg.get('end') or 0), 'text': corrected_transcript(str(seg.get('text') or ''))}
         for seg in (metadata.get('transcript_segments') or [])
         if isinstance(seg, dict) and str(seg.get('text') or '').strip()
     ]
     return {
-        'transcript': metadata.get('transcript'),
+        'transcript': corrected_transcript(metadata.get('transcript')),
         'transcript_status': metadata.get('transcript_status'),
         'started_at': metadata.get('started_at'),
         'segments': segments,

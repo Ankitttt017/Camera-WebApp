@@ -5784,3 +5784,107 @@ nav button.active .nav-count {
   }
 
 }
+
+/* ==========================================================================
+   Responsive layout: tablet (≤1200 / ≤900 px) and phone (≤768 / ≤480 px).
+   Several components use inline styles, so the overrides need !important.
+   ========================================================================== */
+
+/* ---- Live View toolbar: filters wrap instead of overlapping ---- */
+@media (max-width: 1200px) {
+  .live-toolbar { flex-wrap: wrap !important; }
+  .live-filter-grid {
+    flex: 1 1 100% !important;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)) !important;
+  }
+  /* the frame no longer fills a wide window: keep the camera's 16:9 instead of stretching it */
+  .live-frame {
+    flex: 0 0 auto !important;
+    aspect-ratio: 16 / 9;
+    height: auto !important;
+  }
+}
+
+/* ---- Event Report: rows become cards so every column stays visible ---- */
+@media (max-width: 1100px) {
+  .er-kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .er-table { min-width: 0 !important; }
+  .er-head { display: none !important; }
+  .er-row {
+    grid-template-columns: minmax(0, 1fr) auto !important;
+    grid-template-areas:
+      "time cat"
+      "dur status"
+      "voice voice"
+      "reason actions";
+    gap: 10px 12px;
+    padding: 14px 16px;
+  }
+  .er-serial { display: none; }
+  .er-time { grid-area: time; }
+  .er-duration { grid-area: dur; }
+  .er-cat { grid-area: cat; justify-self: end; }
+  .er-status-cell { grid-area: status; justify-self: end; }
+  .er-voice { grid-area: voice; align-items: flex-start; }
+  .er-voice > span:not(.er-muted) { white-space: normal; }
+  .er-reason-cell { grid-area: reason; min-width: 0; }
+  .er-actions { grid-area: actions; justify-self: end; }
+  .er-play-label { display: inline; }
+  .er-btn-play { width: auto; padding: 0 12px; }
+}
+
+@media (max-width: 768px) {
+  /* menu button: visible three-line icon on a navy circle */
+  .sidebar-toggle {
+    background: #121e3d !important;
+    border: none !important;
+    color: #ffffff !important;
+  }
+  .sidebar-toggle .icon { display: none !important; }
+  .sidebar-toggle::before {
+    content: "";
+    width: 16px;
+    height: 2px;
+    border-radius: 2px;
+    background: #ffffff;
+    box-shadow: 0 -5px 0 #ffffff, 0 5px 0 #ffffff;
+  }
+
+  /* Live View: two filters per row, full-width view buttons, 16:9 video */
+  .live-toolbar { display: grid !important; grid-template-columns: minmax(0, 1fr); gap: 8px !important; }
+  .live-filter-grid { flex: none !important; grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 8px !important; }
+  .live-view-switch { width: 100%; flex-wrap: wrap; }
+  .live-view-switch > * { flex: 1 1 auto; justify-content: center; }
+  /* Event Report: two KPI cards per row */
+  .er-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+
+  /* Settings */
+  .sh-header { padding: 14px 16px !important; }
+  .sh-header-right { width: 100%; }
+  .sh-tabs {
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: 100%;
+  }
+  .sh-tabs button {
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px !important;
+    padding: 8px 6px !important;
+    font-size: 0.76rem !important;
+    text-align: center;
+  }
+  .sh-body { padding: 16px 12px !important; }
+  .sh-card { padding: 18px 16px !important; }
+  .sh-grid { grid-template-columns: 1fr !important; }
+  .sh-grid input, .sh-grid select { width: 100%; min-width: 0; box-sizing: border-box; }
+  .sh-switch-card { flex-direction: column; align-items: stretch !important; }
+  .sh-switch-card > button { justify-content: center; }
+}
+
+@media (max-width: 480px) {
+  .er-kpis { grid-template-columns: 1fr 1fr; }
+  .er-row { grid-template-areas: "time cat" "dur status" "voice voice" "reason reason" "actions actions"; }
+  .er-actions { justify-self: stretch; }
+  .er-actions .er-btn-play { flex: 1; justify-content: center; }
+}

@@ -1452,7 +1452,7 @@ function LivePage({
       }}
     >
       {/* 1. Cascading Filter Cards + SINGLE / MULTI GRID Buttons in ONE Single Unified Row */}
-      <div style={{
+      <div className="live-toolbar" style={{
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
@@ -1460,7 +1460,7 @@ function LivePage({
         width: '100%',
         flexWrap: 'wrap'
       }}>
-        <div style={{
+        <div className="live-filter-grid" style={{
           display: 'grid',
           gridTemplateColumns: viewMode === 'single' ? 'minmax(140px, 1fr) minmax(140px, 1fr) minmax(190px, 1.35fr) minmax(150px, 1.1fr)' : 'minmax(140px, 1fr) minmax(140px, 1fr) minmax(190px, 1.4fr)',
           gap: '10px',
@@ -1734,7 +1734,7 @@ function LivePage({
         </div>
 
         {/* View Switcher Buttons (Exact Image 1 Design) */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+        <div className="live-view-switch" style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
           <button
             type="button"
             onClick={() => onChangeViewMode?.('single')}
@@ -2704,14 +2704,14 @@ function SavedPage({
                             <small>Video {record.duration_seconds ? formatDuration(record.duration_seconds) : '—'}</small>
                           </span>
 
-                          <span>
+                          <span className="er-cat">
                             <span className={isBreakdown ? 'er-badge er-badge-red' : 'er-badge er-badge-amber'}>
                               <i aria-hidden="true" />
                               {isBreakdown ? 'Breakdown' : 'Minor stoppage'}
                             </span>
                           </span>
 
-                          <span>
+                          <span className="er-reason-cell">
                             {hasReason ? (
                               <button type="button" className="er-reason" onClick={() => editRecord(record, false)} title={`${record.reason || ''} — click to edit`}>
                                 <span>{record.reason?.split(' - ').pop() || record.reason}</span>
@@ -2737,7 +2737,7 @@ function SavedPage({
                             )}
                           </span>
 
-                          <span>
+                          <span className="er-status-cell">
                             <span className={inProgress ? 'er-status er-status-amber' : record.error ? 'er-status er-status-red' : 'er-status er-status-green'}>
                               {inProgress ? 'In progress' : record.error ? 'Error' : 'Completed'}
                             </span>

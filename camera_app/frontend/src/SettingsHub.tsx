@@ -59,7 +59,7 @@ export function SettingsHub({
       overflow: 'hidden'
     }}>
       {/* 1. Header & Tab Navigation Bar */}
-      <div style={{
+      <div className="sh-header" style={{
         padding: '14px 28px',
         background: '#ffffff',
         borderBottom: '1.5px solid #e2e8f0',
@@ -104,9 +104,9 @@ export function SettingsHub({
         </div>
 
         {/* Right Group: 3 Primary Tabs + Admin Profile Badge */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+        <div className="sh-header-right" style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
           {/* 3 Top Primary Tabs */}
-          <div style={{
+          <div className="sh-tabs" style={{
             display: 'flex',
             background: '#f1f5f9',
             padding: '4px',
@@ -237,7 +237,7 @@ export function SettingsHub({
 
         {/* TAB 2: PLC Automation & Controls */}
         {activeTab === 'plc' && (
-          <div style={{ maxWidth: '1080px', margin: '0 auto', padding: '24px 28px', display: 'flex', flexDirection: 'column', gap: '22px' }}>
+          <div className="sh-body" style={{ maxWidth: '1080px', margin: '0 auto', padding: '24px 28px', display: 'flex', flexDirection: 'column', gap: '22px' }}>
             
             {/* Beginner-Friendly Training Callout Banner */}
             <div style={{
@@ -261,9 +261,9 @@ export function SettingsHub({
               <div style={{ fontSize: '0.78rem', fontWeight: 800, color: '#2563eb', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '8px' }}>
                 STEP 1: OPERATIONAL AUTOMATION SWITCHES
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '16px' }}>
+              <div className="sh-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '16px' }}>
                 {/* Switch 1: Gate Trigger */}
-                <div style={{
+                <div className="sh-switch-card" style={{
                   background: '#ffffff',
                   border: '1.5px solid #e2e8f0',
                   borderRadius: '14px',
@@ -335,7 +335,7 @@ export function SettingsHub({
                 </div>
 
                 {/* Switch 2: Video Capture */}
-                <div style={{
+                <div className="sh-switch-card" style={{
                   background: '#ffffff',
                   border: '1.5px solid #e2e8f0',
                   borderRadius: '14px',
@@ -407,7 +407,7 @@ export function SettingsHub({
             </div>
 
             {/* Step 2: PLC Hardware Parameters */}
-            <div style={{
+            <div className="sh-card" style={{
               background: '#ffffff',
               border: '1.5px solid #e2e8f0',
               borderRadius: '16px',
@@ -423,7 +423,7 @@ export function SettingsHub({
                 </h3>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '16px' }}>
+              <div className="sh-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '16px' }}>
                 <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   <span style={{ fontSize: '0.84rem', fontWeight: 700, color: '#334155' }}>Recording Mode</span>
                   <select
@@ -647,9 +647,9 @@ export function SettingsHub({
 
         {/* TAB 3: Storage & System Diagnostics */}
         {activeTab === 'system' && (
-          <div style={{ maxWidth: '1080px', margin: '0 auto', padding: '24px 28px', display: 'flex', flexDirection: 'column', gap: '22px' }}>
+          <div className="sh-body" style={{ maxWidth: '1080px', margin: '0 auto', padding: '24px 28px', display: 'flex', flexDirection: 'column', gap: '22px' }}>
             {/* Storage Settings */}
-            <div style={{
+            <div className="sh-card" style={{
               background: '#ffffff',
               border: '1.5px solid #e2e8f0',
               borderRadius: '16px',
@@ -665,7 +665,7 @@ export function SettingsHub({
                 </h3>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '16px' }}>
+              <div className="sh-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '16px' }}>
                 <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   <span style={{ fontSize: '0.84rem', fontWeight: 700, color: '#334155' }}>Recording Storage Folder (Hard Disk Location)</span>
                   <input
@@ -737,7 +737,7 @@ export function SettingsHub({
             </div>
 
             {/* System Diagnostics & Telemetry Card */}
-            <div style={{
+            <div className="sh-card" style={{
               background: '#ffffff',
               border: '1.5px solid #e2e8f0',
               borderRadius: '16px',
@@ -753,7 +753,7 @@ export function SettingsHub({
                 </h3>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '14px' }}>
+              <div className="sh-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '14px' }}>
                 <div style={{ background: '#f8fafc', padding: '16px 18px', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
                   <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>Active Machine</div>
                   <div style={{ fontSize: '1.1rem', fontWeight: 900, color: '#0f172a', marginTop: '4px' }}>{activeMachineName}</div>
