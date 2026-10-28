@@ -93,12 +93,11 @@ ALIASES = {
     'flash': ('fles', 'flais'),
     'runner tut': ('ran aur tut', 'runner thut', 'runner tud', 'ranar tut', 'ranar thut', 'rana sut', 'rana tut', 'ranar sut'),
     'runner': ('ranar', 'runar', 'raanaar'),
-    'flash mar': ('ples mar', 'fles mar'),
     'flash marne': ('ples marne', 'fles marne'),
     'ki wajah se': ('ki bajay se', 'ki baze se', 'ki bajah se', 'ki bajsi se', 'ki baje se', 'ki wajay se'),
     'biscuit': ('bisket', 'biskit', 'biscut', 'biskut'),
     'auto spray': ('aur to saprej', 'auto saprej', 'aato spray', 'auto spre'),
-    'spray': ('saprej', 'sprej', 'spre'),
+    'spray': ('saprej', 'sprej', 'spre', 'sanpre', 'sampre', 'sapre', 'sanpray', 'jampare'),
     'extractor': ('istraktar', 'ekstraktar', 'extraktar', 'estraktar'),
     'change': ('jainj', 'chainj', 'chenj'),
     'check': ('chek',),
@@ -106,7 +105,26 @@ ALIASES = {
                     'temprecher', 'tamparecher', 'tanprechar'),
     'robot': ('robo',),
     'mein': ('men',),
+    # seen 27-28 Oct: "Letal temperature hai hai 692" = "metal temperature high hai 692"
+    'metal temperature': ('letal temperature', 'ledal temperature', 'metal tanparechar', 'letal tanparechar'),
+    'temperature high hai': ('temperature hai hai',),
+    'temperature high hone': ('temperature hai hone',),
+    'ladle': ('ledal', 'ledle', 'laddle'),
+    'die polish': ('daipolis', 'daipole', 'raipole', 'raipolis', 'aipole', 'dipoles', 'daipolish', 'die polis'),
+    'machine': ('masin', 'masing', 'maskin', 'mushiyn', 'mushing', 'mushin', 'mashin', 'musing', 'mashine', 'masinn', 'mastin', 'masim'),
+    'flash marne ki': ('lesmar niki', 'lesmarni ki', 'les marni ki', 'lej mar niki', 'les marne ki', 'lesmarne ki'),
+    'chalu hone': ('chalo hone',),
+    'flash mar': ('falek mar', 'flek mar', 'ples mar', 'fles mar'),
+    'isliye': ('iskile', 'iskel', 'iskelie', 'iskeliye'),
 }
+# applied after the machine spellings above have been fixed
+PHRASE_ALIASES = {
+    'machine band hai': ('machine bande', 'machine ban do', 'machine bandu', 'machine ban le', 'machine bn le',
+                         'machine banya', 'machine ban lege', 'machine bane', 'machine bandle', 'machine bang hai', 'machine bangi'),
+}
+# "ki bajay se", "ki baze se", "ki bijah se", "ki badese", "ki bashas se" -> "ki wajah se"
+# (only between "ki" and "se", so "ki baat se" stays as it is)
+WAJAH = re.compile(r"\bki\s+[bvw][aei](?:[jzsyh][a-z]{0,4}\s?|d[a-z]{0,3})se\b", re.IGNORECASE)
 _ALIAS_PATTERNS = sorted(
     ((re.compile(r'\b' + r'\s+'.join(map(re.escape, heard.split())) + r'\b', re.IGNORECASE), right)
      for right, heard_list in ALIASES.items() for heard in heard_list),
@@ -114,10 +132,20 @@ _ALIAS_PATTERNS = sorted(
 )
 
 
+_PHRASE_PATTERNS = sorted(
+    ((re.compile(r'\b' + r'\s+'.join(map(re.escape, heard.split())) + r'\b', re.IGNORECASE), right)
+     for right, heard_list in PHRASE_ALIASES.items() for heard in heard_list),
+    key=lambda item: -len(item[0].pattern),
+)
+
+
 def apply_aliases(text: str) -> str:
-    for pattern, right in _ALIAS_PATTERNS:
+    for _ in range(2):   # one fix can complete another ("metal tanparechar hai hai")
+        for pattern, right in _ALIAS_PATTERNS:
+            text = pattern.sub(right, text)
+    for pattern, right in _PHRASE_PATTERNS:
         text = pattern.sub(right, text)
-    return text
+    return WAJAH.sub('ki wajah se', text)
 
 
 def correct_shop_terms(text: str, terms: list[str] | None = None) -> str:
