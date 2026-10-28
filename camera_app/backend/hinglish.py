@@ -96,6 +96,14 @@ ENGLISH_WORDS = {
     'पंप': 'pump', 'वाल्व': 'valve', 'शिफ्ट': 'shift', 'लाइन': 'line', 'पावर': 'power', 'एरर': 'error',
     'अलार्म': 'alarm', 'सिलेंडर': 'cylinder', 'नोजल': 'nozzle', 'फीडर': 'feeder', 'कूलिंग': 'cooling',
     'वाटर': 'water', 'ऑयल': 'oil', 'स्टार्ट': 'start', 'स्टॉप': 'stop', 'रिसेट': 'reset', 'पार्ट': 'part',
+    # heard on the Bawal HPDC line (Oct 2026): हाई is "high" ("temperature high hai"), never "hai"
+    'हाई': 'high', 'टंपरेचर': 'temperature', 'टेंपरेचर': 'temperature', 'टम्परेचर': 'temperature',
+    'टैम्परेचर': 'temperature', 'टेम्प्रेचर': 'temperature', 'मेटल': 'metal', 'लेडल': 'ladle', 'लैडल': 'ladle',
+    'मसींग': 'machine', 'मुषिंग': 'machine', 'मशिन': 'machine', 'मसिन': 'machine', 'मुसिंग': 'machine', 'मशीनें': 'machines',
+    'स्प्रे': 'spray', 'संप्रे': 'spray', 'सप्रे': 'spray', 'स्प्रेय': 'spray', 'ऑटो': 'auto',
+    'फ्लैश': 'flash', 'फ्लेश': 'flash', 'फ्लेस': 'flash', 'पॉलिश': 'polish', 'पोलिश': 'polish', 'पोलिस': 'polish',
+    'दाइपोलिस': 'die polish', 'डाइपोलिश': 'die polish', 'डाईपोलिश': 'die polish',
+    'बिस्किट': 'biscuit', 'बिस्कुट': 'biscuit', 'होल्डिंग': 'holding', 'लैडर': 'ladle', 'रोबोट': 'robot',
 }
 
 
