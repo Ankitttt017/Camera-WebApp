@@ -70,6 +70,11 @@ def parse_terms(extra: str | None = None) -> list[str]:
 
 
 @lru_cache(maxsize=8)
+def _single_terms(terms: tuple[str, ...]) -> frozenset:
+    return frozenset(t.lower() for t in terms if ' ' not in t)
+
+
+@lru_cache(maxsize=8)
 def _keyed_terms(terms: tuple[str, ...]):
     return [(term, sound_key(term)) for term in terms if len(sound_key(term)) >= MIN_SOUND_LENGTH]
 
@@ -111,16 +116,27 @@ ALIASES = {
     'temperature high hone': ('temperature hai hone',),
     'ladle': ('ledal', 'ledle', 'laddle'),
     'die polish': ('daipolis', 'daipole', 'raipole', 'raipolis', 'aipole', 'dipoles', 'daipolish', 'die polis'),
-    'machine': ('masin', 'masing', 'maskin', 'mushiyn', 'mushing', 'mushin', 'mashin', 'musing', 'mashine', 'masinn', 'mastin', 'masim'),
+    'machine': ('masin', 'masing', 'maskin', 'mushiyn', 'mushing', 'mushin', 'mashin', 'musing', 'mashine', 'masinn', 'mastin', 'masim', 'masen', 'mujhin', 'majib', 'matrin', 'mat jin', 'mayarchin'),
     'flash marne ki': ('lesmar niki', 'lesmarni ki', 'les marni ki', 'lej mar niki', 'les marne ki', 'lesmarne ki'),
     'chalu hone': ('chalo hone',),
     'flash mar': ('falek mar', 'flek mar', 'ples mar', 'fles mar'),
-    'isliye': ('iskile', 'iskel', 'iskelie', 'iskeliye'),
+    'isliye': ('iskile', 'iskel', 'iskelie', 'iskeliye', 'iskiye'),
+    # 29 Oct: marking machine, robot, casting, fixed side of the die
+    'marking': ('marchin', 'mariking', 'mishmariking', 'mit marking'),
+    'casting': ('kasmin', 'kashing', 'kasting', 'kasing'),
+    'fixed side': ('fik staid', 'fix staid', 'fik side', 'fiks side', 'fix side', 'fiks staid'),
+    'chipak gaya': ('chipa gaya',),
+    'robot ruk': ('hamat ruk', 'rumart ruk', 'romat ruk', 'rumat ruk'),
+    'wahan robot': ('vaharobar', 'vaharopar'),
+    'jam hai': ('jamen',),
+    'machine roka': ('mushi roka',),
 }
 # applied after the machine spellings above have been fixed
 PHRASE_ALIASES = {
     'machine band hai': ('machine bande', 'machine ban do', 'machine bandu', 'machine ban le', 'machine bn le',
-                         'machine banya', 'machine ban lege', 'machine bane', 'machine bandle', 'machine bang hai', 'machine bangi'),
+                         'machine banya', 'machine ban lege', 'machine bane', 'machine bandle', 'machine bang hai', 'machine bangi',
+                         'machine bandue', 'machine bani hai', 'machine bani'),
+    'machine band ho gayi': ('machine banda gai', 'machine banda gayi'),
 }
 # "ki bajay se", "ki baze se", "ki bijah se", "ki badese", "ki bashas se" -> "ki wajah se"
 # (only between "ki" and "se", so "ki baat se" stays as it is)
@@ -180,8 +196,12 @@ def _correct(text: str, terms: tuple[str, ...]) -> str:
             key = sound_key(heard)
             if len(key) < MIN_SOUND_LENGTH:
                 continue
+            # words that already are shop terms ("machine") must stay in the replacement
+            known = {tokens[i].lower() for i in span} & _single_terms(terms)
             for term, term_key in keyed:
                 if hindi - set(term.lower().split()):
+                    continue
+                if known - set(term.lower().split()):
                     continue
                 # A longer term must not add words that were not said ("metal temperature" is not
                 # "metal temperature low").
