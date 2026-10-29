@@ -104,6 +104,9 @@ ENGLISH_WORDS = {
     'फ्लैश': 'flash', 'फ्लेश': 'flash', 'फ्लेस': 'flash', 'पॉलिश': 'polish', 'पोलिश': 'polish', 'पोलिस': 'polish',
     'दाइपोलिस': 'die polish', 'डाइपोलिश': 'die polish', 'डाईपोलिश': 'die polish',
     'बिस्किट': 'biscuit', 'बिस्कुट': 'biscuit', 'होल्डिंग': 'holding', 'लैडर': 'ladle', 'रोबोट': 'robot',
+    # 29 Oct: marking machine, casting, robot, fixed side
+    'मार्किंग': 'marking', 'मार्चिन': 'marking', 'काशिंग': 'casting', 'कासटिंग': 'casting', 'मजीब': 'machine',
+    'मसेन': 'machine', 'रूमर्ट': 'robot', 'स्टाइड': 'side', 'साइड': 'side', 'फिक्स्ड': 'fixed', 'फिक्स': 'fixed',
 }
 
 

@@ -2191,6 +2191,9 @@ def transcribe_with_faster_whisper(audio_path: Path, segments_out: list | None =
             continue
         if avg_logprob < TRANSCRIPTION_MIN_AVG_LOGPROB:
             continue
+        if foreign_script(text):
+            # on loud noise Whisper sometimes writes another language ("Ísprey, það er...")
+            continue
         accepted_segments.append(text)
         if segments_out is not None:
             shown = transcript_for_display(clean_factory_hindi_text(text) or text)
@@ -2201,6 +2204,12 @@ def transcribe_with_faster_whisper(audio_path: Path, segments_out: list | None =
     if transcript and meaningful_transcript_text(transcript):
         return transcript_for_display(transcript)
     return transcript_for_display(raw_transcript) if meaningful_transcript_text(raw_transcript) else None
+
+
+def foreign_script(text: str) -> bool:
+    """True when a segment has letters that are neither Latin nor Devanagari (Icelandic, Gujarati,
+    Urdu...): operators speak Hindi/English, so that text is a mis-hearing of noise."""
+    return any(ch.isalpha() and not (ch.isascii() or 'ऀ' <= ch <= 'ॿ') for ch in text)
 
 
 def corrected_transcript(text: str | None) -> str | None:
