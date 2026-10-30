@@ -27,6 +27,7 @@ DEFAULT_TERMS = (
     'oil level low', 'water level low', 'air pressure low',
     'flash', 'die flash', 'flash check', 'die check', 'check',
     'biscuit', 'auto spray', 'spray check', 'extractor', 'punch',
+    'gate punch', 'moving side', 'fixed side', 'marking machine',
 )
 
 # Everyday Hindi words: a window containing one of these is only replaced when the term itself
@@ -104,7 +105,7 @@ ALIASES = {
     'auto spray': ('aur to saprej', 'auto saprej', 'aato spray', 'auto spre'),
     'spray': ('saprej', 'sprej', 'spre', 'sanpre', 'sampre', 'sapre', 'sanpray', 'jampare'),
     'extractor': ('istraktar', 'ekstraktar', 'extraktar', 'estraktar'),
-    'change': ('jainj', 'chainj', 'chenj'),
+    'change': ('jainj', 'chainj', 'chenj', 'cheny'),
     'check': ('chek',),
     'temperature': ('tanparechar', 'tamparechar', 'tamprechar', 'temprechar', 'temparechar', 'tempreture',
                     'temprecher', 'tamparecher', 'tanprechar'),
@@ -116,26 +117,37 @@ ALIASES = {
     'temperature high hone': ('temperature hai hone',),
     'ladle': ('ledal', 'ledle', 'laddle'),
     'die polish': ('daipolis', 'daipole', 'raipole', 'raipolis', 'aipole', 'dipoles', 'daipolish', 'die polis'),
-    'machine': ('masin', 'masing', 'maskin', 'mushiyn', 'mushing', 'mushin', 'mashin', 'musing', 'mashine', 'masinn', 'mastin', 'masim', 'masen', 'mujhin', 'majib', 'matrin', 'mat jin', 'mayarchin'),
+    'machine': ('masin', 'masing', 'maskin', 'mushiyn', 'mushing', 'mushin', 'mashin', 'musing', 'mashine', 'masinn', 'mastin', 'masim', 'masen', 'mujhin', 'majib', 'matrin', 'mat jin', 'mayarchin', 'musin'),
     'flash marne ki': ('lesmar niki', 'lesmarni ki', 'les marni ki', 'lej mar niki', 'les marne ki', 'lesmarne ki'),
     'chalu hone': ('chalo hone',),
     'flash mar': ('falek mar', 'flek mar', 'ples mar', 'fles mar'),
     'isliye': ('iskile', 'iskel', 'iskelie', 'iskeliye', 'iskiye'),
     # 29 Oct: marking machine, robot, casting, fixed side of the die
-    'marking': ('marchin', 'mariking', 'mishmariking', 'mit marking'),
+    'marking': ('marchin', 'mariking', 'mishmariking', 'mit marking', 'varking'),
     'casting': ('kasmin', 'kashing', 'kasting', 'kasing'),
-    'fixed side': ('fik staid', 'fix staid', 'fik side', 'fiks side', 'fix side', 'fiks staid'),
+    'fixed side': ('fik staid', 'fix staid', 'fik side', 'fiks side', 'fix side', 'fiks staid', 'fixed saind', 'fik saind'),
     'chipak gaya': ('chipa gaya',),
     'robot ruk': ('hamat ruk', 'rumart ruk', 'romat ruk', 'rumat ruk'),
     'wahan robot': ('vaharobar', 'vaharopar'),
     'jam hai': ('jamen',),
     'machine roka': ('mushi roka',),
+    # 30 Oct: "Gate panj pe casting..." shows "det panch" is the gate punch
+    'gate punch': ('det panch', 'det panj', 'gate panj', 'gate panch', 'det punch', 'get panch'),
+    'minute': ('minat', 'minit'),
+    'air': ('eyar', 'eyer'),
+    'hil rahi': ('hil rai',),
+    'tight karvana': ('taid karvana', 'tait karvana'),
+    'moving side': ('boving saind', 'moving saind', 'boving side', 'mobing side'),
+    'chipka hai': ('chif ka hai',),
+    'automation': ('atomesan', 'otomesan', 'automesan', 'atomation'),
 }
 # applied after the machine spellings above have been fixed
 PHRASE_ALIASES = {
     'machine band hai': ('machine bande', 'machine ban do', 'machine bandu', 'machine ban le', 'machine bn le',
                          'machine banya', 'machine ban lege', 'machine bane', 'machine bandle', 'machine bang hai', 'machine bangi',
-                         'machine bandue', 'machine bani hai', 'machine bani'),
+                         'machine bandue', 'machine bani hai', 'machine bani', 'machine bamya'),
+    'gate punch change': ('gate punch jains', 'gate punch jainj', 'gate punch chenj'),
+    'punch sensor': ('punch sens', 'punch sensar'),
     'machine band ho gayi': ('machine banda gai', 'machine banda gayi'),
 }
 # "ki bajay se", "ki baze se", "ki bijah se", "ki badese", "ki bashas se" -> "ki wajah se"
