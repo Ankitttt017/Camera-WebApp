@@ -107,6 +107,9 @@ ENGLISH_WORDS = {
     # 29 Oct: marking machine, casting, robot, fixed side
     'मार्किंग': 'marking', 'मार्चिन': 'marking', 'काशिंग': 'casting', 'कासटिंग': 'casting', 'मजीब': 'machine',
     'मसेन': 'machine', 'रूमर्ट': 'robot', 'स्टाइड': 'side', 'साइड': 'side', 'फिक्स्ड': 'fixed', 'फिक्स': 'fixed',
+    # 30 Oct: gate punch, air, moving side, automation, minute, tight
+    'पंच': 'punch', 'पंज': 'punch', 'एयर': 'air', 'मूविंग': 'moving', 'मुविंग': 'moving', 'ऑटोमेशन': 'automation',
+    'ओटोमेशन': 'automation', 'मिनट': 'minute', 'टाइट': 'tight', 'पीएलसी': 'PLC', 'मोटर': 'motor',
 }
 
 
