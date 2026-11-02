@@ -8,7 +8,6 @@ import LiveStreamImage from './LiveStreamImage';
 import { CaptionTrack, TranscriptPanel } from './VideoTranscript';
 import {
   API_BASE,
-  AuthSession,
   CameraSettings,
   PlcStatus,
   ReasonOptions,
@@ -17,8 +16,6 @@ import {
   RecordingStats,
   RecordingStatus,
   audioUrl,
-  authElevate,
-  authLogin,
   buildCameraPayload,
   buildPlcPayload,
   buildSettingsPayload,
@@ -30,7 +27,6 @@ import {
   recordingFileUrl,
   fetchRecordingTranscript,
   type RecordingTranscript,
-  setAuthToken,
   PlcTestResult,
   FlatCamera,
   HierarchyPlant,
@@ -146,7 +142,6 @@ const APP_MARK = 'RCC';
 const RICO_LOGO_SRC = '/rico-logo.png';
 
 type Page = 'live' | 'saved' | 'hierarchy';
-type UserRole = 'superadmin' | 'admin' | 'user';
 
 function normalizePublicHelperUrl(value?: string | null) {
   const text = String(value || '').trim();
@@ -746,77 +741,6 @@ function Icon({ name }: { name: IconName }) {
   );
 }
 
-function Login({ onLogin }: { onLogin: (session: AuthSession) => void }) {
-  const [username, setUsername] = useState('operator');
-  const [password, setPassword] = useState('operator');
-  const [showPassword, setShowPassword] = useState(false);
-  const [error, setError] = useState('');
-
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    const normalizedUsername = username.trim().toLowerCase();
-    const loginUsername = normalizedUsername === 'operaor' ? 'operator' : normalizedUsername;
-    try {
-      const session = await authLogin(loginUsername, password);
-      onLogin(session);
-      return;
-    } catch {
-      // Mock logins removed for security. Only backend AUTH_USERS are allowed.
-    }
-    setError('Invalid username or password.');
-  }
-
-  return (
-    <main className="login-shell">
-      <section className="login-panel">
-        <div className="login-intro">
-          <div className="login-logo-card">
-            <strong className="login-wordmark" aria-label="RicoDigiTech">
-              <span className="login-rico-blue">RICO</span>
-              <span className="login-digitech">DigiTech</span>
-            </strong>
-          </div>
-          <div>
-            <h1>Automatic Camera Monitoring</h1>
-          </div>
-        </div>
-        <form className="login-card" onSubmit={submit}>
-          <div>
-            <div className="eyebrow">Secure Login</div>
-            <h2>Sign in</h2>
-          </div>
-          <label>
-            Username
-            <input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="admin" />
-          </label>
-          <label>
-            Password
-            <div className="password-field">
-              <input
-                type={showPassword ? 'text' : 'password'}
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                placeholder="Password"
-              />
-              <button
-                type="button"
-                className="password-toggle"
-                onClick={() => setShowPassword((value) => !value)}
-                aria-label={showPassword ? 'Hide password' : 'Show password'}
-                title={showPassword ? 'Hide password' : 'Show password'}
-              >
-                <Icon name={showPassword ? 'eyeOff' : 'eye'} />
-              </button>
-            </div>
-          </label>
-          {error && <div className="error-banner">{error}</div>}
-          <button className="primary-button" type="submit">Sign In</button>
-        </form>
-      </section>
-    </main>
-  );
-}
-
 function ReasonDialog({
   open,
   category,
@@ -944,12 +868,9 @@ function Sidebar({
   onTestPlc,
   onStartSmartRecording,
   onStopSmartRecording,
-  onLogout,
-  onAdminRequired,
   settingsMessage,
   settingsMessageTone,
   plcTestResult,
-  userRole,
   activeMachineName,
 }: {
   page: Page;
@@ -967,12 +888,9 @@ function Sidebar({
   onTestPlc: () => void;
   onStartSmartRecording: () => void;
   onStopSmartRecording: () => void;
-  onLogout: () => void;
-  onAdminRequired: (action?: () => void) => void;
   settingsMessage: string;
   settingsMessageTone: 'good' | 'bad' | 'neutral';
   plcTestResult: PlcTestResult | null;
-  userRole: UserRole;
   activeMachineName?: string;
 }) {
   const reportCount = stats.storage.video_count || stats.today.total_events || 146;
@@ -2079,7 +1997,6 @@ function SavedPage({
   stats,
   plc,
   onEditReason,
-  userRole,
 }: {
   page: Page;
   settings: CameraSettings;
@@ -2087,7 +2004,6 @@ function SavedPage({
   stats: RecordingStats;
   plc: PlcStatus;
   onEditReason: (record: RecordingRecord) => void;
-  userRole: UserRole;
 }) {
   const [page, setPage] = useState(1);
   const [expandedRowPaths, setExpandedRowPaths] = useState<Record<string, boolean>>({});
@@ -4126,9 +4042,6 @@ function TileSelector({ options, value, onChange, disabled, placeholder = "Selec
 }
 
 export function App() {
-  // Login security bypassed: always authenticate as superadmin
-  const [authenticated, setAuthenticated] = useState(true);
-  const [userRole, setUserRole] = useState<UserRole>('superadmin');
   const [page, setPage] = useState<Page>('live');
   const [settings, setSettings] = useState<CameraSettings>(() => loadSavedSettings());
   const [recording, setRecording] = useState<RecordingStatus>({ running: false, frames: 0 });
@@ -4139,10 +4052,6 @@ export function App() {
   const [message, setMessage] = useState('');
   const [settingsMessage, setSettingsMessage] = useState('');
   const [settingsMessageTone, setSettingsMessageTone] = useState<'good' | 'bad' | 'neutral'>('neutral');
-  const [adminPromptOpen, setAdminPromptOpen] = useState(false);
-  const [adminPromptPassword, setAdminPromptPassword] = useState('');
-  const [adminPromptError, setAdminPromptError] = useState('');
-  const [adminPromptShowPassword, setAdminPromptShowPassword] = useState(false);
   const [refreshToken, setRefreshToken] = useState(0);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [clock, setClock] = useState(() => new Date());
@@ -4275,7 +4184,6 @@ export function App() {
     }
   }, [filteredCameras, activeCamId]);
 
-  const pendingAdminActionRef = useRef<(() => void) | null>(null);
 
   async function loadReasons(root = settings.storage_root) {
     try {
@@ -4381,7 +4289,6 @@ export function App() {
   }
 
   useEffect(() => {
-    if (!authenticated) return;
     loadBackendSettings();
     loadReasons();
     refreshStatus();
@@ -4393,21 +4300,19 @@ export function App() {
       window.clearInterval(statsTimer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authenticated]);
+  }, []);
 
   useEffect(() => {
-    if (!authenticated) return;
     loadReasons(settings.storage_root);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authenticated, settings.storage_root]);
+  }, [settings.storage_root]);
 
   useEffect(() => {
-    if (!authenticated) return;
     verifyCamera();
     const timer = window.setInterval(verifyCamera, 15000);
     return () => window.clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authenticated, settings.ip, settings.http_port, settings.username, settings.password]);
+  }, [settings.ip, settings.http_port, settings.username, settings.password]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setClock(new Date()), 1000);
@@ -4452,7 +4357,7 @@ export function App() {
           const status = await postJson<PlcStatus>('/plc-monitor/start', buildPlcPayload(nextSettings));
           setPlc(status);
         } else if (plc.enabled !== false && plc.running) {
-          const status = await postJson<PlcStatus>('/plc-monitor/stop', { admin_password: 'Admin@123' });
+          const status = await postJson<PlcStatus>('/plc-monitor/stop', {});
           setPlc(status);
         }
         monitorApplied = true;
@@ -4464,7 +4369,7 @@ export function App() {
         `Settings saved. Camera ${mergedSettings.ip}. Video: ${mergedSettings.capture_breakdown_video ? 'full event' : 'minor only'}.`,
       );
       if (!mergedSettings.plc_enabled && plc.enabled !== false && plc.running) {
-        const status = await postJson<PlcStatus>('/plc-monitor/stop', { admin_password: 'Admin@123' });
+        const status = await postJson<PlcStatus>('/plc-monitor/stop', {});
         setPlc(status);
       } else if (!monitorApplied && mergedSettings.plc_enabled && plc.enabled !== false && plc.running) {
         const status = await postJson<PlcStatus>('/plc-monitor/start', buildPlcPayload(mergedSettings));
@@ -4476,44 +4381,6 @@ export function App() {
       setSettingsMessageTone('bad');
       if (error) setSettingsMessage(error);
     }
-  }
-
-  function requestAdminAccess(action?: () => void) {
-    pendingAdminActionRef.current = action || null;
-    setAdminPromptPassword('');
-    setAdminPromptError('');
-    setAdminPromptShowPassword(false);
-    setAdminPromptOpen(true);
-  }
-
-  async function submitAdminAccess(event: FormEvent) {
-    event.preventDefault();
-    try {
-      const session = await authElevate(adminPromptPassword);
-      localStorage.setItem('mer_role', 'admin');
-      localStorage.setItem('mer_token', session.token);
-      setAuthToken(session.token);
-      setUserRole('admin');
-      setSettingsMessageTone('good');
-      setSettingsMessage('Admin access unlocked.');
-      setAdminPromptOpen(false);
-      setAdminPromptPassword('');
-      const action = pendingAdminActionRef.current;
-      pendingAdminActionRef.current = null;
-      action?.();
-      return;
-    } catch {
-      // Mock elevation removed for security. Only backend elevation is allowed.
-    }
-    setAdminPromptError('Incorrect ID or password.');
-  }
-
-  function cancelAdminAccess() {
-    pendingAdminActionRef.current = null;
-    setAdminPromptOpen(false);
-    setAdminPromptPassword('');
-    setAdminPromptError('');
-    setAdminPromptShowPassword(false);
   }
 
   async function testPlcSettings() {
@@ -4562,41 +4429,12 @@ export function App() {
         setRecording(status);
         return;
       }
-      const status = await postJson<PlcStatus>('/plc-monitor/stop', { admin_password: 'Admin@123' });
+      const status = await postJson<PlcStatus>('/plc-monitor/stop', {});
       setPlc(status);
     } catch (exc) {
       const error = friendlyError(exc);
       if (error) setMessage(error);
     }
-  }
-
-  function handleLogin(session: AuthSession) {
-    localStorage.setItem('mer_auth', 'true');
-    localStorage.setItem('mer_role', session.role);
-    localStorage.setItem('mer_token', session.token);
-    setAuthToken(session.token);
-    setUserRole(session.role);
-    setAuthenticated(true);
-  }
-
-  function showAdminRequired(action?: () => void) {
-    requestAdminAccess(action);
-  }
-
-  if (!authenticated) {
-    return <Login onLogin={handleLogin} />;
-  }
-
-  function logout() {
-    localStorage.removeItem('mer_auth');
-    localStorage.removeItem('mer_role');
-    localStorage.removeItem('mer_token');
-    setAuthToken('');
-    setAuthenticated(false);
-    setUserRole('user');
-    setPage('live');
-    setMessage('');
-    setSettingsMessage('');
   }
 
   const currentActiveCam = filteredCameras.find(c => c.id === activeCamId) || filteredCameras[0] || null;
@@ -4620,13 +4458,10 @@ export function App() {
         onTestPlc={testPlcSettings}
         onStartSmartRecording={startSmartRecording}
         onStopSmartRecording={stopSmartRecording}
-        onAdminRequired={showAdminRequired}
         settingsMessage={settingsMessage}
         settingsMessageTone={settingsMessageTone}
         plcTestResult={plcTestResult}
-        userRole={userRole}
         activeMachineName={currentActiveCam?.machine_name}
-        onLogout={logout}
       />
       <main className="content">
         <TopBar
@@ -4711,7 +4546,6 @@ export function App() {
             refreshToken={refreshToken}
             stats={stats}
             plc={plc}
-            userRole={userRole}
             onEditReason={() => undefined}
           />
         )}
@@ -4729,43 +4563,6 @@ export function App() {
         )}
 
       </main>
-      {adminPromptOpen && (
-        <div className="admin-modal-backdrop" role="presentation">
-          <form className="admin-modal-card" onSubmit={submitAdminAccess}>
-            <div className="admin-modal-icon"><Icon name="lock" /></div>
-            <div>
-              <span className="admin-modal-eyebrow">Protected Action</span>
-              <h2>Admin Password Required</h2>
-              <p>Enter admin password to unlock controls and continue this action.</p>
-            </div>
-            <label>
-              Admin password
-              <div className="admin-password-field">
-                <input
-                  autoFocus
-                  type={adminPromptShowPassword ? 'text' : 'password'}
-                  value={adminPromptPassword}
-                  onChange={(event) => setAdminPromptPassword(event.target.value)}
-                  placeholder="Admin password"
-                />
-                <button
-                  type="button"
-                  onClick={() => setAdminPromptShowPassword((value) => !value)}
-                  aria-label={adminPromptShowPassword ? 'Hide password' : 'Show password'}
-                  title={adminPromptShowPassword ? 'Hide password' : 'Show password'}
-                >
-                  <Icon name={adminPromptShowPassword ? 'eyeOff' : 'eye'} />
-                </button>
-              </div>
-            </label>
-            {adminPromptError && <div className="admin-modal-error">{adminPromptError}</div>}
-            <div className="admin-modal-actions">
-              <button type="button" onClick={cancelAdminAccess}>Cancel</button>
-              <button type="submit">Unlock</button>
-            </div>
-          </form>
-        </div>
-      )}
       <button className="sidebar-toggle" type="button" title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} onClick={() => setSidebarCollapsed((value) => !value)}>
         <Icon name="chevron" />
       </button>

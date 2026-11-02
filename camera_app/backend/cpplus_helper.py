@@ -66,7 +66,7 @@ import requests
 import uvicorn
 import urllib3
 import websockets
-from fastapi import FastAPI, Header, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from dotenv import load_dotenv
@@ -336,11 +336,6 @@ class CameraRequest(BaseModel):
     rtsp_path: str | None = None
     start_at: str | None = None
     end_at: str | None = None
-
-
-class LoginRequest(BaseModel):
-    username: str
-    password: str
 
 
 class DownloadRequest(CameraRequest):
@@ -1396,31 +1391,6 @@ def settings_to_plc_request(settings: HelperSettings) -> PlcMonitorRequest:
         poll_seconds=1.0,
         max_record_seconds=settings.max_record_seconds,
     )
-
-
-AUTH_USERS = {
-    'ricosuper': {'password': 'Ricoautosuper@321', 'role': 'superadmin', 'username': 'Ricosuper'},
-    'ricoadmin': {'password': 'RicoAdmin@321', 'role': 'admin', 'username': 'Ricoadmin'},
-    'operator': {'password': 'operator', 'role': 'user', 'username': 'operator'},
-    'user': {'password': 'user', 'role': 'user', 'username': 'user'},
-}
-AUTH_SESSIONS: dict[str, str] = {}
-AUTH_LOCK = threading.Lock()
-
-
-def auth_session(username: str, password: str) -> dict:
-    # Login security bypassed: always return a valid superadmin session
-    return {'username': 'ricosuper', 'role': 'superadmin', 'token': 'mock-token-superadmin'}
-
-
-def role_from_token(token: str | None) -> str | None:
-    # Login security bypassed: always return superadmin
-    return 'superadmin'
-
-
-def require_role(token: str | None, allowed_roles: set[str]) -> str:
-    # Login security bypassed: always allow with superadmin privileges
-    return 'superadmin'
 
 
 def safe_camera_folder(ip: str, channel: int) -> str:
@@ -3643,18 +3613,6 @@ def camera_diagnostics(request: CameraRequest):
     }
 
 
-@app.post('/auth/login')
-def auth_login(request: LoginRequest):
-    return auth_session(request.username, request.password)
-
-
-@app.post('/auth/elevate')
-def auth_elevate(request: LoginRequest):
-    if request.username.strip().lower() != 'ricoadmin':
-        raise HTTPException(status_code=401, detail='Incorrect ID or password.')
-    return auth_session(request.username, request.password)
-
-
 @app.post('/recordings')
 def recordings(request: CameraRequest):
     if not request.start_at or not request.end_at:
@@ -4219,8 +4177,7 @@ def start_recording_internal(request: RecordingRequest):
 
 
 @app.post('/recording/start')
-def start_recording(request: RecordingRequest, x_auth_token: str | None = Header(default=None)):
-    require_role(x_auth_token, {'superadmin', 'admin'})
+def start_recording(request: RecordingRequest):
     return start_recording_internal(request)
 
 
@@ -4244,8 +4201,7 @@ def stop_recording_internal():
 
 
 @app.post('/recording/stop')
-def stop_recording(x_auth_token: str | None = Header(default=None)):
-    require_role(x_auth_token, {'superadmin', 'admin'})
+def stop_recording():
     return stop_recording_internal()
 
 
@@ -4622,8 +4578,7 @@ def apply_helper_settings(settings: HelperSettings) -> HelperSettings:
 
 
 @app.post('/settings')
-def update_settings(settings: HelperSettings, x_auth_token: str | None = Header(default=None)):
-    require_role(x_auth_token, {'superadmin'})
+def update_settings(settings: HelperSettings):
     return apply_helper_settings(settings).model_dump()
 
 
@@ -4676,8 +4631,7 @@ def get_recording_target():
 
 
 @app.post('/api/hierarchy/cameras/{camera_id}/recording-mode')
-def set_camera_recording_mode(camera_id: int, request: CameraRecordingModeRequest, x_auth_token: str | None = Header(default=None)):
-    require_role(x_auth_token, {'superadmin', 'admin'})
+def set_camera_recording_mode(camera_id: int, request: CameraRecordingModeRequest):
     mode = request.mode.strip().lower()
     if mode not in {'live', 'event'}:
         raise HTTPException(status_code=400, detail="mode must be 'live' or 'event'")
@@ -4771,14 +4725,12 @@ def start_plc_monitor_internal(request: PlcMonitorRequest):
 
 
 @app.post('/plc-monitor/start')
-def start_plc_monitor(request: PlcMonitorRequest, x_auth_token: str | None = Header(default=None)):
-    require_role(x_auth_token, {'superadmin', 'admin'})
+def start_plc_monitor(request: PlcMonitorRequest):
     return start_plc_monitor_internal(request)
 
 
 @app.post('/plc-test')
-def plc_test(request: PlcMonitorRequest, x_auth_token: str | None = Header(default=None)):
-    require_role(x_auth_token, {'superadmin'})
+def plc_test(request: PlcMonitorRequest):
     tested_ports = []
     selected_port = None
     reachable = False
@@ -4823,8 +4775,7 @@ def plc_test(request: PlcMonitorRequest, x_auth_token: str | None = Header(defau
 
 
 @app.post('/plc-monitor/stop')
-def stop_plc_monitor(x_auth_token: str | None = Header(default=None)):
-    require_role(x_auth_token, {'superadmin', 'admin'})
+def stop_plc_monitor():
     plc_monitor_state['enabled'] = False
     plc_monitor_stop_event.set()
     if plc_monitor_thread and plc_monitor_thread.is_alive():
