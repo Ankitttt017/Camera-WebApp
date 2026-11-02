@@ -1,11 +1,6 @@
 const DEFAULT_API_BASE = `${window.location.protocol}//${window.location.hostname}:8010`;
 
 export const API_BASE = import.meta.env.VITE_HELPER_URL || DEFAULT_API_BASE;
-let AUTH_TOKEN = window.localStorage.getItem('mer_token') || '';
-
-export function setAuthToken(token: string) {
-  AUTH_TOKEN = token;
-}
 
 export type CameraSettings = {
   ip: string;
@@ -59,12 +54,6 @@ export type RecordingStatus = {
     fps?: number | null;
     last_error?: string | null;
   };
-};
-
-export type AuthSession = {
-  username: string;
-  role: 'superadmin' | 'admin' | 'user';
-  token: string;
 };
 
 export type PlcStatus = {
@@ -218,7 +207,6 @@ export function buildPlcPayload(settings: CameraSettings) {
     gate_close_when: isXDevice ? true : false,
     poll_seconds: 1,
     max_record_seconds: Math.max(1, Number(settings.max_record_seconds || 30)),
-    admin_password: 'Pass-RicoAuto123',
   };
 }
 
@@ -231,16 +219,11 @@ export function buildSettingsPayload(settings: CameraSettings) {
     plc_device: settings.plc_device.trim() || 'M',
     plc_address: settings.plc_address.trim() || '810',
     max_record_seconds: Math.max(1, Number(settings.max_record_seconds || 300)),
-    admin_password: 'Pass-RicoAuto123',
   };
 }
 
 export async function getJson<T>(path: string): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
-    headers: {
-      ...(AUTH_TOKEN ? { 'X-Auth-Token': AUTH_TOKEN } : {}),
-    },
-  });
+  const response = await fetch(`${API_BASE}${path}`);
   return parseResponse<T>(response);
 }
 
@@ -249,19 +232,10 @@ export async function postJson<T>(path: string, payload: unknown): Promise<T> {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      ...(AUTH_TOKEN ? { 'X-Auth-Token': AUTH_TOKEN } : {}),
     },
     body: JSON.stringify(payload),
   });
   return parseResponse<T>(response);
-}
-
-export async function authLogin(username: string, password: string): Promise<AuthSession> {
-  return postJson<AuthSession>('/auth/login', { username, password });
-}
-
-export async function authElevate(password: string): Promise<AuthSession> {
-  return postJson<AuthSession>('/auth/elevate', { username: 'Ricoadmin', password });
 }
 
 export function queryUrl(path: string, params: Record<string, string | number | boolean | null | undefined>) {
@@ -478,7 +452,7 @@ export async function createPlant(data: { code: string; name: string; location?:
 export async function updatePlant(id: number, data: Partial<{ code: string; name: string; location?: string; is_active?: boolean }>) {
   const res = await fetch(`${API_BASE}/api/hierarchy/plants/${id}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json', ...(AUTH_TOKEN ? { 'x-auth-token': AUTH_TOKEN } : {}) },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
   return parseResponse<{ message: string }>(res);
@@ -487,7 +461,6 @@ export async function updatePlant(id: number, data: Partial<{ code: string; name
 export async function deletePlant(id: number) {
   const res = await fetch(`${API_BASE}/api/hierarchy/plants/${id}`, {
     method: 'DELETE',
-    headers: AUTH_TOKEN ? { 'x-auth-token': AUTH_TOKEN } : {},
   });
   return parseResponse<{ message: string }>(res);
 }
@@ -499,7 +472,7 @@ export async function createDepartment(data: { plant_id: number; code: string; n
 export async function updateDepartment(id: number, data: Partial<{ plant_id?: number; code?: string; name?: string; is_active?: boolean }>) {
   const res = await fetch(`${API_BASE}/api/hierarchy/departments/${id}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json', ...(AUTH_TOKEN ? { 'x-auth-token': AUTH_TOKEN } : {}) },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
   return parseResponse<{ message: string }>(res);
@@ -508,7 +481,6 @@ export async function updateDepartment(id: number, data: Partial<{ plant_id?: nu
 export async function deleteDepartment(id: number) {
   const res = await fetch(`${API_BASE}/api/hierarchy/departments/${id}`, {
     method: 'DELETE',
-    headers: AUTH_TOKEN ? { 'x-auth-token': AUTH_TOKEN } : {},
   });
   return parseResponse<{ message: string }>(res);
 }
@@ -520,7 +492,7 @@ export async function createLine(data: { department_id: number; code: string; na
 export async function updateLine(id: number, data: Partial<{ department_id?: number; code?: string; name?: string; is_active?: boolean }>) {
   const res = await fetch(`${API_BASE}/api/hierarchy/lines/${id}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json', ...(AUTH_TOKEN ? { 'x-auth-token': AUTH_TOKEN } : {}) },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
   return parseResponse<{ message: string }>(res);
@@ -529,7 +501,6 @@ export async function updateLine(id: number, data: Partial<{ department_id?: num
 export async function deleteLine(id: number) {
   const res = await fetch(`${API_BASE}/api/hierarchy/lines/${id}`, {
     method: 'DELETE',
-    headers: AUTH_TOKEN ? { 'x-auth-token': AUTH_TOKEN } : {},
   });
   return parseResponse<{ message: string }>(res);
 }
@@ -561,7 +532,7 @@ export async function updateMachine(id: number, data: Partial<{
 }>) {
   const res = await fetch(`${API_BASE}/api/hierarchy/machines/${id}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json', ...(AUTH_TOKEN ? { 'x-auth-token': AUTH_TOKEN } : {}) },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
   return parseResponse<{ message: string }>(res);
@@ -570,7 +541,6 @@ export async function updateMachine(id: number, data: Partial<{
 export async function deleteMachine(id: number) {
   const res = await fetch(`${API_BASE}/api/hierarchy/machines/${id}`, {
     method: 'DELETE',
-    headers: AUTH_TOKEN ? { 'x-auth-token': AUTH_TOKEN } : {},
   });
   return parseResponse<{ message: string }>(res);
 }
@@ -606,7 +576,7 @@ export async function updateCamera(id: number, data: Partial<{
 }>) {
   const res = await fetch(`${API_BASE}/api/hierarchy/cameras/${id}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json', ...(AUTH_TOKEN ? { 'x-auth-token': AUTH_TOKEN } : {}) },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
   return parseResponse<{ message: string }>(res);
@@ -615,7 +585,6 @@ export async function updateCamera(id: number, data: Partial<{
 export async function deleteCamera(id: number) {
   const res = await fetch(`${API_BASE}/api/hierarchy/cameras/${id}`, {
     method: 'DELETE',
-    headers: AUTH_TOKEN ? { 'x-auth-token': AUTH_TOKEN } : {},
   });
   return parseResponse<{ message: string }>(res);
 }

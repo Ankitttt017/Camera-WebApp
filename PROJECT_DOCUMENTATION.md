@@ -137,7 +137,7 @@ Camera-WebApp/
 │   │   └── init_hierarchy_db.py   # Creates/seeds hierarchy tables; adds hierarchy columns to recordings
 │   ├── frontend/
 │   │   ├── src/
-│   │   │   ├── App.tsx            # Shell, login, Live page, Event Report, reason dialog, video player
+│   │   │   ├── App.tsx            # Shell, Live page, Event Report, reason dialog, video player
 │   │   │   ├── LiveStreamImage.tsx   # Self-reconnecting live MJPEG viewer
 │   │   │   ├── VideoTranscript.tsx   # Timed captions + operator voice panel in the player
 │   │   │   ├── HierarchyManager.tsx  # Plants & Cameras page (live / event recording mode)
@@ -281,14 +281,13 @@ Timestamps are stored as **ISO text, not DATETIME**, which matters for range que
 
 Base URL: `http://<node>:8010`. Interactive docs: `http://<node>:8010/docs`.
 
-> **Authentication is currently bypassed.** Every caller is treated as `superadmin` (see §11).
+> **There is no login.** Every endpoint is open to anyone who can reach the backend (see §11).
 
 ### 8.1 System & settings
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/settings` | Current `helper_settings.json` (⚠ includes camera password) |
 | POST | `/settings` | Save settings (`HelperSettings`) |
-| POST | `/auth/login`, `/auth/elevate` | Login (currently always succeeds) |
 
 ### 8.2 PLC
 | Method | Path | Purpose |
@@ -422,14 +421,12 @@ curl -X POST -H 'Content-Type: application/json' -d '{}' http://<node>:8010/reco
 This list comes from a code and live-system review on 2026-10-21. It is ordered by severity.
 
 ### Security (fix before exposing beyond the plant LAN)
-1. **Auth is disabled.**
-   - `auth_session` / `role_from_token` / `require_role` always return `superadmin` (`cpplus_helper.py:1299-1311`), and `App.tsx:4579` hardcodes `authenticated = true`.
-   - `/api/hierarchy` has no auth at all.
+1. **There is no login.**
+   - Login was removed on 2026-11-02 (it had been bypassed anyway). Every API, including `/settings`, `/plc-monitor/*` and `/api/hierarchy`, is open to anyone who can reach port 8010.
+   - Limit port 8010 to the PCs that need it (firewall) until access control is added.
 2. **Hardcoded credentials.**
    - The camera password appears in about 20 places across backend and frontend.
    - The SQL password is still the env default in `db.py`; remove the default once the server `.env` is confirmed to set `DB_PASSWORD`.
-   - App user passwords are in `AUTH_USERS`.
-   - Admin passwords are in `api.ts`.
    - `helper_settings.json` (with a password) is tracked in git.
    - **Rotate all of these** and load them only from `.env`.
 3. **Passwords are exposed at runtime.**
