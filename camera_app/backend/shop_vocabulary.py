@@ -140,6 +140,13 @@ ALIASES = {
     'moving side': ('boving saind', 'moving saind', 'boving side', 'mobing side'),
     'chipka hai': ('chif ka hai',),
     'automation': ('atomesan', 'otomesan', 'automesan', 'atomation'),
+    # 31 Oct: safety door signal, extractor system fault, loose bolt
+    'safety door': ('shefki door', 'sefti door', 'shefti door'),
+    'door open': ('dor opan', 'dor upan', 'door opan', 'door upan'),
+    'system fault': ('sistam fald', 'system fald', 'sistam fault'),
+    'bolt loose': ('bolt luj',),
+    'tight karke': ('tait karke', 'taid karke'),
+    'maintenance vale': ('tenens vale', 'mentens vale'),
 }
 # applied after the machine spellings above have been fixed
 PHRASE_ALIASES = {

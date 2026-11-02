@@ -2215,9 +2215,10 @@ def foreign_script(text: str) -> bool:
 def corrected_transcript(text: str | None) -> str | None:
     """Shop-vocabulary fixes applied when a transcript is shown, so voice notes saved before a
     vocabulary update read correctly too. The stored text is never changed."""
-    if not text or TRANSCRIPTION_OUTPUT_SCRIPT != 'roman' or not SHOP_TERMS:
+    if not text or TRANSCRIPTION_OUTPUT_SCRIPT != 'roman':
         return text
-    return correct_shop_terms(text, SHOP_TERMS)
+    text = devanagari_to_hinglish(text) or text   # notes saved before Hinglish output
+    return correct_shop_terms(text, SHOP_TERMS) if SHOP_TERMS else text
 
 
 def transcript_for_display(text: str) -> str:

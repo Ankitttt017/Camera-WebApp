@@ -9,6 +9,8 @@ inherent 'a' is dropped at word end and in the usual medial positions (कमल
 """
 from __future__ import annotations
 
+import re
+
 VOWELS = {
     'अ': 'a', 'आ': 'a', 'इ': 'i', 'ई': 'i', 'उ': 'u', 'ऊ': 'u', 'ऋ': 'ri', 'ए': 'e', 'ऐ': 'ai',
     'ओ': 'o', 'औ': 'au', 'ऑ': 'o', 'ऍ': 'e',
@@ -113,6 +115,10 @@ ENGLISH_WORDS = {
 }
 
 
+# Anything still in Devanagari after transliteration is a sign Whisper glued on ("auॉr"); it has no sound there
+_STRAY_SIGN = re.compile(r'[\u0900-\u097F\uFFFD]+')
+
+
 def devanagari_to_hinglish(text: str | None) -> str | None:
     if not text:
         return text
@@ -126,5 +132,5 @@ def devanagari_to_hinglish(text: str | None) -> str | None:
             words.append(ENGLISH_WORDS[core] + tail.replace('।', '.').replace('॥', '.'))
         else:
             words.append(_word(word))
-    out = ' '.join(words)
+    out = _STRAY_SIGN.sub('', ' '.join(words))
     return out[:1].upper() + out[1:] if out else out
