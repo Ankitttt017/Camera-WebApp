@@ -15,9 +15,11 @@ from pydantic import BaseModel, Field
 
 try:
     from .db import get_db_connection, PrefixCursor
+    from .plc_slmp import slmp_read_m_bit
     from .stream_pool import placeholder_jpeg, stream_pool
 except (ImportError, ValueError):
     from db import get_db_connection, PrefixCursor
+    from plc_slmp import slmp_read_m_bit
     from stream_pool import placeholder_jpeg, stream_pool
 
 router = APIRouter(prefix="/api/hierarchy", tags=["Hierarchy"])
@@ -319,23 +321,27 @@ def test_camera_connection(req: TestCameraRequest):
 
 @router.post("/test-plc")
 def test_plc_connection(req: TestPlcRequest):
-    """Test TCP socket connection to Mitsubishi / SLMP PLC."""
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.settimeout(3.0)
-            res = s.connect_ex((req.plc_host, req.plc_port))
-            if res == 0:
-                return {
-                    "ok": True,
-                    "message": f"PLC reached successfully at {req.plc_host}:{req.plc_port}!"
-                }
-            else:
-                return {
-                    "ok": False,
-                    "message": f"Connection refused/timed out on {req.plc_host}:{req.plc_port} (Error code: {res})"
-                }
-    except Exception as exc:
-        return {"ok": False, "message": f"PLC connection error: {exc}"}
+    """Read the machine's gate bit over SLMP, the same way the PLC monitor does (UDP on 5000-5004, else TCP).
+    A plain TCP connect reported "refused" for PLCs that only answer SLMP over UDP."""
+    host = req.plc_host.strip()
+    device = (req.plc_device or 'X').strip().upper()
+    address = (req.plc_address or '').strip().upper()
+    ports = [int(req.plc_port)] + [p for p in (5000, 5001) if p != int(req.plc_port)]
+    errors = []
+    for port in ports:
+        try:
+            value = slmp_read_m_bit(host, port, device, address, timeout=2.0)
+        except Exception as exc:
+            errors.append(f"{port}: {exc}")
+            continue
+        note = '' if port == int(req.plc_port) else f' (answered on port {port}, not {req.plc_port})'
+        return {
+            "ok": True,
+            "port": port,
+            "value": value,
+            "message": f"PLC answered at {host}:{port}{note}. {device}{address} is {'ON' if value else 'OFF'}.",
+        }
+    return {"ok": False, "message": f"No SLMP answer from {host} for {device}{address}. " + '; '.join(errors)[:300]}
 
 
 # --- Dynamic Live Stream per Camera ---

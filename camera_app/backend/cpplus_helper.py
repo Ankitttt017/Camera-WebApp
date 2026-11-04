@@ -122,10 +122,12 @@ try:
     from .speech_gate import SAMPLE_RATE as SPEECH_GATE_SAMPLE_RATE, SpeechGate, load_vad_session
     from .hinglish import devanagari_to_hinglish
     from .shop_vocabulary import correct_shop_terms, parse_terms as parse_shop_terms
+    from .plc_slmp import slmp_read_m_bit
 except (ImportError, ValueError):
     from speech_gate import SAMPLE_RATE as SPEECH_GATE_SAMPLE_RATE, SpeechGate, load_vad_session
     from hinglish import devanagari_to_hinglish
     from shop_vocabulary import correct_shop_terms, parse_terms as parse_shop_terms
+    from plc_slmp import slmp_read_m_bit
 
 _SPEECH_GATE_SESSION: list = []
 
@@ -1083,91 +1085,6 @@ def snapshot_urls(ip: str, port: int, channel_no: int) -> list[str]:
             f'{base}/ISAPI/Streaming/channels/{channel_no}01/picture',
         ])
     return urls
-
-
-def slmp_read_m_bit(host: str, port: int, device: str, address: int | str, timeout: float = 3.0) -> bool:
-    device_codes = {
-        'M': 0x90,
-        'X': 0x9C,
-        'Y': 0x9D,
-        'L': 0x92,
-        'F': 0x93,
-        'B': 0xA0,
-    }
-    device_text = device.upper()
-    device_code = device_codes.get(device_text)
-    if device_code is None:
-        raise ValueError(f'Unsupported SLMP device: {device}')
-    address_text = str(address).strip().upper()
-    if address_text.startswith(device_text):
-        address_text = address_text[len(device_text):]
-    address_number = int(address_text, 16) if device_text in {'X', 'Y'} else int(address_text, 10)
-
-    payload = (
-        (0x0010).to_bytes(2, 'little')
-        + (0x0401).to_bytes(2, 'little')
-        + (0x0001).to_bytes(2, 'little')
-        + address_number.to_bytes(3, 'little')
-        + bytes([device_code])
-        + (1).to_bytes(2, 'little')
-    )
-    frame = (
-        b'\x50\x00'
-        + b'\x00'
-        + b'\xff'
-        + b'\xff\x03'
-        + b'\x00'
-        + len(payload).to_bytes(2, 'little')
-        + payload
-    )
-
-    response = None
-    last_err = None
-    port_int = int(port)
-
-    # 1. Try UDP first if port is in standard UDP SLMP port range (5000-5003)
-    if port_int in {5000, 5001, 5002, 5003, 5004}:
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-                sock.settimeout(timeout)
-                sock.sendto(frame, (host, port_int))
-                response, _ = sock.recvfrom(1024)
-        except Exception as udp_err:
-            last_err = udp_err
-            response = None
-
-    # 2. Try TCP
-    if response is None:
-        try:
-            with socket.create_connection((host, port_int), timeout=timeout) as sock:
-                sock.settimeout(timeout)
-                sock.sendall(frame)
-                response = sock.recv(1024)
-        except Exception as tcp_err:
-            last_err = tcp_err
-            # 3. Fallback to UDP if TCP fails
-            try:
-                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-                    sock.settimeout(timeout)
-                    sock.sendto(frame, (host, port_int))
-                    response, _ = sock.recvfrom(1024)
-            except Exception:
-                raise last_err
-
-    if len(response) < 11:
-        raise RuntimeError(f'SLMP short response for {device}{address}: {response.hex(" ")}')
-    end_code = int.from_bytes(response[9:11], 'little')
-    if end_code != 0:
-        raise RuntimeError(f'SLMP error for {device}{address}: 0x{end_code:04X}')
-    data = response[11:]
-    if not data:
-        raise RuntimeError(f'SLMP no data for {device}{address}')
-    # SLMP 3E binary (0401/0001): 1-point bit read response.
-    # The requested bit (point 1) is returned in the UPPER nibble (bits 4-7).
-    # The lower nibble (bits 0-3) is 0-padded for odd/1-point reads.
-    # Bit ON: data[0] == 0x10 -> ((0x10 >> 4) & 0x0F) == 1 -> True
-    # Bit OFF: data[0] == 0x00 -> ((0x00 >> 4) & 0x0F) == 0 -> False
-    return bool((data[0] >> 4) & 0x0F)
 
 
 def plc_candidate_ports(primary_port: int | str | None) -> list[int]:
@@ -2335,15 +2252,30 @@ def update_recording_reason(request: RecordingReasonRequest) -> dict:
 
 
 def scan_recording_index(request: RecordingIndexRequest) -> dict:
+    """Refresh: add recordings that are on disk but missing from the index.
+
+    Rows already in the index are left alone: index_recording_file overwrites every column, so
+    re-indexing them from a sidecar could undo a reason or end time saved since. Only files with the
+    recording worker's sidecar (.json with started_at) are added; anything else is not an event."""
     root = recording_folder(request.storage_root)
     db_path = init_recording_index(root)
+    with get_db_connection() as connection:
+        cursor = PrefixCursor(connection.cursor())
+        known = {str(row[0]) for row in cursor.execute("SELECT file_path FROM recordings").fetchall()}
     indexed = 0
     for video_path in root.rglob('*'):
-        if video_path.is_file() and video_path.suffix.lower() in {'.mp4', '.webm', '.mov', '.m4v', '.avi', '.mkv', '.dav'}:
-            if video_path.stem.endswith('_recording'):
-                continue
-            index_recording_file(root, video_path)
+        if not video_path.is_file() or video_path.suffix.lower() not in {'.mp4', '.webm', '.mov', '.m4v', '.avi', '.mkv', '.dav'}:
+            continue
+        if video_path.stem.endswith(('_recording', '.clean')) or str(video_path) in known:
+            continue
+        metadata = load_sidecar_metadata(video_path)
+        if not metadata.get('started_at'):
+            continue
+        try:
+            index_recording_file(str(root), video_path, {'file_name': video_path.name, 'status': 'completed', **metadata})
             indexed += 1
+        except Exception as exc:
+            print(f'[Warning] Refresh could not index {video_path}: {exc}')
     pruned = prune_missing_recordings(root)
     result = list_recording_index(request)
     return {'db_path': str(db_path), 'indexed': indexed, 'pruned': pruned, **result}
@@ -2595,6 +2527,7 @@ def recording_stats(request: RecordingIndexRequest) -> dict:
         today_total = scalar(connection, f"SELECT COUNT(*) FROM recordings{where}", params)
         today_minor = scalar(connection, f"SELECT COUNT(*) FROM recordings{where} AND (event_type = 'minor_stoppage' OR event_type IS NULL)", params)
         today_breakdown = scalar(connection, f"SELECT COUNT(*) FROM recordings{where} AND event_type = 'breakdown'", params)
+        today_self_capture = scalar(connection, f"SELECT COUNT(*) FROM recordings{where} AND event_type IN ('self_capture', 'manual')", params)
         today_recorded = scalar(connection, f"SELECT SUM(COALESCE(event_duration_seconds, duration_seconds, 0)) FROM recordings{where}", params)
         today_breakdown_duration = scalar(connection, f"SELECT SUM(COALESCE(event_duration_seconds, duration_seconds, 0)) FROM recordings{where} AND event_type = 'breakdown'", params)
         today_storage = scalar(connection, f"SELECT SUM(COALESCE(file_size, 0)) FROM recordings{where}", params)
@@ -2635,6 +2568,8 @@ def recording_stats(request: RecordingIndexRequest) -> dict:
             if active_row.get('event_type') == 'breakdown':
                 today_breakdown += 1
                 today_breakdown_duration += float(active_row.get('event_duration_seconds') or active_row.get('duration_seconds') or 0)
+            elif active_row.get('event_type') in {'self_capture', 'manual'}:
+                today_self_capture += 1
             else:
                 today_minor += 1
             today_recorded += float(active_row.get('event_duration_seconds') or active_row.get('duration_seconds') or 0)
@@ -2650,6 +2585,7 @@ def recording_stats(request: RecordingIndexRequest) -> dict:
             'total_events': int(today_total),
             'minor_stoppage_count': int(today_minor),
             'breakdown_count': int(today_breakdown),
+            'self_capture_count': int(today_self_capture),
             'recorded_duration_seconds': float(today_recorded),
             'breakdown_duration_seconds': float(today_breakdown_duration),
             'storage_used': int(today_storage),
@@ -2736,7 +2672,7 @@ def recording_export_rows(request: RecordingIndexRequest, records: list[dict] | 
         report_rows.append([
             index,
             format_report_datetime(row.get('started_at')),
-            format_report_time(row.get('event_ended_at') or row.get('ended_at')),
+            format_report_end(row.get('started_at'), row.get('event_ended_at') or row.get('ended_at')),
             format_report_duration(row.get('duration_seconds')),
             format_report_duration(event_duration),
             format_report_size(row.get('file_size')),
@@ -2884,6 +2820,14 @@ def format_report_time(value: object) -> str:
     if not parsed:
         return str(value or '')
     return parsed.strftime('%H:%M:%S')
+
+
+def format_report_end(start: object, end: object) -> str:
+    """End time alone, or date and time when the event ended on a later day (a breakdown can run overnight)."""
+    started, ended = parse_report_datetime(start), parse_report_datetime(end)
+    if ended and started and ended.date() != started.date():
+        return format_report_datetime(end)
+    return format_report_time(end)
 
 
 def format_report_duration(value: object) -> str:

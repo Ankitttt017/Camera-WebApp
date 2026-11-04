@@ -142,6 +142,8 @@ export type RecordingStats = {
     total_events: number;
     minor_stoppage_count: number;
     breakdown_count: number;
+    /** Manual (Self Capture) recordings: part of total_events, not a stoppage. */
+    self_capture_count?: number;
     recorded_duration_seconds: number;
     breakdown_duration_seconds: number;
     storage_used: number;
