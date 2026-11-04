@@ -356,8 +356,10 @@ function emptyStats(): RecordingStats {
 
 function statsFromRecords(records: RecordingRecord[]): RecordingStats {
   const totalEvents = records.length;
-  const minorCount = records.filter((record) => record.event_type !== 'breakdown').length;
+  const isManual = (record: RecordingRecord) => record.event_type === 'self_capture' || record.event_type === 'manual';
+  const selfCaptureCount = records.filter(isManual).length;
   const breakdownCount = records.filter((record) => record.event_type === 'breakdown').length;
+  const minorCount = totalEvents - breakdownCount - selfCaptureCount;
   const recordedDuration = records.reduce((sum, record) => sum + Number(eventDuration(record) || 0), 0);
   const breakdownDuration = records
     .filter((record) => record.event_type === 'breakdown')
@@ -372,6 +374,7 @@ function statsFromRecords(records: RecordingRecord[]): RecordingStats {
       total_events: totalEvents,
       minor_stoppage_count: minorCount,
       breakdown_count: breakdownCount,
+      self_capture_count: selfCaptureCount,
       recorded_duration_seconds: recordedDuration,
       breakdown_duration_seconds: breakdownDuration,
       storage_used: storageUsed,
@@ -402,6 +405,8 @@ function KpiCards({ stats, thresholdSeconds }: { stats: RecordingStats; threshol
     { label: 'Total events', value: totalEvents, icon: 'calendar', tone: 'blue' },
     { label: `Minor stoppage (< ${threshold})`, value: stats.today.minor_stoppage_count || 0, icon: 'pause', tone: 'amber' },
     { label: `Breakdown (> ${threshold})`, value: stats.today.breakdown_count || 0, icon: 'alert', tone: 'red' },
+    // Manual recordings count in the total; show them so the cards add up
+    ...(stats.today.self_capture_count ? [{ label: 'Manual recording', value: stats.today.self_capture_count, icon: 'record' as IconName, tone: 'slate' }] : []),
     { label: 'Avg event duration', value: averageDuration > 0 ? formatDuration(averageDuration) : '—', icon: 'clock', tone: 'violet' },
   ];
 
@@ -642,6 +647,7 @@ function reportCategoryLabel(value: string, thresholdSeconds: number) {
   const threshold = stoppageThresholdLabel(thresholdSeconds);
   if (value === 'breakdown') return `Breakdown (> ${threshold})`;
   if (value === 'minor_stoppage') return `Minor Stoppage (< ${threshold})`;
+  if (value === 'self_capture') return 'Manual recording';
   return 'All Categories';
 }
 
@@ -2145,7 +2151,8 @@ function SavedPage({
     const range = presetDateRange(value, fromDate, toDate);
     const nFrom = range?.fromDate || fromDate;
     const nTo = range?.toDate || toDate;
-    if (range && value !== 'custom') {
+    // Every preset except Custom applies at once; "All time" has no range but must apply too
+    if (value !== 'custom') {
       setFromDate(nFrom);
       setToDate(nTo);
       setAppliedFilters(prev => ({
@@ -2529,6 +2536,7 @@ function SavedPage({
               <option value="all">All categories</option>
               <option value="minor_stoppage">Minor stoppage (&lt; {stoppageThresholdLabel(settings.max_record_seconds)})</option>
               <option value="breakdown">Breakdown (&gt; {stoppageThresholdLabel(settings.max_record_seconds)})</option>
+              <option value="self_capture">Manual recording</option>
             </select>
           </label>
           <label className="er-field">

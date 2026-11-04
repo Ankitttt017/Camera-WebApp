@@ -5513,7 +5513,15 @@ nav button.active .nav-count {
   .hm-page { padding: 12px 16px 24px; }
   .hm-grid-2, .hm-grid-3, .hm-grid-4, .hm-mode-cards { grid-template-columns: 1fr; }
   .hm-line { margin-left: 4px; padding-left: 10px; }
-  .hm-cams { grid-template-columns: 1fr; }
+  .hm-cams { grid-template-columns: minmax(0, 1fr); }
+}
+/* phones: camera card stacks (preview on top) so name, IP and the mode buttons fit the width */
+@media (max-width: 480px) {
+  .hm-cam { flex-direction: column; }
+  .hm-cam-thumb { width: 100%; }
+  .hm-cam-name span { overflow-wrap: anywhere; }
+  .hm-mode { flex-wrap: wrap; }
+  .hm-cam-actions { flex-wrap: wrap; }
 }
 /* plain-text labels inside the Plants & Cameras page (global label rule is uppercase) */
 .hm-mode-card, .hm-field { margin: 0; text-transform: none; letter-spacing: normal; font-size: inherit; color: inherit; }
@@ -5876,7 +5884,9 @@ nav button.active .nav-count {
   }
   .sh-body { padding: 16px 12px !important; }
   .sh-card { padding: 18px 16px !important; }
-  .sh-grid { grid-template-columns: 1fr !important; }
+  /* minmax(0, 1fr): a long unbroken value (the storage path) must not widen the column past the card */
+  .sh-grid { grid-template-columns: minmax(0, 1fr) !important; }
+  .sh-grid > * { min-width: 0; overflow-wrap: anywhere; }
   .sh-grid input, .sh-grid select { width: 100%; min-width: 0; box-sizing: border-box; }
   .sh-switch-card { flex-direction: column; align-items: stretch !important; }
   .sh-switch-card > button { justify-content: center; }
@@ -5888,3 +5898,6 @@ nav button.active .nav-count {
   .er-actions { justify-self: stretch; }
   .er-actions .er-btn-play { flex: 1; justify-content: center; }
 }
+
+/* Settings grids: long unbroken values (storage path, URLs) wrap instead of widening the column */
+.sh-grid > * { min-width: 0; overflow-wrap: anywhere; }

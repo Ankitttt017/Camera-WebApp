@@ -309,7 +309,7 @@ Base URL: `http://<node>:8010`. Interactive docs: `http://<node>:8010/docs`.
 |---|---|---|
 | POST | `/recording-index/list` | `RecordingIndexRequest`: `storage_root`, `start_at`, `end_at`, `event_type`, `shift`, `duration_filter`, `machine`, `page`, `page_size` (default 50) |
 | POST | `/recording-index/stats` | Same filters → KPI totals |
-| POST | `/recording-index/scan` | Re-index files on disk (⚠ currently broken, §11) |
+| POST | `/recording-index/scan` | Refresh: add recordings on disk that are missing from the index (§11) |
 | GET | `/recording-index/export.csv`, `/export.xlsx` | Same filters as query params |
 | GET | `/recording-file?storage_root=&file_path=&download=` | Video with range support |
 | GET / POST | `/reasons` | List / add reason options |
@@ -446,7 +446,7 @@ This list comes from a code and live-system review on 2026-10-21. It is ordered 
 11. **Mixed `status` values.** `status` mixes system values (`completed`) with UI free text (`Pending`).
 
 ### Reliability
-12. **Re-indexing is broken.** `/recording-index/scan` calls `index_recording_file` without its `record` argument, so it raises TypeError.
+12. **Re-indexing adds only.** Fixed 2026-11-04: `/recording-index/scan` (Refresh) adds recordings that have a sidecar `.json` but no index row. It never re-indexes existing rows, so a change made directly in a sidecar is not picked up.
 13. **State can stick at running.** If indexing raises in the recording worker, `recording_state['running']` stays `True`.
 14. **Ineffective lock.** `with threading.Lock():` at `cpplus_helper.py:2136` creates a new lock each call. The shared state dicts are not synchronised.
 15. **Blocking proxy.** The async camera proxy routes call blocking `requests`, so a slow camera stalls the event loop.
