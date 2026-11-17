@@ -27,7 +27,9 @@ import {
   recordingFileUrl,
   fetchRecordingTranscript,
   type RecordingTranscript,
-  PlcTestResult,
+  cameraScoped,
+  startCameraRecording,
+  stopCameraRecording,
   FlatCamera,
   HierarchyPlant,
   fetchHierarchy,
@@ -200,6 +202,18 @@ function paginationItems(current: number, total: number): (number | 'gap')[] {
     items.push(p);
   });
   return items;
+}
+
+/** Plant day runs 06:00 to 05:59 next morning; shifts A 06-14, B 14-22, C 22-06 (by the time an event starts). */
+function productionSlot(value?: string | null): { day: string; shift: 'A' | 'B' | 'C'; calendarDay: string } | null {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const hour = date.getHours();
+  const shift = hour >= 6 && hour < 14 ? 'A' : hour >= 14 && hour < 22 ? 'B' : 'C';
+  const day = new Date(date.getTime() - 6 * 3600 * 1000);
+  const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return { day: iso(day), shift, calendarDay: iso(date) };
 }
 
 function formatTimeOnly(value?: string | null) {
@@ -443,6 +457,8 @@ type ReportFilters = {
   toDate: string;
   category: string;
   shift: ReportShift;
+  /** camera_ip, or 'all' */
+  camera: string;
 };
 
 function currentBusinessDate() {
@@ -862,41 +878,21 @@ function Sidebar({
   page,
   setPage,
   settings,
-  setSettings,
   recording,
   plc,
   stats,
   collapsed,
   onToggleSidebar,
-  onCaptureVideoChange,
-  onRecordingModeChange,
-  onSaveSettings,
-  onTestPlc,
-  onStartSmartRecording,
-  onStopSmartRecording,
-  settingsMessage,
-  settingsMessageTone,
-  plcTestResult,
   activeMachineName,
 }: {
   page: Page;
   setPage: (page: Page) => void;
   settings: CameraSettings;
-  setSettings: (settings: CameraSettings) => void;
   recording: RecordingStatus;
   plc: PlcStatus;
   stats: RecordingStats;
   collapsed: boolean;
   onToggleSidebar: () => void;
-  onCaptureVideoChange: (enabled: boolean) => void;
-  onRecordingModeChange: (plcEnabled: boolean) => void;
-  onSaveSettings: () => void;
-  onTestPlc: () => void;
-  onStartSmartRecording: () => void;
-  onStopSmartRecording: () => void;
-  settingsMessage: string;
-  settingsMessageTone: 'good' | 'bad' | 'neutral';
-  plcTestResult: PlcTestResult | null;
   activeMachineName?: string;
 }) {
   const reportCount = stats.storage.video_count || stats.today.total_events || 146;
@@ -1161,6 +1157,63 @@ function TopBar({
   );
 }
 
+/** Status of the camera on screen and its own Record / Stop button. */
+function CameraRecordControl({ recording, plc, busy, onStart, onStop }: {
+  recording: RecordingStatus;
+  plc?: PlcStatus;
+  busy: boolean;
+  onStart?: () => void;
+  onStop?: () => void;
+}) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!recording.running) return;
+    const t = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(t);
+  }, [recording.running]);
+
+  const auto = Boolean(plc?.enabled && plc?.running);
+  const plcEvent = recording.running && (recording.event_type === 'breakdown' || recording.event_type === 'minor_stoppage');
+  const startedMs = recording.started_at ? new Date(recording.started_at).getTime() : 0;
+  const elapsed = recording.running && startedMs ? Math.max(0, Math.round((now - startedMs) / 1000)) : 0;
+
+  let label: string;
+  let tone: 'rec' | 'auto' | 'idle';
+  const connecting = recording.running && typeof recording.file_size === 'number' && recording.file_size <= 0;
+  if (recording.running && connecting) {
+    tone = 'auto';
+    label = 'Connecting to camera…';
+  } else if (recording.running) {
+    tone = 'rec';
+    const kind = recording.event_type === 'breakdown' ? 'Breakdown' : recording.event_type === 'minor_stoppage' ? 'Machine stopped' : 'Manual';
+    label = `REC ${formatDuration(elapsed)} · ${kind}`;
+  } else if (auto) {
+    tone = 'auto';
+    label = plc?.machine_state === 'breakdown' ? 'AUTO · Breakdown' : 'AUTO · watching machine gate';
+  } else {
+    tone = 'idle';
+    label = 'MANUAL';
+  }
+
+  return (
+    <div className="lv-rec">
+      <span className={`lv-rec-status lv-rec-${tone}`} title={auto ? 'Records by itself when the machine stops (PLC gate). You can also record by hand.' : 'Press Record to save a video of this camera.'}>
+        <i />{label}
+      </span>
+      {recording.running && !plcEvent ? (
+        <button type="button" className="lv-rec-btn is-stop" disabled={busy} onClick={onStop}>
+          <span className="lv-rec-square" /> {busy ? 'Saving…' : 'Stop'}
+        </button>
+      ) : (
+        <button type="button" className="lv-rec-btn" disabled={busy || Boolean(plcEvent)} onClick={onStart}
+          title={plcEvent ? 'This camera is already recording the machine stoppage.' : 'Start recording this camera'}>
+          <span className="lv-rec-dot" /> {busy ? 'Starting…' : 'Record'}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function LivePage({
   settings,
   recording,
@@ -1185,6 +1238,9 @@ function LivePage({
   selectedLineId,
   onChangeLine,
   onNavigateSaved,
+  recordBusy = false,
+  onStartRecording,
+  onStopRecording,
 }: {
   settings: CameraSettings;
   recording: RecordingStatus;
@@ -1209,6 +1265,9 @@ function LivePage({
   selectedLineId?: number | 'all';
   onChangeLine?: (id: number | 'all') => void;
   onNavigateSaved?: () => void;
+  recordBusy?: boolean;
+  onStartRecording?: () => void;
+  onStopRecording?: () => void;
 }) {
   const activeCam = useMemo(() => {
     return cameras.find(c => c.id === activeCamId) || cameras[0] || null;
@@ -1388,7 +1447,8 @@ function LivePage({
           display: 'grid',
           gridTemplateColumns: viewMode === 'single' ? 'minmax(140px, 1fr) minmax(140px, 1fr) minmax(190px, 1.35fr) minmax(150px, 1.1fr)' : 'minmax(140px, 1fr) minmax(140px, 1fr) minmax(190px, 1.4fr)',
           gap: '10px',
-          flex: 1,
+          // a base width: when the buttons do not fit next to the filters they move to the next line
+          flex: '1 1 640px',
           minWidth: 0
         }}>
           
@@ -1658,7 +1718,7 @@ function LivePage({
         </div>
 
         {/* View Switcher Buttons (Exact Image 1 Design) */}
-        <div className="live-view-switch" style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+        <div className="live-view-switch" style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0, flexWrap: 'wrap', marginLeft: 'auto' }}>
           <button
             type="button"
             onClick={() => onChangeViewMode?.('single')}
@@ -1721,32 +1781,15 @@ function LivePage({
             <span>MULTI GRID ({cameras.length || 1})</span>
           </button>
 
-          {/* Quick Automation Status Indicator */}
-          <div
-            title="PLC Gate Trigger Automation Status"
-            style={{
-              padding: '7px 14px',
-              borderRadius: '10px',
-              border: '1.5px solid #cbd5e1',
-              background: (settings.plc_enabled && plc?.running) ? '#f0fdf4' : '#f8fafc',
-              color: (settings.plc_enabled && plc?.running) ? '#15803d' : '#64748b',
-              fontWeight: 800,
-              fontSize: '0.82rem',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
-              whiteSpace: 'nowrap'
-            }}
-          >
-            <span style={{
-              width: '8px',
-              height: '8px',
-              borderRadius: '50%',
-              background: (settings.plc_enabled && plc?.running) ? '#16a34a' : '#94a3b8'
-            }}></span>
-            <span>TRIGGER: {(settings.plc_enabled && plc?.running) ? 'AUTO' : 'OFF'}</span>
-          </div>
+          {viewMode === 'single' && activeCam && (
+            <CameraRecordControl
+              recording={recording}
+              plc={plc}
+              busy={recordBusy}
+              onStart={onStartRecording}
+              onStop={onStopRecording}
+            />
+          )}
         </div>
       </div>
 
@@ -2002,6 +2045,7 @@ function SavedPage({
   refreshToken,
   stats,
   plc,
+  cameras = [],
   onEditReason,
 }: {
   page: Page;
@@ -2009,6 +2053,7 @@ function SavedPage({
   refreshToken: number;
   stats: RecordingStats;
   plc: PlcStatus;
+  cameras?: FlatCamera[];
   onEditReason: (record: RecordingRecord) => void;
 }) {
   const [page, setPage] = useState(1);
@@ -2018,13 +2063,24 @@ function SavedPage({
   const [toDate, setToDate] = useState(todayInputValue());
   const [category, setCategory] = useState('all');
   const [shift, setShift] = useState<ReportShift>('all');
+  const [camera, setCamera] = useState('all');
   const [appliedFilters, setAppliedFilters] = useState<ReportFilters>({
     datePreset: 'today',
     fromDate: todayInputValue(),
     toDate: todayInputValue(),
     category: 'all',
     shift: 'all',
+    camera: 'all',
   });
+  // one entry per camera address (the report stores the camera's IP with each event)
+  const cameraOptions = useMemo(() => {
+    const seen = new Map<string, string>();
+    cameras.forEach((c) => {
+      const label = `${c.name} — ${c.plant_name}`;
+      seen.set(c.camera_ip, seen.has(c.camera_ip) ? `${seen.get(c.camera_ip)}, ${c.name}` : label);
+    });
+    return [...seen.entries()].map(([ip, label]) => ({ ip, label }));
+  }, [cameras]);
   const [reportStats, setReportStats] = useState<RecordingStats>(stats);
   const [list, setList] = useState<RecordingList>({ total: 0, page: 1, page_size: PAGE_SIZE, records: [] });
   const [latest, setLatest] = useState<RecordingRecord | null>(null);
@@ -2040,10 +2096,12 @@ function SavedPage({
     || appliedFilters.toDate !== toDate
     || appliedFilters.category !== category
     || appliedFilters.shift !== shift
+    || appliedFilters.camera !== camera
   );
 
 
   const [loading, setLoading] = useState(false);
+  const loadRequestRef = useRef(0);
   const [error, setError] = useState('');
   const [nowTick, setNowTick] = useState(Date.now());
   const [playingPath, setPlayingPath] = useState('');
@@ -2177,6 +2235,12 @@ function SavedPage({
     setPage(1);
   }
 
+  function handleCameraChange(newCamera: string) {
+    setCamera(newCamera);
+    setAppliedFilters(prev => ({ ...prev, camera: newCamera }));
+    setPage(1);
+  }
+
   function applyFilters() {
     const range = presetDateRange(datePreset, fromDate, toDate);
     const normalizedFrom = range?.fromDate || fromDate;
@@ -2191,11 +2255,13 @@ function SavedPage({
       toDate: normalizedTo,
       category,
       shift,
+      camera,
     });
     setPage(1);
   }
 
   async function load(refreshIndex = false) {
+    const requestId = ++loadRequestRef.current;
     setLoading(true);
     setError('');
     try {
@@ -2214,11 +2280,15 @@ function SavedPage({
       if (appliedFilters.shift !== 'all') {
         payload.shift = appliedFilters.shift;
       }
+      if (appliedFilters.camera !== 'all') {
+        payload.machine = appliedFilters.camera;
+      }
       const endpoint = refreshIndex ? '/recording-index/scan' : '/recording-index/list';
       const [data, statsData] = await Promise.all([
         postJson<RecordingList>(endpoint, payload),
         postJson<RecordingStats>('/recording-index/stats', payload),
       ]);
+      if (requestId !== loadRequestRef.current) return; // a newer filter is already loading
       const nextTotalPages = Math.max(1, Math.ceil((data.total || 0) / PAGE_SIZE));
       if (page > nextTotalPages) {
         setPage(nextTotalPages);
@@ -2237,7 +2307,7 @@ function SavedPage({
     } catch (exc) {
       setError(friendlyError(exc));
     } finally {
-      setLoading(false);
+      if (requestId === loadRequestRef.current) setLoading(false);
     }
   }
 
@@ -2251,6 +2321,7 @@ function SavedPage({
     appliedFilters.toDate,
     appliedFilters.category,
     appliedFilters.shift,
+    appliedFilters.camera,
     settings.storage_root,
     refreshToken,
     stats.latest_event?.started_at,
@@ -2456,8 +2527,9 @@ function SavedPage({
     end_at: activeBusinessRange?.endAt,
     event_type: appliedFilters.category !== 'all' ? appliedFilters.category : undefined,
     shift: appliedFilters.shift !== 'all' ? appliedFilters.shift : undefined,
+    machine: appliedFilters.camera !== 'all' ? appliedFilters.camera : undefined,
     public_helper_url: settings.public_helper_url,
-  }), [activeBusinessRange, appliedFilters.category, appliedFilters.shift, settings.public_helper_url, settings.storage_root]);
+  }), [activeBusinessRange, appliedFilters.category, appliedFilters.shift, appliedFilters.camera, settings.public_helper_url, settings.storage_root]);
 
   function isOpenBreakdown(record: RecordingRecord) {
     return Boolean(plc.gate_open && record.event_type === 'breakdown' && latestOpenBreakdownPath && record.file_path === latestOpenBreakdownPath);
@@ -2548,6 +2620,17 @@ function SavedPage({
               <option value="C">Shift C</option>
             </select>
           </label>
+          {cameraOptions.length > 1 && (
+            <label className="er-field">
+              <span>Camera</span>
+              <select value={camera} onChange={(event) => handleCameraChange(event.target.value)}>
+                <option value="all">All cameras</option>
+                {cameraOptions.map((option) => (
+                  <option key={option.ip} value={option.ip}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+          )}
           <div className="er-filter-actions">
             <button
               type="button"
@@ -2558,12 +2641,14 @@ function SavedPage({
                 setToDate(todayInputValue());
                 setCategory('all');
                 setShift('all');
+                setCamera('all');
                 setAppliedFilters({
                   datePreset: 'today',
                   fromDate: todayInputValue(),
                   toDate: todayInputValue(),
                   category: 'all',
                   shift: 'all',
+                  camera: 'all',
                 });
                 load(true);
               }}
@@ -2595,7 +2680,7 @@ function SavedPage({
                   <div className="er-table" role="table" aria-label="Machine events">
                     <div className="er-row er-head" role="row">
                       <span role="columnheader">#</span>
-                      <span role="columnheader">Event time</span>
+                      <span role="columnheader">Day · shift / time</span>
                       <span role="columnheader">Duration</span>
                       <span role="columnheader">Category</span>
                       <span role="columnheader">Downtime reason</span>
@@ -2613,14 +2698,22 @@ function SavedPage({
                       const inProgress = status === 'Running';
                       const endText = liveEventEnd(record) === 'Running' ? 'In progress' : formatTimeOnly(eventEnd(record));
                       const voiceText = record.manual_transcript || record.transcript;
+                      const slot = productionSlot(eventStart(record));
+                      const isManual = record.event_type === 'self_capture' || record.event_type === 'manual';
 
                       return (
                         <div className={isBreakdown ? 'er-row er-row-breakdown' : 'er-row'} role="row" key={record.file_path}>
                           <span className="er-serial">{serialNumber}</span>
 
                           <span className="er-time" title={record.file_name}>
-                            <strong>{formatDateOnly(eventStart(record))}</strong>
-                            <small>{formatTimeOnly(eventStart(record))} → {endText}</small>
+                            <strong>
+                              {slot ? formatDateOnly(`${slot.day}T12:00:00`) : formatDateOnly(eventStart(record))}
+                              {slot && <em className="er-shift">Shift {slot.shift}</em>}
+                            </strong>
+                            <small>
+                              {slot && slot.calendarDay !== slot.day ? `${formatDateOnly(`${slot.calendarDay}T12:00:00`).slice(0, 6)} ` : ''}
+                              {formatTimeOnly(eventStart(record))} → {endText}
+                            </small>
                           </span>
 
                           <span className="er-duration">
@@ -2629,9 +2722,9 @@ function SavedPage({
                           </span>
 
                           <span className="er-cat">
-                            <span className={isBreakdown ? 'er-badge er-badge-red' : 'er-badge er-badge-amber'}>
+                            <span className={isBreakdown ? 'er-badge er-badge-red' : isManual ? 'er-badge er-badge-slate' : 'er-badge er-badge-amber'}>
                               <i aria-hidden="true" />
-                              {isBreakdown ? 'Breakdown' : 'Minor stoppage'}
+                              {isBreakdown ? 'Breakdown' : isManual ? 'Manual' : 'Minor stoppage'}
                             </span>
                           </span>
 
@@ -4054,7 +4147,10 @@ export function App() {
   const [settings, setSettings] = useState<CameraSettings>(() => loadSavedSettings());
   const [recording, setRecording] = useState<RecordingStatus>({ running: false, frames: 0 });
   const [plc, setPlc] = useState<PlcStatus>({ enabled: true, running: false });
-  const [plcTestResult, setPlcTestResult] = useState<PlcTestResult | null>(null);
+  // cameras whose Record/Stop request is still running (saving a file can take a few seconds)
+  const [busyCamIds, setBusyCamIds] = useState<number[]>([]);
+  const markBusy = (camId: number, busy: boolean) =>
+    setBusyCamIds((ids) => (busy ? [...ids.filter((id) => id !== camId), camId] : ids.filter((id) => id !== camId)));
   const [stats, setStats] = useState<RecordingStats>(() => emptyStats());
   const [cameraOnline, setCameraOnline] = useState(false);
   const [message, setMessage] = useState('');
@@ -4073,6 +4169,8 @@ export function App() {
   const [activeCamId, setActiveCamId] = useState<number | null>(null);
   const [viewMode, setViewMode] = useState<'single' | 'grid'>('single');
   const previousRecordingRunningRef = useRef(false);
+  // status polling reads this, so it always asks about the camera on screen
+  const activeCamIdRef = useRef<number | null>(null);
   const initialSyncRef = useRef(false);
 
   const handleSelectCamera = (cam: FlatCamera, syncHierarchy = true) => {
@@ -4121,6 +4219,15 @@ export function App() {
       if (timer) clearInterval(timer);
     };
   }, []);
+
+  useEffect(() => {
+    activeCamIdRef.current = activeCamId;
+    previousRecordingRunningRef.current = false;
+    setRecording({ running: false, frames: 0 });
+    setPlc({ enabled: false, running: false });
+    if (activeCamId) refreshStatus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeCamId]);
 
   const availableDepts = useMemo(() => {
     if (selectedPlantId === 'all') {
@@ -4217,13 +4324,22 @@ export function App() {
 
   async function refreshStatus() {
     try {
+      const camId = activeCamIdRef.current;
       const [recordingStatus, plcStatus] = await Promise.all([
-        getJson<RecordingStatus>('/recording/status'),
-        getJson<PlcStatus>('/plc-monitor/status'),
+        getJson<RecordingStatus>(cameraScoped('/recording/status', camId)),
+        getJson<PlcStatus>(cameraScoped('/plc-monitor/status', camId)),
       ]);
+      if (camId !== activeCamIdRef.current) return; // camera changed while waiting
       if (previousRecordingRunningRef.current && !recordingStatus.running) {
         setRefreshToken((value) => value + 1);
         refreshStats();
+        if (recordingStatus.error && !recordingStatus.path) {
+          // e.g. the camera could not be reached: say so instead of silently going back to "Record"
+          setSettingsMessageTone('bad');
+          setSettingsMessage(/rtsp|stream|open/i.test(recordingStatus.error)
+            ? 'Recording failed: the camera did not send video. Check that the camera is on and reachable.'
+            : `Recording failed: ${recordingStatus.error}`);
+        }
       }
       previousRecordingRunningRef.current = Boolean(recordingStatus.running);
       setRecording(recordingStatus);
@@ -4259,7 +4375,7 @@ export function App() {
 
   async function verifyCamera() {
     try {
-      const status = await getJson<RecordingStatus>('/recording/status');
+      const status = await getJson<RecordingStatus>(cameraScoped('/recording/status', activeCamIdRef.current));
       const isOnline = Boolean(
         status.shared_camera?.has_frame ||
         (status.shared_camera?.running && (status.shared_camera?.frame_age_seconds ?? 999) < 6)
@@ -4329,124 +4445,82 @@ export function App() {
 
   useEffect(() => {
     if (!settingsMessage) return;
-    const timer = window.setTimeout(() => setSettingsMessage(''), 3000);
+    // errors stay long enough to read
+    const timer = window.setTimeout(() => setSettingsMessage(''), settingsMessageTone === 'bad' ? 7000 : 3000);
     return () => window.clearTimeout(timer);
-  }, [settingsMessage]);
+  }, [settingsMessage, settingsMessageTone]);
 
-  async function startSmartRecording() {
-    setMessage('');
+  function toast(text: string, tone: 'good' | 'bad' | 'neutral') {
+    setSettingsMessageTone(tone);
+    setSettingsMessage(text);
+  }
+
+  /** Record button on Live View: the camera on screen only. Other cameras are not touched. */
+  async function startRecordingForActiveCamera() {
+    const camId = activeCamIdRef.current;
+    const cam = flatCameras.find((c) => c.id === camId);
+    if (!camId) {
+      toast('Select a camera first.', 'bad');
+      return;
+    }
+    markBusy(camId, true);
     try {
-      if (!settings.plc_enabled) {
-        const status = await postJson<RecordingStatus>('/recording/start', {
-          ...buildCameraPayload(settings),
-          event_type: 'self_capture',
-          max_record_seconds: settings.max_record_seconds,
-        });
+      const status = await startCameraRecording(camId);
+      if (activeCamIdRef.current === camId) {
         setRecording(status);
-        return;
+        // if it fails before the next status check, the failure is still reported
+        previousRecordingRunningRef.current = Boolean(status.running);
       }
-      const status = await postJson<PlcStatus>('/plc-monitor/start', buildPlcPayload(settings));
-      setPlc(status);
+      toast(`Recording started: ${cam?.name || 'camera'}.`, 'good');
     } catch (exc) {
-      const error = friendlyError(exc);
-      if (error) setMessage(error);
+      toast(friendlyError(exc) || 'Could not start recording.', 'bad');
+    } finally {
+      markBusy(camId, false);
+      refreshStatus();
     }
   }
 
-  async function saveSettings(nextSettings = settings) {
+  async function stopRecordingForActiveCamera() {
+    const camId = activeCamIdRef.current;
+    if (!camId) return;
+    const cam = flatCameras.find((c) => c.id === camId);
+    markBusy(camId, true);
     try {
-      let mergedSettings = nextSettings;
-      let monitorApplied = false;
-      try {
-        const savedSettings = await postJson<CameraSettings>('/settings', buildSettingsPayload(nextSettings));
-        mergedSettings = normalizeSettings({ ...nextSettings, ...savedSettings });
-      } catch {
-        if (nextSettings.plc_enabled) {
-          const status = await postJson<PlcStatus>('/plc-monitor/start', buildPlcPayload(nextSettings));
-          setPlc(status);
-        } else if (plc.enabled !== false && plc.running) {
-          const status = await postJson<PlcStatus>('/plc-monitor/stop', {});
-          setPlc(status);
-        }
-        monitorApplied = true;
-      }
-      setSettings(mergedSettings);
-      window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(mergedSettings));
-      setSettingsMessageTone('good');
-      setSettingsMessage(
-        `Settings saved. Camera ${mergedSettings.ip}. Video: ${mergedSettings.capture_breakdown_video ? 'full event' : 'minor only'}.`,
-      );
-      if (!mergedSettings.plc_enabled && plc.enabled !== false && plc.running) {
-        const status = await postJson<PlcStatus>('/plc-monitor/stop', {});
-        setPlc(status);
-      } else if (!monitorApplied && mergedSettings.plc_enabled && plc.enabled !== false && plc.running) {
-        const status = await postJson<PlcStatus>('/plc-monitor/start', buildPlcPayload(mergedSettings));
-        setPlc(status);
-      }
-      verifyCamera();
-    } catch (exc) {
-      const error = friendlyError(exc);
-      setSettingsMessageTone('bad');
-      if (error) setSettingsMessage(error);
-    }
-  }
-
-  async function testPlcSettings() {
-    setSettingsMessageTone('neutral');
-    setSettingsMessage('Testing PLC...');
-    setPlcTestResult(null);
-    try {
-      const result = await postJson<PlcTestResult>('/plc-test', buildPlcPayload(settings));
-      setPlcTestResult(result);
-      setSettingsMessageTone(result.ok ? 'good' : 'bad');
-      setSettingsMessage(result.ok ? 'PLC test OK. Save settings to use this config.' : 'PLC test failed. Check IP, port, protocol, and address.');
-    } catch (exc) {
-      const error = friendlyError(exc);
-      setSettingsMessageTone('bad');
-      setSettingsMessage(error || 'PLC test failed.');
-    }
-  }
-
-  async function setCaptureVideo(enabled: boolean) {
-    const nextSettings = { ...settings, capture_video: enabled };
-    setSettings(nextSettings);
-    window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(nextSettings));
-    if (!(plc.enabled !== false && plc.running)) return;
-    setMessage('');
-    try {
-      const status = await postJson<PlcStatus>('/plc-monitor/start', buildPlcPayload(nextSettings));
-      setPlc(status);
-    } catch (exc) {
-      const error = friendlyError(exc);
-      if (error) setMessage(error);
-    }
-  }
-
-  async function setRecordingMode(plcEnabled: boolean) {
-    const nextSettings = { ...settings, plc_enabled: plcEnabled };
-    setSettings(nextSettings);
-    window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(nextSettings));
-    await saveSettings(nextSettings);
-  }
-
-  async function stopSmartRecording() {
-    setMessage('');
-    try {
-      if (!settings.plc_enabled) {
-        const status = await postJson<RecordingStatus>('/recording/stop', {});
+      const status = await stopCameraRecording(camId);
+      if (activeCamIdRef.current === camId) {
+        previousRecordingRunningRef.current = false;
         setRecording(status);
-        return;
       }
-      const status = await postJson<PlcStatus>('/plc-monitor/stop', {});
-      setPlc(status);
+      toast(status.error && !status.path
+        ? `Recording failed: ${status.error}`
+        : `Recording saved: ${cam?.name || 'camera'}. It appears in the Event Report.`, status.error && !status.path ? 'bad' : 'good');
+      setRefreshToken((value) => value + 1);
     } catch (exc) {
-      const error = friendlyError(exc);
-      if (error) setMessage(error);
+      toast(friendlyError(exc) || 'Could not stop recording.', 'bad');
+    } finally {
+      markBusy(camId, false);
+      refreshStatus();
+    }
+  }
+
+  /** Settings: save only the given plant-wide fields on top of what the server has now. */
+  async function saveRules(patch: Partial<CameraSettings>): Promise<boolean> {
+    try {
+      // send everything the server has, changed only where asked (camera/PLC fields stay as they are)
+      const current = await getJson<CameraSettings>('/settings');
+      const saved = await postJson<CameraSettings>('/settings', { ...current, ...patch });
+      const merged = normalizeSettings({ ...settings, ...saved });
+      setSettings(merged);
+      window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(merged));
+      toast('Saved. Every camera on Auto now uses these settings.', 'good');
+      return true;
+    } catch (exc) {
+      toast(friendlyError(exc) || 'Could not save settings.', 'bad');
+      return false;
     }
   }
 
   const currentActiveCam = filteredCameras.find(c => c.id === activeCamId) || filteredCameras[0] || null;
-  const plcEndpoint = `${plc.plc_host || settings.plc_host || 'PLC'}:${plc.plc_port || settings.plc_port}`;
 
   return (
     <div className={sidebarCollapsed ? 'app-shell sidebar-collapsed' : 'app-shell'}>
@@ -4454,21 +4528,11 @@ export function App() {
         page={page}
         setPage={setPage}
         settings={settings}
-        setSettings={setSettings}
         recording={recording}
         plc={plc}
         stats={stats}
         collapsed={sidebarCollapsed}
         onToggleSidebar={() => setSidebarCollapsed((value) => !value)}
-        onCaptureVideoChange={setCaptureVideo}
-        onRecordingModeChange={setRecordingMode}
-        onSaveSettings={() => saveSettings()}
-        onTestPlc={testPlcSettings}
-        onStartSmartRecording={startSmartRecording}
-        onStopSmartRecording={stopSmartRecording}
-        settingsMessage={settingsMessage}
-        settingsMessageTone={settingsMessageTone}
-        plcTestResult={plcTestResult}
         activeMachineName={currentActiveCam?.machine_name}
       />
       <main className="content">
@@ -4501,21 +4565,11 @@ export function App() {
         {page === 'hierarchy' ? (
           <SettingsHub
             settings={settings}
-            setSettings={setSettings}
-            recording={recording}
-            plc={plc}
             stats={stats}
-            onCaptureVideoChange={setCaptureVideo}
-            onRecordingModeChange={setRecordingMode}
-            onSaveSettings={() => saveSettings()}
-            onTestPlc={testPlcSettings}
-            onStartSmartRecording={startSmartRecording}
-            onStopSmartRecording={stopSmartRecording}
+            onSaveRules={saveRules}
             settingsMessage={settingsMessage}
             settingsMessageTone={settingsMessageTone}
-            plcTestResult={plcTestResult}
             onBack={() => setPage('live')}
-            activeMachineName={currentActiveCam?.machine_name}
           />
         ) : page === 'live' ? (
           <LivePage
@@ -4546,6 +4600,9 @@ export function App() {
             selectedLineId={selectedLineId}
             onChangeLine={handleChangeLine}
             onNavigateSaved={() => setPage('saved')}
+            recordBusy={activeCamId != null && busyCamIds.includes(activeCamId)}
+            onStartRecording={startRecordingForActiveCamera}
+            onStopRecording={stopRecordingForActiveCamera}
           />
         ) : (
           <SavedPage
@@ -4554,6 +4611,7 @@ export function App() {
             refreshToken={refreshToken}
             stats={stats}
             plc={plc}
+            cameras={flatCameras}
             onEditReason={() => undefined}
           />
         )}

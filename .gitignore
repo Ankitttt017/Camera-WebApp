@@ -101,3 +101,6 @@ camera_app/transcription_tmp/
 
 # Clean-audio playback copies (regenerated on demand)
 camera_app/clean_cache/
+
+# per-camera Manual/Auto mode, kept on each server (a deploy must not reset it)
+camera_app/camera_modes.json

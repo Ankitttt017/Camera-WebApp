@@ -1,10 +1,13 @@
 import base64
+import contextvars
+import copy
 import csv
 import hashlib
 import io
 import json
 import contextlib
 import mimetypes
+from collections.abc import MutableMapping
 import os
 import re
 
@@ -50,7 +53,7 @@ import time
 import zipfile
 import asyncio
 import ssl
-from datetime import datetime, time as datetime_time
+from datetime import datetime, timedelta, time as datetime_time
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from urllib.parse import quote
@@ -80,23 +83,43 @@ from contextlib import asynccontextmanager
 @asynccontextmanager
 async def _lifespan(app):
     settings = load_helper_settings()
-    plc_monitor_state['enabled'] = bool(settings.plc_enabled)
 
     def _start_background():
         try:
+            refresh_default_camera_key()
             ensure_shared_camera_worker(settings.ip, settings.rtsp_port, settings.username, settings.password, settings.channel, settings.rtsp_path)
-            if settings.plc_enabled:
-                ensure_auto_plc_monitor_running()
+            if load_camera_modes() or CAMERA_MODES_PATH.exists():
+                # every camera set to Auto gets its own PLC monitor; Manual cameras get none
+                restart_event_monitors()
+            elif settings.plc_enabled:
+                # no camera list / no mode file yet: the old single camera from helper_settings.json
+                with camera_context('default'):
+                    plc_monitor_state['enabled'] = True
+                    ensure_auto_plc_monitor_running()
         except Exception as exc:
-            plc_monitor_state['last_error'] = f'Background startup failed: {exc}'
+            with camera_context('default'):
+                plc_monitor_state['last_error'] = f'Background startup failed: {exc}'
 
     threading.Thread(target=_start_background, daemon=True).start()
     yield
-    # Backend stopping (deploy, pm2 restart): finish an open recording properly so the file keeps
+    # Backend stopping (deploy, pm2 restart): finish open recordings properly so each file keeps
     # its index and is renamed/indexed, instead of being killed half-written.
-    if recording_state.get('running'):
-        import asyncio
-        await asyncio.to_thread(stop_recording_internal)
+    import asyncio
+
+    def _stop_one(key: str):
+        with camera_context(key):
+            stop_recording_internal()
+
+    def _stop_all():
+        # all at once: pm2 gives the process only a short time to exit
+        threads = [threading.Thread(target=_stop_one, args=(session.key,), daemon=True)
+                   for session in all_camera_sessions() if session.recording_state.get('running')]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=RECORDING_FINALIZE_SECONDS + 5)
+
+    await asyncio.to_thread(_stop_all)
 
 app = FastAPI(title='CP Plus Camera Helper', lifespan=_lifespan)
 app.add_middleware(
@@ -108,15 +131,42 @@ app.add_middleware(
 )
 
 try:
-    from .hierarchy_api import get_table_name as hierarchy_table_name, router as hierarchy_router
+    from .hierarchy_api import get_table_name as hierarchy_table_name, router as hierarchy_router, CHANGE_HOOKS as hierarchy_change_hooks
 except (ImportError, ValueError):
     import sys
     from pathlib import Path
     _backend_dir = str(Path(__file__).resolve().parent)
     if _backend_dir not in sys.path:
         sys.path.insert(0, _backend_dir)
-    from hierarchy_api import get_table_name as hierarchy_table_name, router as hierarchy_router
+    from hierarchy_api import get_table_name as hierarchy_table_name, router as hierarchy_router, CHANGE_HOOKS as hierarchy_change_hooks
+try:
+    from .stream_pool import stream_pool
+except (ImportError, ValueError):
+    from stream_pool import stream_pool
 app.include_router(hierarchy_router)
+
+
+class CameraContextMiddleware:
+    """?camera_id=N on any request makes recording/PLC calls act on that camera only."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get('type') in ('http', 'websocket'):
+            query = scope.get('query_string', b'').decode('latin-1')
+            for part in query.split('&'):
+                name, _, value = part.partition('=')
+                if name == 'camera_id' and value.isdigit():
+                    token = _CAMERA_KEY.set(camera_key_for(value))
+                    try:
+                        return await self.app(scope, receive, send)
+                    finally:
+                        _CAMERA_KEY.reset(token)
+        return await self.app(scope, receive, send)
+
+
+app.add_middleware(CameraContextMiddleware)
 
 try:
     from .speech_gate import SAMPLE_RATE as SPEECH_GATE_SAMPLE_RATE, SpeechGate, load_vad_session
@@ -435,7 +485,7 @@ DEFAULT_REASON_OPTIONS = {
 }
 
 
-recording_state = {
+_RECORDING_STATE_TEMPLATE = {
     'running': False,
     'path': None,
     'started_at': None,
@@ -455,11 +505,9 @@ recording_state = {
     'transcript_error': None,
     'transcribed_at': None,
 }
-recording_stop_event = threading.Event()
-recording_thread: threading.Thread | None = None
-recording_process: subprocess.Popen | None = None
-plc_monitor_state = {
-    'enabled': True,
+_PLC_STATE_TEMPLATE = {
+    # off until a camera is set to Auto (or the old single-camera setup starts it)
+    'enabled': False,
     'capture_video': True,
     'capture_breakdown_video': True,
     'running': False,
@@ -489,8 +537,129 @@ plc_monitor_state = {
     'open_values': {},
     'close_values': {},
 }
-plc_monitor_stop_event = threading.Event()
-plc_monitor_thread: threading.Thread | None = None
+
+
+# ---- One recorder and one PLC monitor per camera ---------------------------------------------
+# Every camera (key "cam:<hierarchy id>") has its own recording state, FFmpeg process and PLC
+# monitor, so a breakdown on one machine never shows on, or blocks, another camera.
+# Request handlers pick the camera from the ?camera_id= query parameter (CameraContextMiddleware);
+# worker threads inherit it. Code that has no camera (old single-camera calls) uses "default",
+# which is the camera configured in helper_settings.json.
+
+_CAMERA_KEY: contextvars.ContextVar[str] = contextvars.ContextVar('camera_key', default='default')
+_DEFAULT_CAMERA_KEY = {'key': 'default'}
+
+
+class CameraSession:
+    def __init__(self, key: str):
+        self.key = key
+        self.recording_state: dict = copy.deepcopy(_RECORDING_STATE_TEMPLATE)
+        self.recording_stop_event = threading.Event()
+        self.recording_thread: threading.Thread | None = None
+        self.recording_process: subprocess.Popen | None = None
+        self.plc_monitor_state: dict = copy.deepcopy(_PLC_STATE_TEMPLATE)
+        self.plc_monitor_stop_event = threading.Event()
+        self.plc_monitor_thread: threading.Thread | None = None
+        # one start at a time per camera (status polls, Settings save and camera edits can overlap)
+        self.start_lock = threading.RLock()
+
+
+_CAMERA_SESSIONS: dict[str, CameraSession] = {}
+_CAMERA_SESSIONS_LOCK = threading.Lock()
+
+
+def resolve_camera_key(key: str | None = None) -> str:
+    key = key or _CAMERA_KEY.get()
+    return _DEFAULT_CAMERA_KEY['key'] if key == 'default' else key
+
+
+def camera_session(key: str | None = None) -> CameraSession:
+    resolved = resolve_camera_key(key)
+    with _CAMERA_SESSIONS_LOCK:
+        session = _CAMERA_SESSIONS.get(resolved)
+        if session is None:
+            session = _CAMERA_SESSIONS[resolved] = CameraSession(resolved)
+        return session
+
+
+def all_camera_sessions() -> list[CameraSession]:
+    with _CAMERA_SESSIONS_LOCK:
+        return list(_CAMERA_SESSIONS.values())
+
+
+def camera_key_for(camera_id: int | str) -> str:
+    return f'cam:{int(camera_id)}'
+
+
+def camera_id_from_key(key: str | None = None) -> int | None:
+    resolved = resolve_camera_key(key)
+    return int(resolved[4:]) if resolved.startswith('cam:') and resolved[4:].isdigit() else None
+
+
+@contextlib.contextmanager
+def camera_context(key: str):
+    token = _CAMERA_KEY.set(key)
+    try:
+        yield camera_session(key)
+    finally:
+        _CAMERA_KEY.reset(token)
+
+
+def context_thread(target, *args, **kwargs) -> threading.Thread:
+    """A thread that keeps the caller's camera (threads do not inherit context variables)."""
+    ctx = contextvars.copy_context()
+    return threading.Thread(target=ctx.run, args=(target, *args), **kwargs)
+
+
+class _CameraStateProxy(MutableMapping):
+    """Module-level recording_state / plc_monitor_state that point at the current camera's dict."""
+
+    def __init__(self, attr: str):
+        self._attr = attr
+
+    def _data(self) -> dict:
+        return getattr(camera_session(), self._attr)
+
+    def __getitem__(self, key):
+        return self._data()[key]
+
+    def __setitem__(self, key, value):
+        self._data()[key] = value
+
+    def __delitem__(self, key):
+        del self._data()[key]
+
+    def __iter__(self):
+        return iter(list(self._data()))
+
+    def __len__(self):
+        return len(self._data())
+
+    def get(self, key, default=None):
+        return self._data().get(key, default)
+
+    def update(self, *args, **kwargs):
+        self._data().update(*args, **kwargs)
+
+    def snapshot(self) -> dict:
+        return dict(self._data())
+
+
+class _CameraEventProxy:
+    """recording_stop_event / plc_monitor_stop_event of the current camera."""
+
+    def __init__(self, attr: str):
+        self._attr = attr
+
+    def __getattr__(self, name):
+        return getattr(getattr(camera_session(), self._attr), name)
+
+
+recording_state = _CameraStateProxy('recording_state')
+plc_monitor_state = _CameraStateProxy('plc_monitor_state')
+recording_stop_event = _CameraEventProxy('recording_stop_event')
+plc_monitor_stop_event = _CameraEventProxy('plc_monitor_stop_event')
+
 shared_camera_lock = threading.Lock()
 shared_camera_stop_event = threading.Event()
 shared_camera_thread: threading.Thread | None = None
@@ -2171,7 +2340,7 @@ def schedule_recording_transcription(storage_root: str | Path, video_path: Path)
         except Exception as exc:
             print(f'[clean audio] {video_path}: {exc}')
 
-    threading.Thread(target=run, daemon=True, name='post-recording').start()
+    context_thread(run, daemon=True, name='post-recording').start()
 
 
 def update_recording_reason(request: RecordingReasonRequest) -> dict:
@@ -2315,6 +2484,19 @@ def parse_iso_datetime(value: object) -> datetime | None:
         return None
 
 
+def active_recording_index_rows(storage_root: str | Path) -> list[dict]:
+    """The recording running right now on each camera (not in the index until it finishes)."""
+    rows = []
+    for session in all_camera_sessions():
+        if not session.recording_state.get('running'):
+            continue
+        with camera_context(session.key):
+            row = active_recording_index_row(storage_root)
+        if row:
+            rows.append(row)
+    return rows
+
+
 def active_recording_index_row(storage_root: str | Path) -> dict | None:
     if not recording_state.get('running'):
         return None
@@ -2342,8 +2524,8 @@ def active_recording_index_row(storage_root: str | Path) -> dict | None:
         'file_name': file_path.name,
         'metadata_path': recording_state.get('metadata_path'),
         'storage_root': normalize_storage_root(storage_root),
-        'camera_ip': DEFAULT_CAMERA_IP,
-        'channel': 1,
+        'camera_ip': recording_state.get('camera_ip') or DEFAULT_CAMERA_IP,
+        'channel': recording_state.get('channel') or 1,
         'started_at': started_at,
         'ended_at': None,
         'duration_seconds': round(duration_seconds, 2) if duration_seconds is not None else None,
@@ -2374,10 +2556,9 @@ def active_recording_index_row(storage_root: str | Path) -> dict | None:
 
 def row_matches_index_request(row: dict, request: RecordingIndexRequest) -> bool:
     row_start = parse_iso_datetime(row.get('event_started_at') or row.get('started_at'))
-    row_end = parse_iso_datetime(row.get('event_ended_at') or row.get('ended_at')) or datetime.now()
     start_filter = parse_iso_datetime(request.start_at)
     end_filter = parse_iso_datetime(request.end_at)
-    if start_filter and row_end < start_filter:
+    if start_filter and row_start and row_start < start_filter:
         return False
     if end_filter and row_start and row_start > end_filter:
         return False
@@ -2444,7 +2625,8 @@ def recording_index_where(request: RecordingIndexRequest) -> tuple[str, dict[str
     where = " WHERE 1=1"
     params: dict[str, str | int] = {}
     if request.start_at:
-        where += " AND COALESCE(event_ended_at, ended_at, updated_at, started_at) >= :start_at"
+        # an event belongs to the production day (06:00-05:59) in which it started, even if it runs past 06:00
+        where += " AND COALESCE(event_started_at, started_at) >= :start_at"
         params['start_at'] = request.start_at
     if request.end_at:
         where += " AND COALESCE(event_started_at, started_at) <= :end_at"
@@ -2499,8 +2681,9 @@ def list_recording_index(request: RecordingIndexRequest) -> dict:
         cursor.execute(query, page_params)
         columns = [column[0] for column in cursor.description]
         records = [dict(zip(columns, row)) for row in cursor.fetchall()]
-    active_row = active_recording_index_row(request.storage_root)
-    if active_row and row_matches_index_request(active_row, request):
+    for active_row in active_recording_index_rows(request.storage_root):
+        if not row_matches_index_request(active_row, request):
+            continue
         duplicate = any(str(record.get('file_path')) == str(active_row.get('file_path')) for record in records)
         if not duplicate and page == 1:
             records = [active_row, *records]
@@ -2559,8 +2742,9 @@ def recording_stats(request: RecordingIndexRequest) -> dict:
             """
         ).fetchall()
 
-    active_row = active_recording_index_row(request.storage_root)
-    if active_row and row_matches_index_request(active_row, request):
+    for active_row in active_recording_index_rows(request.storage_root):
+        if not row_matches_index_request(active_row, request):
+            continue
         active_start = parse_iso_datetime(active_row.get('event_started_at') or active_row.get('started_at'))
         active_end = parse_iso_datetime(active_row.get('event_ended_at') or active_row.get('ended_at')) or datetime.now()
         if active_start and active_end:
@@ -2611,6 +2795,8 @@ def recording_stats(request: RecordingIndexRequest) -> dict:
 
 REPORT_COLUMNS = [
     'S.No',
+    'Production Date',
+    'Shift',
     'Start Date & Time',
     'End Time',
     'Video Duration',
@@ -2628,6 +2814,15 @@ REPORT_COLUMNS = [
     'Actions',
     'Video Link',
 ]
+
+
+def production_slot(value: object) -> tuple[str, str]:
+    """('16/11/2026', 'C'): the plant day runs 06:00 to 05:59 next morning; shifts A 06-14, B 14-22, C 22-06."""
+    started = parse_report_datetime(value)
+    if not started:
+        return '', ''
+    shift = 'A' if 6 <= started.hour < 14 else 'B' if 14 <= started.hour < 22 else 'C'
+    return (started - timedelta(hours=6)).strftime('%d/%m/%Y'), shift
 
 
 def recording_export_records(request: RecordingIndexRequest) -> list[dict]:
@@ -2669,8 +2864,11 @@ def recording_export_rows(request: RecordingIndexRequest, records: list[dict] | 
                 k, v = part.split(': ', 1)
                 note_dict[k.strip()] = v.strip()
                 
+        production_date, shift = production_slot(row.get('event_started_at') or row.get('started_at'))
         report_rows.append([
             index,
+            production_date,
+            shift,
             format_report_datetime(row.get('started_at')),
             format_report_end(row.get('started_at'), row.get('event_ended_at') or row.get('ended_at')),
             format_report_duration(row.get('duration_seconds')),
@@ -3051,14 +3249,16 @@ def mjpeg_frames(ip: str, rtsp_port: int, username: str, password: str, channel:
 
 
 def record_camera_ffmpeg_worker(request: RecordingRequest) -> bool:
-    global recording_process, recording_state
+    _cs = camera_session()
     ffmpeg_path = ffmpeg_executable()
     if not ffmpeg_path:
         return False
 
     started_at = datetime.now()
     _, output_path, final_path = build_recording_paths(request.storage_root, request.ip, request.channel, started_at)
-    ensure_shared_camera_worker(request.ip, request.rtsp_port, request.username, request.password, request.channel, request.rtsp_path)
+    if resolve_camera_key() == _DEFAULT_CAMERA_KEY['key']:
+        # the plant-wide preview belongs to the default camera; other cameras must not move it
+        ensure_shared_camera_worker(request.ip, request.rtsp_port, request.username, request.password, request.channel, request.rtsp_path)
     working_url = primary_rtsp_url(request.ip, request.rtsp_port, request.username, request.password, request.channel, request.rtsp_path)
     ffmpeg_success = False
     recording_state.update(
@@ -3162,24 +3362,32 @@ def record_camera_ffmpeg_worker(request: RecordingRequest) -> bool:
     ])
 
     try:
-        recording_process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        while not recording_stop_event.is_set() and recording_process.poll() is None:
+        _cs.recording_process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        while not recording_stop_event.is_set() and _cs.recording_process.poll() is None:
             time.sleep(0.25)
-        if recording_process.poll() is None:
+        if _cs.recording_process.poll() is None and not (output_path.exists() and output_path.stat().st_size > 0):
+            # stopped while still connecting: nothing to finish, so do not wait for FFmpeg
             try:
-                recording_process.communicate(input=b'q', timeout=RECORDING_FINALIZE_SECONDS)
+                _cs.recording_process.kill()
+                _cs.recording_process.wait(timeout=5)
+            except Exception:
+                pass
+            recording_state['error'] = 'Stopped before the camera sent any video.'
+        if _cs.recording_process.poll() is None:
+            try:
+                _cs.recording_process.communicate(input=b'q', timeout=RECORDING_FINALIZE_SECONDS)
             except Exception:
                 try:
-                    recording_process.terminate()
-                    recording_process.wait(timeout=5)
+                    _cs.recording_process.terminate()
+                    _cs.recording_process.wait(timeout=5)
                 except Exception:
                     try:
-                        recording_process.kill()
+                        _cs.recording_process.kill()
                     except Exception:
                         pass
         stderr = b''
-        if recording_process and recording_process.returncode not in (0, None, 255) and (not output_path.exists() or output_path.stat().st_size == 0):
-            recording_state['error'] = stderr.decode(errors='ignore') or f'FFmpeg exited with {recording_process.returncode}'
+        if _cs.recording_process and not recording_state.get('error') and _cs.recording_process.returncode not in (0, None, 255) and (not output_path.exists() or output_path.stat().st_size == 0):
+            recording_state['error'] = stderr.decode(errors='ignore') or f'FFmpeg exited with {_cs.recording_process.returncode}'
     except Exception as exc:
         if not (output_path.exists() and output_path.stat().st_size > 50000):
             recording_state['error'] = str(exc)
@@ -3256,12 +3464,28 @@ def record_camera_ffmpeg_worker(request: RecordingRequest) -> bool:
         recording_state['ended_at'] = ended_at.isoformat(timespec='seconds')
         recording_state['duration_seconds'] = round(duration_seconds, 2)
         recording_state['running'] = False
-        recording_process = None
+        _cs.recording_process = None
     return ffmpeg_success or recording_stop_event.is_set()
 
 
+def camera_rtsp_reachable(ip: str, port: int, timeout: float = 3.0) -> bool:
+    try:
+        with socket.create_connection((ip, int(port or 554)), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 def record_camera_worker(request: RecordingRequest):
-    global recording_state
+    if not camera_rtsp_reachable(request.ip, request.rtsp_port):
+        now_text = datetime.now().isoformat(timespec='seconds')
+        recording_state.update({
+            'running': False,
+            'path': None,
+            'ended_at': now_text,
+            'error': f'Camera {request.ip}:{request.rtsp_port} is not reachable (no answer on the network).',
+        })
+        return
     if USE_FFMPEG_RECORDING and record_camera_ffmpeg_worker(request):
         return
     recording_state.update(
@@ -3294,13 +3518,15 @@ def record_camera_worker(request: RecordingRequest):
     try:
         working_url = None
         first_frame = None
-        ensure_shared_camera_worker(request.ip, request.rtsp_port, request.username, request.password, request.channel, request.rtsp_path)
-        wait_until = time.monotonic() + 5.0
-        while time.monotonic() < wait_until:
-            first_frame, working_url, source_fps = latest_shared_frame(max_age_seconds=2.0)
-            if first_frame is not None:
-                break
-            time.sleep(0.05)
+        use_shared = resolve_camera_key() == _DEFAULT_CAMERA_KEY['key']
+        if use_shared:
+            ensure_shared_camera_worker(request.ip, request.rtsp_port, request.username, request.password, request.channel, request.rtsp_path)
+            wait_until = time.monotonic() + 5.0
+            while time.monotonic() < wait_until:
+                first_frame, working_url, source_fps = latest_shared_frame(max_age_seconds=2.0)
+                if first_frame is not None:
+                    break
+                time.sleep(0.05)
 
         if first_frame is None:
             for url in rtsp_urls(request.ip, request.rtsp_port, request.username, request.password, request.channel, request.rtsp_path):
@@ -4052,6 +4278,18 @@ def recording_status():
         'audio_filter': LIVE_AUDIO_FILTER,
     }
     status['ffmpeg_available'] = bool(ffmpeg_executable())
+    status['file_size'] = 0
+    if status.get('running') and status.get('path'):
+        try:
+            status['file_size'] = Path(str(status['path'])).stat().st_size
+        except OSError:
+            pass
+    camera_id = camera_id_from_key()
+    if camera_id is not None and _CAMERA_KEY.get() != 'default':
+        # this camera's own live stream, not the plant-wide preview
+        status['camera_id'] = camera_id
+        status['shared_camera'] = camera_live_status(camera_id)
+        return status
     with shared_camera_lock:
         frame_at = shared_camera_state.get('frame_at')
         has_frame = bool(
@@ -4072,7 +4310,12 @@ def recording_status():
 
 
 def start_recording_internal(request: RecordingRequest):
-    global recording_thread, recording_process
+    with camera_session().start_lock:
+        return _start_recording_locked(request)
+
+
+def _start_recording_locked(request: RecordingRequest):
+    _cs = camera_session()
     if request.event_type == 'manual':
         request.event_type = 'self_capture'
     if request.event_type not in {'minor_stoppage', 'breakdown', 'self_capture'}:
@@ -4082,8 +4325,8 @@ def start_recording_internal(request: RecordingRequest):
         )
     if (
         recording_state.get('running')
-        or (recording_thread and recording_thread.is_alive())
-        or (recording_process and recording_process.poll() is None)
+        or (_cs.recording_thread and _cs.recording_thread.is_alive())
+        or (_cs.recording_process and _cs.recording_process.poll() is None)
     ):
         return recording_state
 
@@ -4113,31 +4356,39 @@ def start_recording_internal(request: RecordingRequest):
             'transcript_error': None,
             'transcribed_at': None,
             'auto_stopped': False,
+            'camera_ip': request.ip,
+            'channel': request.channel,
         }
     )
-    recording_thread = threading.Thread(target=record_camera_worker, args=(request,), daemon=True)
-    recording_thread.start()
+    _cs.recording_thread = context_thread(record_camera_worker, request, daemon=True, name=f'recording-{_cs.key}')
+    _cs.recording_thread.start()
     return recording_state
 
 
 @app.post('/recording/start')
 def start_recording(request: RecordingRequest):
-    return start_recording_internal(request)
+    camera_id = camera_id_from_key()
+    if camera_id is not None and _CAMERA_KEY.get() != 'default':
+        # ?camera_id=: the camera's own address and login come from the camera list
+        request = camera_recording_request(camera_id, request.event_type).model_copy(
+            update={'max_record_seconds': request.max_record_seconds}
+        )
+    return dict(start_recording_internal(request))
 
 
 def stop_recording_internal():
-    global recording_process
+    _cs = camera_session()
     recording_stop_event.set()
-    if recording_thread and recording_thread.is_alive():
+    if _cs.recording_thread and _cs.recording_thread.is_alive():
         # the worker sends 'q' and waits for FFmpeg to finish the file; killing it earlier corrupts it
-        recording_thread.join(timeout=RECORDING_FINALIZE_SECONDS + 5)
-    if recording_process and recording_process.poll() is None:
+        _cs.recording_thread.join(timeout=RECORDING_FINALIZE_SECONDS + 5)
+    if _cs.recording_process and _cs.recording_process.poll() is None:
         try:
-            recording_process.terminate()
-            recording_process.wait(timeout=3)
+            _cs.recording_process.terminate()
+            _cs.recording_process.wait(timeout=3)
         except Exception:
             try:
-                recording_process.kill()
+                _cs.recording_process.kill()
             except Exception:
                 pass
     recording_state['running'] = False
@@ -4146,7 +4397,7 @@ def stop_recording_internal():
 
 @app.post('/recording/stop')
 def stop_recording():
-    return stop_recording_internal()
+    return dict(stop_recording_internal())
 
 
 def plc_monitor_worker(request: PlcMonitorRequest):
@@ -4206,8 +4457,9 @@ def plc_monitor_worker(request: PlcMonitorRequest):
     last_start_attempt_at = 0.0
     last_closed_monotonic = 0.0
     poll_seconds = max(float(request.poll_seconds), 0.2)
+    my_stop_event = camera_session().plc_monitor_stop_event  # this monitor's own; a newer monitor gets a new one
 
-    while not plc_monitor_stop_event.is_set():
+    while not my_stop_event.is_set():
         if not plc_monitor_state.get('enabled', False):
             plc_monitor_state['last_action'] = f'Gate trigger disabled at {datetime.now().isoformat(timespec="seconds")}.'
             break
@@ -4238,6 +4490,10 @@ def plc_monitor_worker(request: PlcMonitorRequest):
             now = datetime.now()
             max_record_seconds = max(int(request.max_record_seconds or MAX_GATE_RECORD_SECONDS), 1)
             if gate_open and (previous_open is False or previous_open is None) and gate_event_started_at is None:
+                if recording_state.get('running') and recording_state.get('event_type') in {'self_capture', 'manual'}:
+                    # a manual recording was running: save it as a manual clip, then record the stoppage separately
+                    stop_recording_internal()
+                    plc_monitor_state['last_action'] = f'Manual recording saved because the machine stopped at {now.isoformat(timespec="seconds")}.'
                 gate_event_started_at = now
                 machine_state_started_at = now
                 breakdown_marked = False
@@ -4495,6 +4751,10 @@ def plc_monitor_status():
     if plc_monitor_state.get('enabled', False):
         ensure_auto_plc_monitor_running()
     state = dict(plc_monitor_state)
+    camera_id = camera_id_from_key()
+    if camera_id is not None:
+        state['camera_id'] = camera_id
+        state['mode'] = load_camera_modes().get(str(camera_id), 'live')
     state['machine_state_duration_seconds'] = round(seconds_since_iso(state.get('machine_state_started_at')) or 0, 2)
     current_event_started_at = state.get('current_event_started_at')
     state['current_event_duration_seconds'] = (
@@ -4511,13 +4771,20 @@ def get_settings():
 
 
 def apply_helper_settings(settings: HelperSettings) -> HelperSettings:
+    """Save the plant-wide recording rules and apply them to every camera that records on its PLC."""
     saved = save_helper_settings(settings)
-    if saved.plc_enabled:
-        start_plc_monitor_internal(settings_to_plc_request(saved))
-    else:
-        plc_monitor_state['enabled'] = False
-        plc_monitor_stop_event.set()
-        ensure_shared_camera_worker(saved.ip, saved.rtsp_port, saved.username, saved.password, saved.channel, saved.rtsp_path)
+    if load_camera_modes() or CAMERA_MODES_PATH.exists():
+        # cameras have their own Manual/Auto mode: apply the new rules to the Auto ones only
+        restart_event_monitors()
+        return saved
+    # no per-camera modes yet (camera list unavailable on first start): the old single-camera setup
+    with camera_context('default'):
+        if saved.plc_enabled:
+            start_plc_monitor_internal(settings_to_plc_request(saved))
+        else:
+            plc_monitor_state['enabled'] = False
+            plc_monitor_stop_event.set()
+            ensure_shared_camera_worker(saved.ip, saved.rtsp_port, saved.username, saved.password, saved.channel, saved.rtsp_path)
     return saved
 
 
@@ -4526,12 +4793,16 @@ def update_settings(settings: HelperSettings):
     return apply_helper_settings(settings).model_dump()
 
 
-# --- Per-camera mode: "live only" or "live + event recording" -------------------------------
-# Event recording runs for one camera at a time: the camera/PLC in helper_settings.json. The
-# hierarchy page switches that target here, so what the page shows is what is actually running.
+# --- Per-camera mode: "live" (manual only: live view + Record button) or "event" (also records on
+# the machine's PLC gate). Each camera keeps its mode in camera_modes.json (not in git, so a deploy
+# keeps it). Every camera in "event" mode has its own PLC monitor; any camera can be recorded by hand.
+
+CAMERA_MODES_PATH = Path(os.getenv('CAMERA_MODES_PATH', HELPER_SETTINGS_PATH.with_name('camera_modes.json')))
+_CAMERA_MODES_LOCK = threading.Lock()
+
 
 class CameraRecordingModeRequest(BaseModel):
-    mode: str  # 'live' | 'event'
+    mode: str  # 'live' (manual only) | 'event' (record on the PLC gate)
 
 
 def hierarchy_camera_with_machine(camera_id: int) -> dict:
@@ -4540,7 +4811,7 @@ def hierarchy_camera_with_machine(camera_id: int) -> dict:
         cursor = connection.cursor()
         cursor.execute(
             f"""SELECT c.camera_ip, c.http_port, c.rtsp_port, c.username, c.password, c.channel, c.rtsp_path,
-                       m.id, m.name, m.plc_host, m.plc_port, m.plc_device, m.plc_address
+                       m.id, m.name, m.plc_host, m.plc_port, m.plc_device, m.plc_address, c.name
                 FROM {t_cameras} c JOIN {t_machines} m ON c.machine_id = m.id WHERE c.id = ?""",
             (camera_id,),
         )
@@ -4548,25 +4819,238 @@ def hierarchy_camera_with_machine(camera_id: int) -> dict:
     if not row:
         raise HTTPException(status_code=404, detail='Camera not found')
     keys = ['camera_ip', 'http_port', 'rtsp_port', 'username', 'password', 'channel', 'rtsp_path',
-            'machine_id', 'machine_name', 'plc_host', 'plc_port', 'plc_device', 'plc_address']
+            'machine_id', 'machine_name', 'plc_host', 'plc_port', 'plc_device', 'plc_address', 'camera_name']
     return dict(zip(keys, row))
 
 
-def recording_target_status() -> dict:
+def hierarchy_camera_ids() -> list[int]:
+    with get_db_connection() as connection:
+        cursor = connection.cursor()
+        cursor.execute(f"SELECT id FROM {hierarchy_table_name('cameras')} ORDER BY id")
+        return [int(row[0]) for row in cursor.fetchall()]
+
+
+def camera_id_for_address(ip: str, channel: int) -> int | None:
+    """Camera id for an address, None if no camera has it. Raises if the database cannot be read."""
+    with get_db_connection() as connection:
+        cursor = connection.cursor()
+        cursor.execute(
+            f"SELECT TOP 1 id FROM {hierarchy_table_name('cameras')} WHERE camera_ip = ? AND channel = ? ORDER BY id",
+            (ip, int(channel or 1)),
+        )
+        row = cursor.fetchone()
+    return int(row[0]) if row else None
+
+
+def load_camera_modes() -> dict[str, str]:
+    """{camera_id: 'event' | 'live'}. First run: the camera helper_settings.json pointed at keeps Auto."""
+    with _CAMERA_MODES_LOCK:
+        if CAMERA_MODES_PATH.exists():
+            try:
+                data = json.loads(CAMERA_MODES_PATH.read_text(encoding='utf-8'))
+                return {str(k): ('event' if v == 'event' else 'live') for k, v in dict(data).items()}
+            except Exception:
+                return {}
     settings = load_helper_settings()
+    modes: dict[str, str] = {}
+    try:
+        legacy_id = camera_id_for_address(settings.ip, settings.channel) if settings.plc_enabled else None
+    except Exception:
+        return modes  # camera list unreadable now: decide on a later call, write nothing
+    if legacy_id is not None:
+        modes[str(legacy_id)] = 'event'
+    # written even when empty, so this first-run lookup happens once (not on every status poll)
+    save_camera_modes(modes)
+    return modes
+
+
+def save_camera_modes(modes: dict[str, str]) -> None:
+    with _CAMERA_MODES_LOCK:
+        CAMERA_MODES_PATH.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(CAMERA_MODES_PATH, {str(k): v for k, v in modes.items()})
+
+
+def event_camera_ids() -> list[int]:
+    return sorted(int(k) for k, v in load_camera_modes().items() if v == 'event' and str(k).isdigit())
+
+
+def camera_plc_request(camera_id: int, camera: dict | None = None) -> PlcMonitorRequest:
+    """PLC monitor settings for one camera: camera + machine PLC from the hierarchy, rules from settings."""
+    camera = camera or hierarchy_camera_with_machine(camera_id)
+    settings = load_helper_settings()
+    device = str(camera['plc_device'] or 'X').strip().upper() or 'X'
+    address = str(camera['plc_address'] or '4A').strip().upper() or '4A'
+    is_x_device = device == 'X'
+    return PlcMonitorRequest(
+        ip=camera['camera_ip'],
+        http_port=int(camera['http_port'] or 80),
+        rtsp_port=int(camera['rtsp_port'] or 554),
+        username=camera['username'] or settings.username,
+        password=camera['password'] or settings.password,
+        channel=int(camera['channel'] or 1),
+        rtsp_path=camera['rtsp_path'] or None,
+        storage_root=settings.storage_root,
+        capture_video=settings.capture_video,
+        capture_breakdown_video=settings.capture_breakdown_video,
+        plc_host=str(camera['plc_host'] or '').strip(),
+        plc_port=int(camera['plc_port'] or 5000),
+        plc_device=device,
+        gate_open_addresses=[address],
+        gate_close_addresses=[address],
+        gate_open_when=not is_x_device,
+        gate_close_when=is_x_device,
+        poll_seconds=1.0,
+        max_record_seconds=settings.max_record_seconds,
+    )
+
+
+def camera_recording_request(camera_id: int, event_type: str = 'self_capture') -> RecordingRequest:
+    camera = hierarchy_camera_with_machine(camera_id)
+    settings = load_helper_settings()
+    return RecordingRequest(
+        ip=camera['camera_ip'],
+        http_port=int(camera['http_port'] or 80),
+        rtsp_port=int(camera['rtsp_port'] or 554),
+        username=camera['username'] or settings.username,
+        password=camera['password'] or settings.password,
+        channel=int(camera['channel'] or 1),
+        rtsp_path=camera['rtsp_path'] or None,
+        storage_root=settings.storage_root,
+        event_type=event_type,
+        max_record_seconds=settings.max_record_seconds,
+        capture_video=True,
+        capture_breakdown_video=settings.capture_breakdown_video,
+    )
+
+
+def start_camera_monitor(camera_id: int) -> dict:
+    with camera_context(camera_key_for(camera_id)):
+        camera = hierarchy_camera_with_machine(camera_id)
+        if not str(camera['plc_host'] or '').strip():
+            raise HTTPException(
+                status_code=400,
+                detail=f"Machine '{camera['machine_name']}' has no PLC IP. Add the PLC details to the machine first.",
+            )
+        plc_monitor_state['enabled'] = True
+        return dict(start_plc_monitor_internal(camera_plc_request(camera_id, camera), persist=False))
+
+
+def stop_camera_monitor(camera_id: int) -> dict:
+    with camera_context(camera_key_for(camera_id)):
+        return dict(stop_plc_monitor())
+
+
+def restart_event_monitors() -> None:
+    for camera_id in event_camera_ids():
+        try:
+            start_camera_monitor(camera_id)
+        except Exception as exc:
+            # e.g. the machine's PLC IP was removed: do not keep reading the old PLC
+            try:
+                stop_camera_monitor(camera_id)
+            except Exception:
+                pass
+            detail = getattr(exc, 'detail', None) or str(exc)
+            camera_session(camera_key_for(camera_id)).plc_monitor_state['last_error'] = f'PLC monitor not started: {detail}'
+
+
+def on_hierarchy_change(kind: str, item_id: int) -> None:
+    """Camera list edited: forget removed cameras and restart monitors whose camera/PLC changed."""
+    modes = load_camera_modes()
+    if kind.endswith('_deleted'):
+        try:
+            existing = {str(camera_id) for camera_id in hierarchy_camera_ids()}
+        except Exception:
+            return
+        removed = [key for key in modes if key not in existing]
+        for session in all_camera_sessions():
+            camera_id = camera_id_from_key(session.key)
+            if camera_id is not None and str(camera_id) not in existing:
+                with camera_context(session.key):
+                    stop_plc_monitor()
+                    if recording_state.get('running'):
+                        stop_recording_internal()
+        for key in removed:
+            modes.pop(key, None)
+        if removed:
+            save_camera_modes(modes)
+    refresh_default_camera_key()
+    restart_event_monitors()
+
+
+hierarchy_change_hooks.append(lambda kind, item_id: context_thread(on_hierarchy_change, kind, item_id, daemon=True).start())
+
+
+def refresh_default_camera_key() -> None:
+    """Old single-camera calls (no camera_id) act on the hierarchy camera that helper_settings points at."""
+    settings = load_helper_settings()
+    try:
+        legacy_id = camera_id_for_address(settings.ip, settings.channel)
+    except Exception:
+        return  # database unreadable: keep the current mapping
+    _DEFAULT_CAMERA_KEY['key'] = camera_key_for(legacy_id) if legacy_id is not None else 'default'
+
+
+def camera_live_status(camera_id: int) -> dict:
+    jpeg, frame_at, status = stream_pool.peek_frame(camera_id)
+    age = round(time.monotonic() - frame_at, 2) if frame_at else None
+    return {'running': status not in ('idle', 'offline'), 'has_frame': bool(jpeg) and age is not None and age < 6.0,
+            'frame_age_seconds': age, 'status': status}
+
+
+def camera_status(camera_id: int, modes: dict[str, str] | None = None) -> dict:
+    modes = load_camera_modes() if modes is None else modes
+    session = camera_session(camera_key_for(camera_id))
+    rec, plc = session.recording_state, session.plc_monitor_state
     return {
-        'camera_ip': settings.ip,
-        'rtsp_port': settings.rtsp_port,
-        'channel': settings.channel,
-        'event_recording': bool(settings.plc_enabled and settings.capture_video),
-        'plc_host': settings.plc_host,
-        'plc_port': settings.plc_port,
-        'plc_device': settings.plc_device,
-        'plc_address': settings.plc_address,
-        'monitor_running': bool(plc_monitor_state.get('running')),
-        'machine_state': plc_monitor_state.get('machine_state'),
-        'recording_running': bool(recording_state.get('running')),
+        'camera_id': camera_id,
+        'mode': modes.get(str(camera_id), 'live'),
+        'monitor_enabled': bool(plc.get('enabled')),
+        'monitor_running': bool(plc.get('running')),
+        'machine_state': plc.get('machine_state'),
+        'current_event_type': plc.get('current_event_type'),
+        'current_event_started_at': plc.get('current_event_started_at'),
+        'last_read_at': plc.get('last_read_at'),
+        'last_error': plc.get('last_error'),
+        'plc_host': plc.get('plc_host'),
+        'plc_port': plc.get('plc_port'),
+        'recording_running': bool(rec.get('running')),
+        'recording_event_type': rec.get('event_type') if rec.get('running') else None,
+        'recording_started_at': rec.get('started_at') if rec.get('running') else None,
+        'recording_error': rec.get('error'),
+        'live': camera_live_status(camera_id),
     }
+
+
+@app.get('/api/cameras/status')
+def all_cameras_status():
+    """Mode, PLC monitor and recording state of every camera, for the Live page and Settings."""
+    modes = load_camera_modes()
+    try:
+        ids = hierarchy_camera_ids()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f'Camera list unavailable: {exc}')
+    return {'cameras': [camera_status(camera_id, modes) for camera_id in ids]}
+
+
+def recording_target_status() -> dict:
+    """Kept for older pages: the first camera in Auto mode, plus every camera's mode."""
+    modes = load_camera_modes()
+    events = sorted(int(k) for k, v in modes.items() if v == 'event' and str(k).isdigit())
+    result = {'event_camera_ids': events, 'modes': modes, 'event_recording': bool(events)}
+    if events:
+        try:
+            camera = hierarchy_camera_with_machine(events[0])
+            status = camera_status(events[0], modes)
+            result.update({
+                'camera_ip': camera['camera_ip'], 'rtsp_port': camera['rtsp_port'], 'channel': camera['channel'],
+                'plc_host': camera['plc_host'], 'plc_port': camera['plc_port'], 'plc_device': camera['plc_device'],
+                'plc_address': camera['plc_address'], 'monitor_running': status['monitor_running'],
+                'machine_state': status['machine_state'], 'recording_running': status['recording_running'],
+            })
+        except HTTPException:
+            pass
+    return result
 
 
 @app.get('/api/hierarchy/recording-target')
@@ -4579,47 +5063,69 @@ def set_camera_recording_mode(camera_id: int, request: CameraRecordingModeReques
     mode = request.mode.strip().lower()
     if mode not in {'live', 'event'}:
         raise HTTPException(status_code=400, detail="mode must be 'live' or 'event'")
-    if recording_state.get('running') or plc_monitor_state.get('current_event_type'):
+    session = camera_session(camera_key_for(camera_id))
+    if session.plc_monitor_state.get('current_event_type') or (
+        session.recording_state.get('running') and session.recording_state.get('event_type') in {'minor_stoppage', 'breakdown'}
+    ):
         raise HTTPException(
             status_code=409,
-            detail='A stoppage is being recorded right now. Change the mode after the machine is running again.',
+            detail='This machine is stopped and being recorded right now. Change the mode after it runs again.',
         )
     camera = hierarchy_camera_with_machine(camera_id)
-    current = load_helper_settings()
-    is_current_target = current.ip == camera['camera_ip'] and int(current.channel) == int(camera['channel'] or 1)
-
+    if mode == 'event' and not str(camera['plc_host'] or '').strip():
+        raise HTTPException(
+            status_code=400,
+            detail=f"Machine '{camera['machine_name']}' has no PLC IP. Add the PLC details to the machine first.",
+        )
+    modes = load_camera_modes()
+    modes[str(camera_id)] = mode
+    save_camera_modes(modes)
     if mode == 'event':
-        if not (camera['plc_host'] or '').strip():
-            raise HTTPException(
-                status_code=400,
-                detail=f"Machine '{camera['machine_name']}' has no PLC IP. Add the PLC details to the machine first.",
-            )
-        apply_helper_settings(current.model_copy(update={
-            'ip': camera['camera_ip'],
-            'http_port': int(camera['http_port'] or 80),
-            'rtsp_port': int(camera['rtsp_port'] or 554),
-            'username': camera['username'] or current.username,
-            'password': camera['password'] or current.password,
-            'channel': int(camera['channel'] or 1),
-            'rtsp_path': camera['rtsp_path'] or current.rtsp_path,
-            'plc_enabled': True,
-            'capture_video': True,
-            'plc_host': camera['plc_host'].strip(),
-            'plc_port': int(camera['plc_port'] or 5000),
-            'plc_device': camera['plc_device'] or 'X',
-            'plc_address': str(camera['plc_address'] or '4A'),
-        }))
-    elif is_current_target and current.plc_enabled:
-        apply_helper_settings(current.model_copy(update={'plc_enabled': False}))
+        start_camera_monitor(camera_id)
+    else:
+        stop_camera_monitor(camera_id)
     return recording_target_status()
 
 
-def start_plc_monitor_internal(request: PlcMonitorRequest):
-    global plc_monitor_thread
+@app.post('/api/cameras/{camera_id}/record/start')
+def start_camera_manual_recording(camera_id: int):
+    """Record button on the Live page: records this camera only, whatever the other cameras do."""
+    with camera_context(camera_key_for(camera_id)):
+        if recording_state.get('running'):
+            kind = recording_state.get('event_type')
+            detail = (
+                'This camera is already recording a machine stoppage (PLC gate). It stops when the machine runs again.'
+                if kind in {'minor_stoppage', 'breakdown'}
+                else 'This camera is already recording.'
+            )
+            raise HTTPException(status_code=409, detail=detail)
+        return dict(start_recording_internal(camera_recording_request(camera_id, 'self_capture')))
+
+
+@app.post('/api/cameras/{camera_id}/record/stop')
+def stop_camera_manual_recording(camera_id: int):
+    with camera_context(camera_key_for(camera_id)):
+        if recording_state.get('running') and recording_state.get('event_type') in {'minor_stoppage', 'breakdown'}:
+            raise HTTPException(
+                status_code=409,
+                detail='This recording is controlled by the machine gate and stops when the machine runs again.',
+            )
+        return dict(stop_recording_internal())
+
+
+def start_plc_monitor_internal(request: PlcMonitorRequest, persist: bool = True):
+    with camera_session().start_lock:
+        return _start_plc_monitor_locked(request, persist)
+
+
+def _start_plc_monitor_locked(request: PlcMonitorRequest, persist: bool = True):
+    _cs = camera_session()
     if str(request.plc_device).strip().upper() == 'X':
         request.gate_open_when = False
         request.gate_close_when = True
-    save_helper_settings(
+    # persist=False: a per-camera monitor must not overwrite the plant-wide settings file
+    if persist and resolve_camera_key() == _DEFAULT_CAMERA_KEY['key']:
+      save_helper_settings(
         HelperSettings(
             ip=request.ip,
             http_port=request.http_port,
@@ -4639,7 +5145,7 @@ def start_plc_monitor_internal(request: PlcMonitorRequest):
         )
     )
     plc_monitor_state['enabled'] = True
-    if plc_monitor_state.get('running') and plc_monitor_thread and plc_monitor_thread.is_alive():
+    if plc_monitor_state.get('running') and _cs.plc_monitor_thread and _cs.plc_monitor_thread.is_alive():
         same_request = (
             plc_monitor_state.get('camera_ip') == request.ip
             and int(plc_monitor_state.get('http_port') or 80) == int(request.http_port)
@@ -4659,18 +5165,21 @@ def start_plc_monitor_internal(request: PlcMonitorRequest):
         )
         if same_request:
             return plc_monitor_state
-        plc_monitor_stop_event.set()
-        plc_monitor_thread.join(timeout=3)
+        _cs.plc_monitor_stop_event.set()
+        _cs.plc_monitor_thread.join(timeout=3)
 
-    plc_monitor_stop_event.clear()
-    plc_monitor_thread = threading.Thread(target=plc_monitor_worker, args=(request,), daemon=True)
-    plc_monitor_thread.start()
+    _cs.plc_monitor_stop_event = threading.Event()
+    _cs.plc_monitor_thread = context_thread(plc_monitor_worker, request, daemon=True, name=f'plc-monitor-{_cs.key}')
+    _cs.plc_monitor_thread.start()
     return plc_monitor_state
 
 
 @app.post('/plc-monitor/start')
 def start_plc_monitor(request: PlcMonitorRequest):
-    return start_plc_monitor_internal(request)
+    camera_id = camera_id_from_key()
+    if camera_id is not None and _CAMERA_KEY.get() != 'default':
+        return start_camera_monitor(camera_id)
+    return dict(start_plc_monitor_internal(request))
 
 
 @app.post('/plc-test')
@@ -4722,8 +5231,8 @@ def plc_test(request: PlcMonitorRequest):
 def stop_plc_monitor():
     plc_monitor_state['enabled'] = False
     plc_monitor_stop_event.set()
-    if plc_monitor_thread and plc_monitor_thread.is_alive():
-        plc_monitor_thread.join(timeout=3)
+    if camera_session().plc_monitor_thread and camera_session().plc_monitor_thread.is_alive():
+        camera_session().plc_monitor_thread.join(timeout=3)
     if recording_state.get('running') and recording_state.get('event_type') in {'minor_stoppage', 'breakdown'}:
         stop_recording_internal()
     plc_monitor_state.update(
@@ -4744,7 +5253,7 @@ def stop_plc_monitor():
             'close_values': {},
         }
     )
-    return plc_monitor_state
+    return dict(plc_monitor_state)
 
 
 @app.get('/reasons')
@@ -4772,16 +5281,19 @@ def save_recording_reason(request: RecordingReasonRequest):
 
 
 def default_plc_monitor_request() -> PlcMonitorRequest:
+    camera_id = camera_id_from_key()
+    if camera_id is not None and str(camera_id) in load_camera_modes():
+        return camera_plc_request(camera_id)
     return settings_to_plc_request(load_helper_settings())
 
 
 def ensure_auto_plc_monitor_running():
     if not plc_monitor_state.get('enabled', False):
         return
-    if plc_monitor_state.get('running') and plc_monitor_thread and plc_monitor_thread.is_alive():
+    if plc_monitor_state.get('running') and camera_session().plc_monitor_thread and camera_session().plc_monitor_thread.is_alive():
         return
     try:
-        start_plc_monitor_internal(default_plc_monitor_request())
+        start_plc_monitor_internal(default_plc_monitor_request(), persist=False)
     except Exception as exc:
         plc_monitor_state['last_error'] = f'PLC monitor auto-start failed: {exc}'
 

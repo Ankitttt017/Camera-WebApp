@@ -177,7 +177,16 @@ The UI's audio toggle only **mutes** the `<audio>` element. The stream (and its 
 
 ### 6.3 PLC monitor
 
-`plc_monitor_worker` (`cpplus_helper.py:3983`) runs in a thread when `plc_enabled` is true. It starts automatically at startup and can also be started with `POST /plc-monitor/start`.
+**Every camera works on its own.** Each camera has its own recording state, FFmpeg process and PLC monitor (`CameraSession`, key `cam:<camera id>`), so a breakdown on one machine never shows on, or blocks, another camera.
+
+Each camera has a mode, set in Settings → Cameras and stored in `camera_app/camera_modes.json` (not in git, so a deploy keeps it):
+
+| Mode | What it does |
+|---|---|
+| Manual (`live`) | Live view. A video is saved only when someone presses **Record** on Live View. |
+| Auto (`event`) | Also records by itself on the machine's PLC gate. Needs the machine's PLC IP. Manual Record still works. |
+
+On first start without `camera_modes.json`, the camera that `helper_settings.json` points at keeps Auto if `plc_enabled` is true. A PLC monitor (`plc_monitor_worker`) runs for every Auto camera, using that camera's machine PLC from the camera list and the plant-wide rules (`capture_video`, `capture_breakdown_video`, `max_record_seconds`) from `helper_settings.json`. Editing a camera or its machine restarts that camera's monitor; deleting a camera removes its mode.
 
 Each tick (`poll_seconds`, default **1.0 s**, minimum 0.2 s):
 
@@ -287,7 +296,11 @@ Base URL: `http://<node>:8010`. Interactive docs: `http://<node>:8010/docs`.
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/settings` | Current `helper_settings.json` (⚠ includes camera password) |
-| POST | `/settings` | Save settings (`HelperSettings`) |
+| POST | `/settings` | Save settings (`HelperSettings`); the rules are applied to every Auto camera |
+| GET | `/api/cameras/status` | Every camera: mode, PLC monitor, machine state, recording, live stream |
+| POST | `/api/hierarchy/cameras/{id}/recording-mode` | `{"mode": "live" \| "event"}`: Manual or Auto for one camera |
+
+> Add `?camera_id=<id>` to `/recording/status`, `/recording/start`, `/recording/stop`, `/plc-monitor/status` and `/plc-monitor/start` to act on that camera only. Without it they act on the camera in `helper_settings.json` (old single-camera behaviour).
 
 ### 8.2 PLC
 | Method | Path | Purpose |
@@ -300,9 +313,11 @@ Base URL: `http://<node>:8010`. Interactive docs: `http://<node>:8010/docs`.
 ### 8.3 Recording
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/recording/status` | Current/last recording |
+| GET | `/recording/status` | Current/last recording (`?camera_id=` for one camera; `file_size` 0 = still connecting) |
 | POST | `/recording/start` | Manual start (`event_type`: `minor_stoppage` / `breakdown` / `self_capture`) |
 | POST | `/recording/stop` | Stop the current recording |
+| POST | `/api/cameras/{id}/record/start` | Record button: manual recording of this camera (409 if it is already recording) |
+| POST | `/api/cameras/{id}/record/stop` | Stop it (409 if the recording belongs to a PLC stoppage) |
 
 ### 8.4 Event index & reasons
 | Method | Path | Body / query |
@@ -349,7 +364,8 @@ There are two sources of configuration:
    | Transcription | `TRANSCRIPTION_*` (enabled, model, language, device, compute type, VAD, thresholds, command) |
    | Misc | `HELPER_SETTINGS_PATH`, `HELPER_HOST` |
 
-2. **`camera_app/helper_settings.json`**, read and written by `GET/POST /settings`. It holds the camera (`ip`, ports, `username`, `password`, `channel`, `rtsp_path`), `storage_root`, the PLC (`plc_enabled`, `plc_host`, `plc_port`, `plc_device`, `plc_address`), `capture_video`, `capture_breakdown_video` and `max_record_seconds`.
+2. **`camera_app/helper_settings.json`**, read and written by `GET/POST /settings`. It holds the plant-wide rules (`storage_root`, `capture_video`, `capture_breakdown_video`, `max_record_seconds`, `public_helper_url`) and the old single camera/PLC (`ip`, ports, `username`, `password`, `channel`, `rtsp_path`, `plc_enabled`, `plc_host`, `plc_port`, `plc_device`, `plc_address`), used only by calls without `camera_id`.
+3. **`camera_app/camera_modes.json`**: each camera's Manual/Auto mode (`{"<camera id>": "live" | "event"}`). Not in git; it stays on each server across deploys.
 
 > `.env.example` lists only variables the backend reads. PLC, camera and storage settings for event recording come from `helper_settings.json` (set in the app).
 
