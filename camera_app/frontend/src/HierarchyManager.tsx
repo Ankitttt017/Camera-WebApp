@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  CameraStatus,
   HierarchyCamera,
   HierarchyDepartment,
   HierarchyLine,
@@ -18,6 +19,7 @@ import {
   deleteLine,
   deleteMachine,
   deletePlant,
+  fetchCamerasStatus,
   fetchHierarchy,
   fetchRecordingTarget,
   hierarchyCameraSnapshotUrl,
@@ -69,6 +71,23 @@ function Ico({ name }: { name: keyof typeof ICONS }) {
   );
 }
 
+/** One short line about what this camera is doing now. */
+function cameraStatusLine(st: CameraStatus | undefined, isAuto: boolean): { text: string; tone: 'ok' | 'rec' | 'warn' | 'idle' } {
+  const since = (iso?: string | null) => (iso ? ` since ${iso.slice(11, 16)}` : '');
+  if (st?.recording_running) {
+    if (st.recording_event_type === 'breakdown') return { text: `● Breakdown — recording${since(st.recording_started_at)}`, tone: 'rec' };
+    if (st.recording_event_type === 'minor_stoppage') return { text: `● Machine stopped — recording${since(st.recording_started_at)}`, tone: 'rec' };
+    return { text: `● Manual recording${since(st.recording_started_at)}`, tone: 'rec' };
+  }
+  if (!isAuto) return { text: 'Manual — use Record on Live View', tone: 'idle' };
+  if (!st) return { text: 'Auto', tone: 'idle' };
+  if (st.last_error && !st.monitor_running) return { text: `Auto — PLC problem: ${st.last_error}`, tone: 'warn' };
+  if (!st.monitor_running) return { text: 'Auto — starting…', tone: 'warn' };
+  if (st.machine_state === 'breakdown') return { text: `● Breakdown${since(st.current_event_started_at)}`, tone: 'rec' };
+  if (st.current_event_type) return { text: `● Machine stopped${since(st.current_event_started_at)}`, tone: 'rec' };
+  return { text: 'Auto — watching the machine gate, machine running', tone: 'ok' };
+}
+
 /* ------------------------------------------------------- camera wizard state */
 
 type PlcFields = { plc_host: string; plc_port: number; plc_device: string; plc_address: string };
@@ -110,6 +129,7 @@ export function HierarchyManager({ onBack }: { onBack?: () => void }) {
   const [activePlantId, setActivePlantId] = useState<number | null>(null);
   const [snapTick, setSnapTick] = useState(Date.now());
   const [busyCameraId, setBusyCameraId] = useState<number | null>(null);
+  const [statuses, setStatuses] = useState<Record<number, CameraStatus>>({});
 
   const [wizard, setWizard] = useState<CameraDraft | null>(null);
   const [entity, setEntity] = useState<EntityEdit | null>(null);
@@ -130,6 +150,15 @@ export function HierarchyManager({ onBack }: { onBack?: () => void }) {
 
   useEffect(() => { reload(); }, [reload]);
   useEffect(() => {
+    let alive = true;
+    const load = () => fetchCamerasStatus()
+      .then((data) => { if (alive) setStatuses(Object.fromEntries(data.cameras.map((c) => [c.camera_id, c]))); })
+      .catch(() => {});
+    load();
+    const t = window.setInterval(load, 4000);
+    return () => { alive = false; window.clearInterval(t); };
+  }, [target]);
+  useEffect(() => {
     const t = window.setInterval(() => setSnapTick(Date.now()), 5000);
     return () => window.clearInterval(t);
   }, []);
@@ -146,7 +175,8 @@ export function HierarchyManager({ onBack }: { onBack?: () => void }) {
     return list;
   }, [plants]);
 
-  const recordingCam = allCameras.find((c) => cameraIsRecordingTarget(c.cam, target)) || null;
+  const autoCount = allCameras.filter((c) => cameraIsRecordingTarget(c.cam, target)).length;
+  const recordingNow = allCameras.filter((c) => statuses[c.cam.id]?.recording_running).length;
   const activePlant = plants.find((p) => p.id === activePlantId) || null;
   const cameraCount = (plant: HierarchyPlant) =>
     plant.departments.reduce((n, d) => n + d.lines.reduce((m, l) => m + l.machines.reduce((k, mc) => k + mc.cameras.length, 0), 0), 0);
@@ -164,8 +194,8 @@ export function HierarchyManager({ onBack }: { onBack?: () => void }) {
       setNotice({
         kind: 'ok',
         text: mode === 'event'
-          ? `"${cam.name}" will now record automatically on the PLC signal of ${machine.name}.`
-          : `"${cam.name}" is now live view only.`,
+          ? `"${cam.name}" is on Auto: it records by itself when ${machine.name} stops (PLC gate).`
+          : `"${cam.name}" is on Manual: record it with the Record button on Live View.`,
       });
     } catch (err) {
       setNotice({ kind: 'error', text: message(err) });
@@ -215,7 +245,7 @@ export function HierarchyManager({ onBack }: { onBack?: () => void }) {
           <span className="er-title-icon"><Ico name="camera" /></span>
           <div>
             <h1>Plants &amp; Cameras</h1>
-            <p>Add cameras plant-wise and choose for each one: live view only, or live view + automatic recording on the machine's PLC signal.</p>
+            <p>Add your cameras and choose how each one records. Every camera works on its own.</p>
           </div>
         </div>
         <div className="er-header-actions">
@@ -230,25 +260,17 @@ export function HierarchyManager({ onBack }: { onBack?: () => void }) {
 
       {notice && <div className={notice.kind === 'ok' ? 'hm-notice hm-notice-ok' : 'hm-notice hm-notice-error'} role="status">{notice.text}</div>}
 
-      {/* Which camera records on PLC events */}
-      <section className={recordingCam ? 'hm-rec hm-rec-on' : 'hm-rec'}>
-        <span className="hm-rec-icon"><Ico name="rec" /></span>
-        {recordingCam ? (
-          <div>
-            <strong>Event recording: {recordingCam.cam.name}</strong>
-            <span>
-              {recordingCam.plant.name} › {recordingCam.dept.name} › {recordingCam.line.name} › {recordingCam.machine.name}
-              {' · '}PLC {target?.plc_host}:{target?.plc_port} ({target?.plc_device}{target?.plc_address})
-              {' · '}{target?.monitor_running ? `monitor running, machine ${target?.machine_state || 'running'}` : 'monitor stopped'}
-              {target?.recording_running ? ' · recording now' : ''}
-            </span>
-          </div>
-        ) : (
-          <div>
-            <strong>No camera records on PLC events</strong>
-            <span>All cameras are live view only. Switch a camera to "Live + Event recording" to record stoppages automatically. One camera can record at a time.</span>
-          </div>
-        )}
+      {/* What the two modes mean, and what is happening now */}
+      <section className="hm-summary">
+        <div className="hm-summary-stats">
+          <span><strong>{allCameras.length}</strong> cameras</span>
+          <span><strong>{autoCount}</strong> on Auto</span>
+          <span className={recordingNow ? 'is-rec' : undefined}><strong>{recordingNow}</strong> recording now</span>
+        </div>
+        <div className="hm-summary-help">
+          <span><Ico name="eye" /> <strong>Manual</strong> — live view; press <em>Record</em> on Live View when you want a video.</span>
+          <span><Ico name="rec" /> <strong>Auto</strong> — also records by itself when the machine stops (PLC safety gate). Needs the machine's PLC IP.</span>
+        </div>
       </section>
 
       {/* Plant tabs */}
@@ -338,25 +360,30 @@ export function HierarchyManager({ onBack }: { onBack?: () => void }) {
                           {machine.cameras.map((cam) => {
                             const isRec = cameraIsRecordingTarget(cam, target);
                             const busy = busyCameraId === cam.id;
+                            const st = statuses[cam.id];
+                            const statusLine = cameraStatusLine(st, isRec);
                             return (
                               <article key={cam.id} className={isRec ? 'hm-cam is-rec' : 'hm-cam'}>
                                 <div className="hm-cam-thumb">
                                   <img src={`${hierarchyCameraSnapshotUrl(cam.id)}&k=${snapTick}`} alt={`${cam.name} preview`} loading="lazy" />
-                                  <span className={isRec ? 'hm-badge hm-badge-rec' : 'hm-badge'}>{isRec ? 'REC on event' : 'LIVE'}</span>
+                                  <span className={st?.recording_running ? 'hm-badge hm-badge-rec' : isRec ? 'hm-badge hm-badge-auto' : 'hm-badge'}>
+                                    {st?.recording_running ? 'REC' : isRec ? 'AUTO' : 'MANUAL'}
+                                  </span>
                                 </div>
                                 <div className="hm-cam-body">
                                   <div className="hm-cam-name">
                                     <strong>{cam.name}</strong>
                                     <span>{cam.camera_ip}:{cam.rtsp_port} · CH {cam.channel}</span>
+                                    <span className={`hm-cam-status hm-cam-status-${statusLine.tone}`}>{statusLine.text}</span>
                                   </div>
                                   <div className="hm-mode" role="radiogroup" aria-label={`Mode for ${cam.name}`}>
                                     <button type="button" role="radio" aria-checked={!isRec} disabled={busy || !isRec}
                                       className={!isRec ? 'is-active' : undefined} onClick={() => changeMode(cam, machine, 'live')}>
-                                      <Ico name="eye" /> Live only
+                                      <Ico name="eye" /> Manual
                                     </button>
                                     <button type="button" role="radio" aria-checked={isRec} disabled={busy || isRec}
                                       className={isRec ? 'is-active is-rec' : undefined} onClick={() => changeMode(cam, machine, 'event')}>
-                                      <Ico name="rec" /> Live + Event recording
+                                      <Ico name="rec" /> Auto (PLC gate)
                                     </button>
                                   </div>
                                   <div className="hm-cam-actions">
@@ -382,7 +409,6 @@ export function HierarchyManager({ onBack }: { onBack?: () => void }) {
         <CameraWizard
           plants={plants}
           initial={wizard}
-          recordingCamName={recordingCam?.cam.name || null}
           onClose={() => setWizard(null)}
           onSaved={async (text) => { setWizard(null); setNotice({ kind: 'ok', text }); await reload(); }}
         />
@@ -476,10 +502,9 @@ function EntityModal({ edit, onClose, onSaved }: { edit: EntityEdit; onClose: ()
 
 /* ================================================================ wizard */
 
-function CameraWizard({ plants, initial, recordingCamName, onClose, onSaved }: {
+function CameraWizard({ plants, initial, onClose, onSaved }: {
   plants: HierarchyPlant[];
   initial: CameraDraft;
-  recordingCamName: string | null;
   onClose: () => void;
   onSaved: (text: string) => void;
 }) {
@@ -707,24 +732,19 @@ function CameraWizard({ plants, initial, recordingCamName, onClose, onSaved }: {
                 <label className={d.mode === 'live' ? 'hm-mode-card is-active' : 'hm-mode-card'}>
                   <input type="radio" name="mode" checked={d.mode === 'live'} onChange={() => set({ mode: 'live' })} />
                   <span className="hm-mode-icon"><Ico name="eye" /></span>
-                  <span><strong>Live view only</strong><small>Watch live video and audio. Nothing is recorded.</small></span>
+                  <span><strong>Manual</strong><small>Live view and audio. Press Record on Live View whenever you want a video.</small></span>
                 </label>
                 <label className={d.mode === 'event' ? 'hm-mode-card is-active is-rec' : 'hm-mode-card'}>
                   <input type="radio" name="mode" checked={d.mode === 'event'} onChange={() => set({ mode: 'event' })} />
                   <span className="hm-mode-icon"><Ico name="rec" /></span>
                   <span>
-                    <strong>Live + Event recording</strong>
-                    <small>Records automatically when the machine's PLC signal shows a stoppage, and saves it in the Event Report.</small>
+                    <strong>Auto (PLC gate)</strong>
+                    <small>Also records by itself when the machine stops (safety gate opens) and saves it in the Event Report. Manual Record still works.</small>
                   </span>
                 </label>
               </div>
               {d.mode === 'event' && (
                 <>
-                  {recordingCamName && recordingCamName !== initial.name && (
-                    <div className="hm-notice hm-notice-warn">
-                      Only one camera can record at a time. Saving moves event recording from “{recordingCamName}” to this camera.
-                    </div>
-                  )}
                   <PlcEditor plc={d.plc} onChange={(plc) => set({ plc })} />
                   <div className="hm-test-row">
                     <button type="button" className="er-btn er-btn-secondary" onClick={runPlcTest} disabled={!d.plc.plc_host.trim()}>Test PLC</button>

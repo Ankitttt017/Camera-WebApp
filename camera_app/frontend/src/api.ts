@@ -25,6 +25,8 @@ export type CameraSettings = {
 export type RecordingStatus = {
   running: boolean;
   path?: string | null;
+  /** bytes written so far; 0 while the camera has not sent video yet */
+  file_size?: number;
   started_at?: string | null;
   ended_at?: string | null;
   duration_seconds?: number | null;
@@ -332,6 +334,7 @@ export function recordingExportUrl(params: {
   end_at?: string;
   event_type?: string;
   shift?: string;
+  machine?: string;
   public_helper_url?: string;
 }) {
   return queryUrl('/recording-index/export.xlsx', params);
@@ -620,21 +623,24 @@ export async function testPlcConnection(data: {
   return postJson<{ ok: boolean; message: string }>('/api/hierarchy/test-plc', data);
 }
 
+/** 'live' = manual (live view + Record button), 'event' = Auto: also records on the machine's PLC gate. */
 export type RecordingMode = 'live' | 'event';
 
-/** The one camera + PLC that the backend currently uses for event (PLC-triggered) recording. */
+/** Every camera's mode; the first Auto camera's details are kept for older pages. */
 export type RecordingTarget = {
-  camera_ip: string;
-  rtsp_port: number;
-  channel: number;
+  modes: Record<string, RecordingMode>;
+  event_camera_ids: number[];
   event_recording: boolean;
+  camera_ip?: string;
+  rtsp_port?: number;
+  channel?: number;
   plc_host?: string;
-  plc_port: number;
-  plc_device: string;
-  plc_address: string;
-  monitor_running: boolean;
+  plc_port?: number;
+  plc_device?: string;
+  plc_address?: string;
+  monitor_running?: boolean;
   machine_state?: string | null;
-  recording_running: boolean;
+  recording_running?: boolean;
 };
 
 export async function fetchRecordingTarget() {
@@ -645,8 +651,46 @@ export async function setCameraRecordingMode(cameraId: number, mode: RecordingMo
   return postJson<RecordingTarget>(`/api/hierarchy/cameras/${cameraId}/recording-mode`, { mode });
 }
 
-export function cameraIsRecordingTarget(camera: { camera_ip: string; channel: number }, target: RecordingTarget | null) {
-  return Boolean(target?.event_recording && target.camera_ip === camera.camera_ip && Number(target.channel) === Number(camera.channel));
+export function cameraIsRecordingTarget(camera: { id: number }, target: RecordingTarget | null) {
+  return target?.modes?.[String(camera.id)] === 'event';
+}
+
+/** One camera's own state: its mode, its PLC monitor and its recording. */
+export type CameraStatus = {
+  camera_id: number;
+  mode: RecordingMode;
+  monitor_enabled: boolean;
+  monitor_running: boolean;
+  machine_state?: string | null;
+  current_event_type?: string | null;
+  current_event_started_at?: string | null;
+  last_read_at?: string | null;
+  last_error?: string | null;
+  plc_host?: string | null;
+  plc_port?: number | null;
+  recording_running: boolean;
+  recording_event_type?: string | null;
+  recording_started_at?: string | null;
+  recording_error?: string | null;
+  live?: { running: boolean; has_frame: boolean; frame_age_seconds?: number | null; status?: string };
+};
+
+export async function fetchCamerasStatus() {
+  return getJson<{ cameras: CameraStatus[] }>('/api/cameras/status');
+}
+
+export async function startCameraRecording(cameraId: number) {
+  return postJson<RecordingStatus>(`/api/cameras/${cameraId}/record/start`, {});
+}
+
+export async function stopCameraRecording(cameraId: number) {
+  return postJson<RecordingStatus>(`/api/cameras/${cameraId}/record/stop`, {});
+}
+
+/** Status endpoints for one camera only. */
+export function cameraScoped(path: string, cameraId: number | null | undefined) {
+  if (!cameraId) return path;
+  return `${path}${path.includes('?') ? '&' : '?'}camera_id=${cameraId}`;
 }
 
 export function hierarchyCameraSnapshotUrl(cameraId: number) {

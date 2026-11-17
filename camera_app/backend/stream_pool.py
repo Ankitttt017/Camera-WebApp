@@ -277,6 +277,15 @@ class CameraStreamPool:
         with worker.lock:
             return worker.latest_jpeg, worker.last_frame_time, worker.status
 
+    def peek_frame(self, camera_id: int) -> Tuple[Optional[bytes], float, str]:
+        """Like get_frame but for status checks: does not keep an idle worker alive."""
+        with self.pool_lock:
+            worker = self.workers.get(camera_id)
+        if not worker:
+            return None, 0.0, "offline"
+        with worker.lock:
+            return worker.latest_jpeg, worker.last_frame_time, worker.status
+
     def remove_worker(self, camera_id: int):
         with self.pool_lock:
             worker = self.workers.pop(camera_id, None)

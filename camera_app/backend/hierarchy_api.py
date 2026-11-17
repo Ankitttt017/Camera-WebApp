@@ -24,6 +24,17 @@ except (ImportError, ValueError):
 
 router = APIRouter(prefix="/api/hierarchy", tags=["Hierarchy"])
 
+# cpplus_helper registers a hook here so each camera's PLC monitor follows edits to the camera list
+CHANGE_HOOKS: list = []
+
+
+def _notify(kind: str, item_id: int) -> None:
+    for hook in CHANGE_HOOKS:
+        try:
+            hook(kind, item_id)
+        except Exception as exc:
+            print(f"[hierarchy] {kind} {item_id}: hook failed: {exc}")
+
 
 # --- Pydantic Models ---
 
@@ -463,6 +474,7 @@ def delete_plant(plant_id: int):
     t_plants = get_table_name("plants")
     with get_db_connection() as conn:
         conn.cursor().execute(f"DELETE FROM {t_plants} WHERE id = ?", (plant_id,))
+    _notify('plant_deleted', plant_id)
     return {"message": "Plant deleted successfully"}
 
 
@@ -496,6 +508,7 @@ def delete_department(department_id: int):
     t_departments = get_table_name("departments")
     with get_db_connection() as conn:
         conn.cursor().execute(f"DELETE FROM {t_departments} WHERE id = ?", (department_id,))
+    _notify('department_deleted', department_id)
     return {"message": "Department deleted successfully"}
 
 
@@ -529,6 +542,7 @@ def delete_line(line_id: int):
     t_lines = get_table_name("lines")
     with get_db_connection() as conn:
         conn.cursor().execute(f"DELETE FROM {t_lines} WHERE id = ?", (line_id,))
+    _notify('line_deleted', line_id)
     return {"message": "Line deleted successfully"}
 
 
@@ -563,6 +577,7 @@ def update_machine(machine_id: int, req: MachineUpdate):
     values.append(machine_id)
     with get_db_connection() as conn:
         conn.cursor().execute(f"UPDATE {t_machines} SET {', '.join(fields)} WHERE id = ?", tuple(values))
+    _notify('machine_updated', machine_id)
     return {"message": "Machine updated successfully"}
 
 @router.delete("/machines/{machine_id}")
@@ -570,6 +585,7 @@ def delete_machine(machine_id: int):
     t_machines = get_table_name("machines")
     with get_db_connection() as conn:
         conn.cursor().execute(f"DELETE FROM {t_machines} WHERE id = ?", (machine_id,))
+    _notify('machine_deleted', machine_id)
     return {"message": "Machine deleted successfully"}
 
 
@@ -609,6 +625,7 @@ def update_camera(camera_id: int, req: CameraUpdate):
         conn.cursor().execute(f"UPDATE {t_cameras} SET {', '.join(fields)} WHERE id = ?", tuple(values))
     # Update running worker if stream changed
     stream_pool.remove_worker(camera_id)
+    _notify('camera_updated', camera_id)
     return {"message": "Camera updated successfully"}
 
 @router.delete("/cameras/{camera_id}")
@@ -617,4 +634,5 @@ def delete_camera(camera_id: int):
     with get_db_connection() as conn:
         conn.cursor().execute(f"DELETE FROM {t_cameras} WHERE id = ?", (camera_id,))
     stream_pool.remove_worker(camera_id)
+    _notify('camera_deleted', camera_id)
     return {"message": "Camera deleted successfully"}
