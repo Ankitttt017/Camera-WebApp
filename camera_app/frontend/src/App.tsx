@@ -411,18 +411,24 @@ function statsFromRecords(records: RecordingRecord[]): RecordingStats {
   };
 }
 
-function KpiCards({ stats, thresholdSeconds }: { stats: RecordingStats; thresholdSeconds: number }) {
+function KpiCards({ stats, thresholdSeconds, section = 'stoppages' }: { stats: RecordingStats; thresholdSeconds: number; section?: ReportSection }) {
   const totalEvents = stats.today.total_events || 0;
-  const averageDuration = totalEvents ? stats.today.recorded_duration_seconds / totalEvents : 0;
+  const totalSeconds = stats.today.recorded_duration_seconds || 0;
+  const averageDuration = totalEvents ? totalSeconds / totalEvents : 0;
   const threshold = stoppageThresholdLabel(thresholdSeconds);
-  const cards: { label: string; value: string | number; icon: IconName; tone: string }[] = [
-    { label: 'Total events', value: totalEvents, icon: 'calendar', tone: 'blue' },
-    { label: `Minor stoppage (< ${threshold})`, value: stats.today.minor_stoppage_count || 0, icon: 'pause', tone: 'amber' },
-    { label: `Breakdown (> ${threshold})`, value: stats.today.breakdown_count || 0, icon: 'alert', tone: 'red' },
-    // Manual recordings count in the total; show them so the cards add up
-    ...(stats.today.self_capture_count ? [{ label: 'Manual recording', value: stats.today.self_capture_count, icon: 'record' as IconName, tone: 'slate' }] : []),
-    { label: 'Avg event duration', value: averageDuration > 0 ? formatDuration(averageDuration) : '—', icon: 'clock', tone: 'violet' },
-  ];
+  const cards: { label: string; value: string | number; icon: IconName; tone: string }[] = section === 'manual'
+    ? [
+        { label: 'Manual recordings', value: totalEvents, icon: 'record', tone: 'slate' },
+        { label: 'Total recorded time', value: totalSeconds > 0 ? formatDuration(totalSeconds) : '—', icon: 'clock', tone: 'blue' },
+        { label: 'Average length', value: averageDuration > 0 ? formatDuration(averageDuration) : '—', icon: 'clock', tone: 'violet' },
+      ]
+    : [
+        { label: 'Total stoppages', value: totalEvents, icon: 'calendar', tone: 'blue' },
+        { label: `Minor stoppage (< ${threshold})`, value: stats.today.minor_stoppage_count || 0, icon: 'pause', tone: 'amber' },
+        { label: `Breakdown (> ${threshold})`, value: stats.today.breakdown_count || 0, icon: 'alert', tone: 'red' },
+        { label: 'Total downtime', value: totalSeconds > 0 ? formatDuration(totalSeconds) : '—', icon: 'clock', tone: 'slate' },
+        { label: 'Avg stoppage duration', value: averageDuration > 0 ? formatDuration(averageDuration) : '—', icon: 'clock', tone: 'violet' },
+      ];
 
   return (
     <div className="er-kpis">
@@ -450,6 +456,8 @@ function dateInputValue(date: Date) {
 
 type ReportDatePreset = 'today' | 'yesterday' | 'last_7' | 'last_15' | 'custom' | 'all';
 type ReportShift = 'all' | 'A' | 'B' | 'C';
+/** Machine stoppages = recorded by the PLC gate (Auto); Manual = recorded with the Record button. */
+type ReportSection = 'stoppages' | 'manual';
 type PlaybackState = 'idle' | 'loading' | 'ready' | 'error';
 type ReportFilters = {
   datePreset: ReportDatePreset;
@@ -457,7 +465,9 @@ type ReportFilters = {
   toDate: string;
   category: string;
   shift: ReportShift;
-  /** camera_ip, or 'all' */
+  /** plant id, or 'all' */
+  plant: string;
+  /** camera_ip, or 'all' (= every camera of the plant) */
   camera: string;
 };
 
@@ -2046,6 +2056,7 @@ function SavedPage({
   stats,
   plc,
   cameras = [],
+  defaultPlantId = null,
   onEditReason,
 }: {
   page: Page;
@@ -2054,6 +2065,8 @@ function SavedPage({
   stats: RecordingStats;
   plc: PlcStatus;
   cameras?: FlatCamera[];
+  /** the plant chosen on Live View: the report opens for that plant */
+  defaultPlantId?: number | null;
   onEditReason: (record: RecordingRecord) => void;
 }) {
   const [page, setPage] = useState(1);
@@ -2061,8 +2074,11 @@ function SavedPage({
   const [datePreset, setDatePreset] = useState<ReportDatePreset>('today');
   const [fromDate, setFromDate] = useState(todayInputValue());
   const [toDate, setToDate] = useState(todayInputValue());
+  const [section, setSection] = useState<ReportSection>('stoppages');
   const [category, setCategory] = useState('all');
   const [shift, setShift] = useState<ReportShift>('all');
+  const initialPlant = defaultPlantId ? String(defaultPlantId) : 'all';
+  const [plant, setPlant] = useState(initialPlant);
   const [camera, setCamera] = useState('all');
   const [appliedFilters, setAppliedFilters] = useState<ReportFilters>({
     datePreset: 'today',
@@ -2070,17 +2086,30 @@ function SavedPage({
     toDate: todayInputValue(),
     category: 'all',
     shift: 'all',
+    plant: initialPlant,
     camera: 'all',
   });
-  // one entry per camera address (the report stores the camera's IP with each event)
+  const plantOptions = useMemo(() => {
+    const seen = new Map<string, string>();
+    cameras.forEach((c) => { if (c.plant_id) seen.set(String(c.plant_id), c.plant_name); });
+    return [...seen.entries()].map(([id, name]) => ({ id, name }));
+  }, [cameras]);
+  // cameras of the chosen plant; one entry per camera address (events are stored with the camera's IP)
   const cameraOptions = useMemo(() => {
     const seen = new Map<string, string>();
-    cameras.forEach((c) => {
-      const label = `${c.name} — ${c.plant_name}`;
+    cameras.filter((c) => plant === 'all' || String(c.plant_id) === plant).forEach((c) => {
+      const label = plant === 'all' ? `${c.name} — ${c.plant_name}` : c.name;
       seen.set(c.camera_ip, seen.has(c.camera_ip) ? `${seen.get(c.camera_ip)}, ${c.name}` : label);
     });
     return [...seen.entries()].map(([ip, label]) => ({ ip, label }));
-  }, [cameras]);
+  }, [cameras, plant]);
+  // what the server filters on: one camera, every camera of the plant, or everything
+  const machineFilter = useMemo(() => {
+    if (appliedFilters.camera !== 'all') return appliedFilters.camera;
+    if (appliedFilters.plant === 'all') return '';
+    const ips = [...new Set(cameras.filter((c) => String(c.plant_id) === appliedFilters.plant).map((c) => c.camera_ip))];
+    return ips.length ? ips.join(',') : 'none';
+  }, [appliedFilters.camera, appliedFilters.plant, cameras]);
   const [reportStats, setReportStats] = useState<RecordingStats>(stats);
   const [list, setList] = useState<RecordingList>({ total: 0, page: 1, page_size: PAGE_SIZE, records: [] });
   const [latest, setLatest] = useState<RecordingRecord | null>(null);
@@ -2097,6 +2126,7 @@ function SavedPage({
     || appliedFilters.category !== category
     || appliedFilters.shift !== shift
     || appliedFilters.camera !== camera
+    || appliedFilters.plant !== plant
   );
 
 
@@ -2223,6 +2253,15 @@ function SavedPage({
     }
   }
 
+  function handleSectionChange(next: ReportSection) {
+    if (next === section) return;
+    setSection(next);
+    setCategory('all');
+    setAppliedFilters(prev => ({ ...prev, category: 'all' }));
+    setPage(1);
+    setSelected(null);
+  }
+
   function handleCategoryChange(newCat: string) {
     setCategory(newCat);
     setAppliedFilters(prev => ({ ...prev, category: newCat }));
@@ -2232,6 +2271,13 @@ function SavedPage({
   function handleShiftChange(newShift: ReportShift) {
     setShift(newShift);
     setAppliedFilters(prev => ({ ...prev, shift: newShift }));
+    setPage(1);
+  }
+
+  function handlePlantChange(newPlant: string) {
+    setPlant(newPlant);
+    setCamera('all');
+    setAppliedFilters(prev => ({ ...prev, plant: newPlant, camera: 'all' }));
     setPage(1);
   }
 
@@ -2255,6 +2301,7 @@ function SavedPage({
       toDate: normalizedTo,
       category,
       shift,
+      plant,
       camera,
     });
     setPage(1);
@@ -2274,14 +2321,16 @@ function SavedPage({
         payload.start_at = activeBusinessRange.startAt;
         payload.end_at = activeBusinessRange.endAt;
       }
-      if (appliedFilters.category !== 'all') {
+      if (section === 'manual') {
+        payload.event_type = 'self_capture';
+      } else if (appliedFilters.category !== 'all') {
         payload.event_type = appliedFilters.category;
       }
       if (appliedFilters.shift !== 'all') {
         payload.shift = appliedFilters.shift;
       }
-      if (appliedFilters.camera !== 'all') {
-        payload.machine = appliedFilters.camera;
+      if (machineFilter) {
+        payload.machine = machineFilter;
       }
       const endpoint = refreshIndex ? '/recording-index/scan' : '/recording-index/list';
       const [data, statsData] = await Promise.all([
@@ -2320,8 +2369,9 @@ function SavedPage({
     appliedFilters.fromDate,
     appliedFilters.toDate,
     appliedFilters.category,
+    section,
     appliedFilters.shift,
-    appliedFilters.camera,
+    machineFilter,
     settings.storage_root,
     refreshToken,
     stats.latest_event?.started_at,
@@ -2525,11 +2575,11 @@ function SavedPage({
     storage_root: settings.storage_root,
     start_at: activeBusinessRange?.startAt,
     end_at: activeBusinessRange?.endAt,
-    event_type: appliedFilters.category !== 'all' ? appliedFilters.category : undefined,
+    event_type: section === 'manual' ? 'self_capture' : appliedFilters.category !== 'all' ? appliedFilters.category : undefined,
     shift: appliedFilters.shift !== 'all' ? appliedFilters.shift : undefined,
-    machine: appliedFilters.camera !== 'all' ? appliedFilters.camera : undefined,
+    machine: machineFilter || undefined,
     public_helper_url: settings.public_helper_url,
-  }), [activeBusinessRange, appliedFilters.category, appliedFilters.shift, appliedFilters.camera, settings.public_helper_url, settings.storage_root]);
+  }), [activeBusinessRange, section, appliedFilters.category, appliedFilters.shift, machineFilter, settings.public_helper_url, settings.storage_root]);
 
   function isOpenBreakdown(record: RecordingRecord) {
     return Boolean(plc.gate_open && record.event_type === 'breakdown' && latestOpenBreakdownPath && record.file_path === latestOpenBreakdownPath);
@@ -2567,7 +2617,9 @@ function SavedPage({
             <span className="er-title-icon"><Icon name="file" /></span>
             <div>
               <h1>Incident &amp; Event Report</h1>
-              <p>Machine stoppages and breakdowns with video, downtime reason and voice notes.</p>
+              <p>{section === 'manual'
+                ? 'Videos recorded with the Record button on Live View.'
+                : 'Machine stoppages recorded automatically by the PLC gate, with video, downtime reason and voice notes.'}</p>
             </div>
           </div>
           <div className="er-header-actions">
@@ -2580,7 +2632,20 @@ function SavedPage({
           </div>
         </header>
 
-        <KpiCards stats={reportStats} thresholdSeconds={settings.max_record_seconds} />
+        <div className="er-sections" role="tablist" aria-label="Report section">
+          <button type="button" role="tab" aria-selected={section === 'stoppages'}
+            className={section === 'stoppages' ? 'er-section is-active' : 'er-section'} onClick={() => handleSectionChange('stoppages')}>
+            <Icon name="alert" />
+            <span><strong>Machine stoppages</strong><small>Auto · recorded by the PLC gate</small></span>
+          </button>
+          <button type="button" role="tab" aria-selected={section === 'manual'}
+            className={section === 'manual' ? 'er-section is-active' : 'er-section'} onClick={() => handleSectionChange('manual')}>
+            <Icon name="record" />
+            <span><strong>Manual recordings</strong><small>Recorded with the Record button</small></span>
+          </button>
+        </div>
+
+        <KpiCards stats={reportStats} thresholdSeconds={settings.max_record_seconds} section={section} />
 
         <div className="er-filters">
           <label className="er-field">
@@ -2602,15 +2667,16 @@ function SavedPage({
             <span>To</span>
             <DateInputDDMMYYYY disabled={datePreset !== 'custom'} value={toDate} onChange={setToDate} />
           </label>
-          <label className="er-field">
-            <span>Category</span>
-            <select value={category} onChange={(event) => handleCategoryChange(event.target.value)}>
-              <option value="all">All categories</option>
-              <option value="minor_stoppage">Minor stoppage (&lt; {stoppageThresholdLabel(settings.max_record_seconds)})</option>
-              <option value="breakdown">Breakdown (&gt; {stoppageThresholdLabel(settings.max_record_seconds)})</option>
-              <option value="self_capture">Manual recording</option>
-            </select>
-          </label>
+          {section === 'stoppages' && (
+            <label className="er-field">
+              <span>Category</span>
+              <select value={category} onChange={(event) => handleCategoryChange(event.target.value)}>
+                <option value="all">All stoppages</option>
+                <option value="minor_stoppage">Minor stoppage (&lt; {stoppageThresholdLabel(settings.max_record_seconds)})</option>
+                <option value="breakdown">Breakdown (&gt; {stoppageThresholdLabel(settings.max_record_seconds)})</option>
+              </select>
+            </label>
+          )}
           <label className="er-field">
             <span>Shift</span>
             <select value={shift} onChange={(event) => handleShiftChange(event.target.value as ReportShift)}>
@@ -2620,11 +2686,22 @@ function SavedPage({
               <option value="C">Shift C</option>
             </select>
           </label>
-          {cameraOptions.length > 1 && (
+          {plantOptions.length > 0 && (
+            <label className="er-field">
+              <span>Plant</span>
+              <select value={plant} onChange={(event) => handlePlantChange(event.target.value)}>
+                <option value="all">All plants</option>
+                {plantOptions.map((option) => (
+                  <option key={option.id} value={option.id}>{option.name}</option>
+                ))}
+              </select>
+            </label>
+          )}
+          {cameraOptions.length > 0 && (
             <label className="er-field">
               <span>Camera</span>
               <select value={camera} onChange={(event) => handleCameraChange(event.target.value)}>
-                <option value="all">All cameras</option>
+                <option value="all">{plant === 'all' ? 'All cameras' : 'All cameras in this plant'}</option>
                 {cameraOptions.map((option) => (
                   <option key={option.ip} value={option.ip}>{option.label}</option>
                 ))}
@@ -2641,6 +2718,7 @@ function SavedPage({
                 setToDate(todayInputValue());
                 setCategory('all');
                 setShift('all');
+                setPlant(initialPlant);
                 setCamera('all');
                 setAppliedFilters({
                   datePreset: 'today',
@@ -2648,6 +2726,7 @@ function SavedPage({
                   toDate: todayInputValue(),
                   category: 'all',
                   shift: 'all',
+                  plant: initialPlant,
                   camera: 'all',
                 });
                 load(true);
@@ -2666,14 +2745,16 @@ function SavedPage({
 
             <section className="er-table-card">
               <div className="er-table-toolbar">
-                <strong>Events</strong>
+                <strong>{section === 'manual' ? 'Manual recordings' : 'Machine stoppages'}</strong>
                 <span>{reportRangeSummary(appliedFilters)} · {list.total} {list.total === 1 ? 'event' : 'events'}</span>
               </div>
 
               {!loading && list.records.length === 0 ? (
                 <div className="er-empty">
-                  <strong>No events found</strong>
-                  <span>No stoppage was recorded for the selected filters. Change the date range or category and apply again.</span>
+                  <strong>{section === 'manual' ? 'No manual recordings' : 'No stoppages found'}</strong>
+                  <span>{section === 'manual'
+                    ? 'Nothing was recorded with the Record button for these filters. Change the date range, plant or camera.'
+                    : 'No machine stoppage was recorded for the selected filters. Change the date range, category, plant or camera.'}</span>
                 </div>
               ) : (
                 <div className="er-table-scroll">
@@ -2683,7 +2764,7 @@ function SavedPage({
                       <span role="columnheader">Day · shift / time</span>
                       <span role="columnheader">Duration</span>
                       <span role="columnheader">Category</span>
-                      <span role="columnheader">Downtime reason</span>
+                      <span role="columnheader">{section === 'manual' ? 'Note' : 'Downtime reason'}</span>
                       <span role="columnheader">Voice note</span>
                       <span role="columnheader">Status</span>
                       <span role="columnheader" className="er-col-actions">Actions</span>
@@ -4612,6 +4693,7 @@ export function App() {
             stats={stats}
             plc={plc}
             cameras={flatCameras}
+            defaultPlantId={currentActiveCam?.plant_id ?? null}
             onEditReason={() => undefined}
           />
         )}
