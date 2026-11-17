@@ -5995,3 +5995,16 @@ nav button.active .nav-count {
   .lv-rec { width: 100%; }
   .lv-rec-btn { margin-left: auto; }
 }
+
+/* Event Report: Machine stoppages (Auto) | Manual recordings */
+.er-sections { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 0 0 16px; }
+.er-section { display: flex; align-items: center; gap: 12px; min-height: 0; padding: 12px 16px; border: 1.5px solid #e2e8f0; border-radius: 12px; background: #ffffff; color: #475569; text-align: left; cursor: pointer; }
+.er-section .icon { width: 22px; height: 22px; flex-shrink: 0; }
+.er-section span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.er-section strong { font-size: 0.98rem; color: #0f172a; }
+.er-section small { font-size: 0.78rem; color: #64748b; }
+.er-section:hover { border-color: #93c5fd; }
+.er-section.is-active { border-color: #1d4ed8; background: #eff6ff; box-shadow: 0 0 0 3px rgba(29, 78, 216, 0.08); }
+.er-section.is-active .icon, .er-section.is-active strong { color: #1d4ed8; }
+.er-section:active { transform: none; }
+@media (max-width: 560px) { .er-section small { display: none; } .er-section { padding: 10px 12px; } }

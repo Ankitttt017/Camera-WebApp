@@ -2554,6 +2554,14 @@ def active_recording_index_row(storage_root: str | Path) -> dict | None:
     }
 
 
+def report_cameras(request: RecordingIndexRequest) -> list[str]:
+    """Camera IPs the report is limited to: '' / 'all' = every camera; 'a,b' = several (a plant)."""
+    text = str(request.machine or '').strip()
+    if not text or text == 'all':
+        return []
+    return [part.strip() for part in text.split(',') if part.strip()]
+
+
 def row_matches_index_request(row: dict, request: RecordingIndexRequest) -> bool:
     row_start = parse_iso_datetime(row.get('event_started_at') or row.get('started_at'))
     start_filter = parse_iso_datetime(request.start_at)
@@ -2562,6 +2570,9 @@ def row_matches_index_request(row: dict, request: RecordingIndexRequest) -> bool
         return False
     if end_filter and row_start and row_start > end_filter:
         return False
+    if not request.event_type or request.event_type == 'all':
+        if row.get('event_type') in {'self_capture', 'manual'}:
+            return False
     if request.event_type and request.event_type != 'all':
         row_type = row.get('event_type') or 'minor_stoppage'
         if request.event_type == 'minor_stoppage':
@@ -2586,7 +2597,8 @@ def row_matches_index_request(row: dict, request: RecordingIndexRequest) -> bool
             return False
         if request.duration_filter == 'over_5' and duration <= 300:
             return False
-    if request.machine and request.machine != 'all' and row.get('camera_ip') != request.machine:
+    machines = report_cameras(request)
+    if machines and row.get('camera_ip') not in machines:
         return False
     return True
 
@@ -2640,6 +2652,9 @@ def recording_index_where(request: RecordingIndexRequest) -> tuple[str, dict[str
             where += " AND event_type = :event_type"
         if request.event_type != 'self_capture':
             params['event_type'] = request.event_type
+    else:
+        # the stoppage report: manual recordings are shown only when asked for (category "Manual recordings")
+        where += " AND (event_type IS NULL OR event_type NOT IN ('self_capture', 'manual'))"
     shift = (request.shift or '').upper()
     event_time_expr = "SUBSTRING(COALESCE(event_started_at, started_at), 12, 8)"
     if shift == 'A':
@@ -2658,9 +2673,12 @@ def recording_index_where(request: RecordingIndexRequest) -> tuple[str, dict[str
         where += " AND COALESCE(event_duration_seconds, duration_seconds, 0) <= 300"
     elif request.duration_filter == 'over_5':
         where += " AND COALESCE(event_duration_seconds, duration_seconds, 0) > 300"
-    if request.machine and request.machine != 'all':
-        where += " AND camera_ip = :machine"
-        params['machine'] = request.machine
+    machines = report_cameras(request)
+    if machines:
+        # one camera, or every camera of a plant (comma-separated camera IPs)
+        names = [f'machine{i}' for i in range(len(machines))]
+        where += f" AND camera_ip IN ({', '.join(':' + n for n in names)})"
+        params.update(dict(zip(names, machines)))
     return where, params
 
 
