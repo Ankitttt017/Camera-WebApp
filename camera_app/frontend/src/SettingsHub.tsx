@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { CameraSettings, RecordingStats } from './api';
 import { HierarchyManager } from './HierarchyManager';
 
-type Tab = 'cameras' | 'rules' | 'storage';
+export type SettingsTab = 'cameras' | 'rules' | 'storage';
+type Tab = SettingsTab;
 
 interface SettingsHubProps {
   settings: CameraSettings;
@@ -12,16 +13,21 @@ interface SettingsHubProps {
   settingsMessage: string;
   settingsMessageTone: 'good' | 'bad' | 'neutral';
   onBack?: () => void;
+  /** Open tab, when the sidebar controls it. */
+  tab?: Tab;
+  onTabChange?: (tab: Tab) => void;
 }
 
-const TABS: { id: Tab; title: string; hint: string }[] = [
+export const SETTINGS_TABS: { id: Tab; title: string; hint: string }[] = [
   { id: 'cameras', title: 'Cameras', hint: 'Add cameras, choose Manual or Auto' },
   { id: 'rules', title: 'Recording rules', hint: 'What gets saved, for all cameras' },
   { id: 'storage', title: 'Storage', hint: 'Where videos are kept' },
 ];
 
-export function SettingsHub({ settings, stats, onSaveRules, settingsMessage, settingsMessageTone, onBack }: SettingsHubProps) {
-  const [tab, setTab] = useState<Tab>('cameras');
+export function SettingsHub({ settings, stats, onSaveRules, settingsMessage, settingsMessageTone, onBack, tab: tabProp, onTabChange }: SettingsHubProps) {
+  const [tabState, setTabState] = useState<Tab>('cameras');
+  const tab = tabProp ?? tabState;
+  const setTab = (t: Tab) => { setTabState(t); onTabChange?.(t); };
 
   return (
     <div className="st-page">
@@ -36,7 +42,7 @@ export function SettingsHub({ settings, stats, onSaveRules, settingsMessage, set
           </div>
         </div>
         <nav className="st-tabs" aria-label="Settings sections">
-          {TABS.map((t) => (
+          {SETTINGS_TABS.map((t) => (
             <button key={t.id} type="button" className={tab === t.id ? 'st-tab is-active' : 'st-tab'} onClick={() => setTab(t.id)}>
               <strong>{t.title}</strong>
               <small>{t.hint}</small>
