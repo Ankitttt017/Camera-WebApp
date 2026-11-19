@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { HierarchyManager } from './HierarchyManager';
-import { SettingsHub } from './SettingsHub';
+import { SettingsHub, type SettingsTab } from './SettingsHub';
 import { MultiCamGrid } from './MultiCamGrid';
 import { CameraEditModal } from './CameraEditModal';
 import LiveStreamImage from './LiveStreamImage';
@@ -28,6 +28,8 @@ import {
   fetchRecordingTranscript,
   type RecordingTranscript,
   cameraScoped,
+  fetchCamerasStatus,
+  type CameraStatus,
   startCameraRecording,
   stopCameraRecording,
   FlatCamera,
@@ -894,6 +896,8 @@ function Sidebar({
   collapsed,
   onToggleSidebar,
   activeMachineName,
+  settingsTab,
+  onOpenSettingsTab,
 }: {
   page: Page;
   setPage: (page: Page) => void;
@@ -904,8 +908,10 @@ function Sidebar({
   collapsed: boolean;
   onToggleSidebar: () => void;
   activeMachineName?: string;
+  settingsTab: SettingsTab;
+  onOpenSettingsTab: (tab: SettingsTab) => void;
 }) {
-  const reportCount = stats.storage.video_count || stats.today.total_events || 146;
+  const reportCount = stats.storage.video_count || stats.today.total_events || 0;
 
   return (
     <aside className={collapsed ? 'sidebar collapsed' : 'sidebar'} style={{ background: '#121e3d', padding: '24px 20px', display: 'flex', flexDirection: 'column' }}>
@@ -919,12 +925,13 @@ function Sidebar({
       </div>
 
       <nav style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+        <span className="nav-label sb-group">Monitoring</span>
         <button className={page === 'live' ? 'active' : ''} onClick={() => setPage('live')}>
-          <span className="nav-icon" style={{ fontSize: '1.15rem' }}>🖥️</span>
+          <span className="nav-icon"><Icon name="live" /></span>
           <span className="nav-text">Live View</span>
         </button>
         <button className={page === 'saved' ? 'active' : ''} onClick={() => setPage('saved')}>
-          <span className="nav-icon" style={{ fontSize: '1.15rem' }}>📄</span>
+          <span className="nav-icon"><Icon name="file" /></span>
           <span className="nav-text">Event Report</span>
           <span className="nav-count" style={{
             marginLeft: 'auto',
@@ -938,21 +945,118 @@ function Sidebar({
             {reportCount}
           </span>
         </button>
-        <button className={page === 'hierarchy' ? 'active' : ''} onClick={() => setPage('hierarchy')}>
-          <span className="nav-icon" style={{ fontSize: '1.15rem' }}>⚙️</span>
+        <span className="nav-label sb-group">Administration</span>
+        <button className={page === 'hierarchy' ? 'active' : ''} onClick={() => onOpenSettingsTab(settingsTab)}>
+          <span className="nav-icon"><Icon name="settings" /></span>
           <span className="nav-text">Settings & Admin</span>
         </button>
+        <div className="sb-subnav" role="group" aria-label="Settings sections">
+          {SIDEBAR_SETTINGS.map((item) => {
+            const on = page === 'hierarchy' && settingsTab === item.id;
+            return (
+              <button key={item.id} type="button" className={on ? 'sb-subitem is-on' : 'sb-subitem'} onClick={() => onOpenSettingsTab(item.id)} title={item.hint} aria-current={on ? 'page' : undefined}>
+                <Icon name={item.icon} />
+                <span>{item.title}</span>
+              </button>
+            );
+          })}
+        </div>
       </nav>
 
-      {/* Subtle Minimal Footer */}
-      {!collapsed && (
-        <div style={{ marginTop: 'auto', paddingTop: '14px', borderTop: '1px solid rgba(255, 255, 255, 0.08)' }}>
-          <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#64748b', letterSpacing: '0.03em' }}>
-            RICO AUTO INDUSTRIES
-          </div>
-        </div>
-      )}
+      <SidebarStatusPanel collapsed={collapsed} onOpenSettings={() => onOpenSettingsTab('cameras')} />
     </aside>
+  );
+}
+
+/** Settings sections listed under "Settings & Admin" in the sidebar. */
+const SIDEBAR_SETTINGS: { id: SettingsTab; title: string; hint: string; icon: IconName }[] = [
+  { id: 'cameras', title: 'Cameras', hint: 'Add cameras, choose Manual or Auto', icon: 'camera' },
+  { id: 'rules', title: 'Recording rules', hint: 'What gets saved, for all cameras', icon: 'record' },
+  { id: 'storage', title: 'Storage', hint: 'Where videos are kept', icon: 'storage' },
+];
+
+const SHIFTS: { id: 'A' | 'B' | 'C'; start: number; label: string }[] = [
+  { id: 'A', start: 6, label: '06:00 – 14:00' },
+  { id: 'B', start: 14, label: '14:00 – 22:00' },
+  { id: 'C', start: 22, label: '22:00 – 06:00' },
+];
+
+/** Where we are in the production day right now: shift, how far into it, production date. */
+function currentShift(now: Date) {
+  const slot = productionSlot(now.toISOString())!;
+  const shift = SHIFTS.find((s) => s.id === slot.shift)!;
+  const start = new Date(now);
+  start.setMinutes(0, 0, 0);
+  start.setHours(shift.start);
+  if (start.getTime() > now.getTime()) start.setDate(start.getDate() - 1); // Shift C after midnight
+  const elapsed = now.getTime() - start.getTime();
+  const total = 8 * 3600 * 1000;
+  const leftMin = Math.max(0, Math.round((total - elapsed) / 60000));
+  const [y, m, d] = slot.day.split('-').map(Number);
+  const dayLabel = new Date(y, m - 1, d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
+  return { shift, progress: Math.min(1, elapsed / total), leftMin, dayLabel };
+}
+
+/** Bottom of the sidebar: current shift with time left, and what the cameras are doing. */
+function SidebarStatusPanel({ collapsed, onOpenSettings }: { collapsed: boolean; onOpenSettings: () => void }) {
+  const [now, setNow] = useState(() => new Date());
+  const [cams, setCams] = useState<CameraStatus[] | null>(null);
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(new Date()), 15000);
+    return () => window.clearInterval(t);
+  }, []);
+  useEffect(() => {
+    let alive = true;
+    const load = () => fetchCamerasStatus()
+      .then((data) => { if (alive) setCams(data.cameras); })
+      .catch(() => { if (alive) setCams(null); });
+    load();
+    const t = window.setInterval(load, 15000);
+    return () => { alive = false; window.clearInterval(t); };
+  }, []);
+
+  const { shift, progress, leftMin, dayLabel } = currentShift(now);
+  const recording = cams?.filter((c) => c.recording_running).length ?? 0;
+  const auto = cams?.filter((c) => c.mode === 'event').length ?? 0;
+  const plcIssues = cams?.filter((c) => c.mode === 'event' && (c.last_error || !c.monitor_running)).length ?? 0;
+  const clock = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  const left = leftMin >= 60 ? `${Math.floor(leftMin / 60)} h ${leftMin % 60} min left` : `${leftMin} min left`;
+
+  if (collapsed) {
+    return (
+      <div className="sb-status is-mini" title={`Shift ${shift.id} · ${shift.label} · ${left}`}>
+        <span className="sb-mini-shift">{shift.id}</span>
+        {recording > 0 && <span className="sb-mini-rec" title={`${recording} recording now`} />}
+      </div>
+    );
+  }
+  return (
+    <div className="sb-status" aria-label="Shift and camera status">
+      <div className="sb-shift">
+        <div className="sb-shift-head">
+          <span className="sb-label">Current shift</span>
+          <span className="sb-clock">{clock}</span>
+        </div>
+        <div className="sb-shift-name">Shift {shift.id}<small>{shift.label}</small></div>
+        <div className="sb-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress * 100)}>
+          <i style={{ width: `${Math.round(progress * 100)}%` }} />
+        </div>
+        <div className="sb-sub">{left} · Production day {dayLabel}</div>
+      </div>
+      <button type="button" className="sb-cams" onClick={onOpenSettings} title="Open Settings → Cameras">
+        <span className="sb-label">Cameras</span>
+        {cams === null ? (
+          <span className="sb-sub">Status not available</span>
+        ) : (
+          <span className="sb-cam-grid">
+            <span><b>{cams.length}</b>Total</span>
+            <span><b className="is-green">{auto}</b>On Auto</span>
+            <span><b className={recording ? 'is-red' : ''}>{recording}</b>Recording</span>
+          </span>
+        )}
+        {plcIssues > 0 && <span className="sb-warn">{plcIssues} PLC not answering</span>}
+      </button>
+    </div>
   );
 }
 
@@ -2253,6 +2357,13 @@ function SavedPage({
     }
   }
 
+  // Instant filters (shift, category, plant, camera) also take the dates typed in the form,
+  // so the table never shows a different range from the one on screen.
+  function formDates() {
+    const range = presetDateRange(datePreset, fromDate, toDate);
+    return { datePreset, fromDate: range?.fromDate || fromDate, toDate: range?.toDate || toDate };
+  }
+
   function handleSectionChange(next: ReportSection) {
     if (next === section) return;
     setSection(next);
@@ -2264,26 +2375,26 @@ function SavedPage({
 
   function handleCategoryChange(newCat: string) {
     setCategory(newCat);
-    setAppliedFilters(prev => ({ ...prev, category: newCat }));
+    setAppliedFilters(prev => ({ ...prev, ...formDates(), category: newCat }));
     setPage(1);
   }
 
   function handleShiftChange(newShift: ReportShift) {
     setShift(newShift);
-    setAppliedFilters(prev => ({ ...prev, shift: newShift }));
+    setAppliedFilters(prev => ({ ...prev, ...formDates(), shift: newShift }));
     setPage(1);
   }
 
   function handlePlantChange(newPlant: string) {
     setPlant(newPlant);
     setCamera('all');
-    setAppliedFilters(prev => ({ ...prev, plant: newPlant, camera: 'all' }));
+    setAppliedFilters(prev => ({ ...prev, ...formDates(), plant: newPlant, camera: 'all' }));
     setPage(1);
   }
 
   function handleCameraChange(newCamera: string) {
     setCamera(newCamera);
-    setAppliedFilters(prev => ({ ...prev, camera: newCamera }));
+    setAppliedFilters(prev => ({ ...prev, ...formDates(), camera: newCamera }));
     setPage(1);
   }
 
@@ -2647,45 +2758,7 @@ function SavedPage({
 
         <KpiCards stats={reportStats} thresholdSeconds={settings.max_record_seconds} section={section} />
 
-        <div className="er-filters">
-          <label className="er-field">
-            <span>Date range</span>
-            <select value={datePreset} onChange={(event) => changeDatePreset(event.target.value as ReportDatePreset)}>
-              <option value="today">Today</option>
-              <option value="yesterday">Yesterday</option>
-              <option value="last_7">Last 7 days</option>
-              <option value="last_15">Last 15 days</option>
-              <option value="custom">Custom range</option>
-              <option value="all">All time</option>
-            </select>
-          </label>
-          <label className="er-field">
-            <span>From</span>
-            <DateInputDDMMYYYY disabled={datePreset !== 'custom'} value={fromDate} onChange={setFromDate} />
-          </label>
-          <label className="er-field">
-            <span>To</span>
-            <DateInputDDMMYYYY disabled={datePreset !== 'custom'} value={toDate} onChange={setToDate} />
-          </label>
-          {section === 'stoppages' && (
-            <label className="er-field">
-              <span>Category</span>
-              <select value={category} onChange={(event) => handleCategoryChange(event.target.value)}>
-                <option value="all">All stoppages</option>
-                <option value="minor_stoppage">Minor stoppage (&lt; {stoppageThresholdLabel(settings.max_record_seconds)})</option>
-                <option value="breakdown">Breakdown (&gt; {stoppageThresholdLabel(settings.max_record_seconds)})</option>
-              </select>
-            </label>
-          )}
-          <label className="er-field">
-            <span>Shift</span>
-            <select value={shift} onChange={(event) => handleShiftChange(event.target.value as ReportShift)}>
-              <option value="all">All shifts</option>
-              <option value="A">Shift A</option>
-              <option value="B">Shift B</option>
-              <option value="C">Shift C</option>
-            </select>
-          </label>
+        <div className="er-filters" role="group" aria-label="Report filters">
           {plantOptions.length > 0 && (
             <label className="er-field">
               <span>Plant</span>
@@ -2698,7 +2771,7 @@ function SavedPage({
             </label>
           )}
           {cameraOptions.length > 0 && (
-            <label className="er-field">
+            <label className="er-field er-field-wide">
               <span>Camera</span>
               <select value={camera} onChange={(event) => handleCameraChange(event.target.value)}>
                 <option value="all">{plant === 'all' ? 'All cameras' : 'All cameras in this plant'}</option>
@@ -2708,10 +2781,57 @@ function SavedPage({
               </select>
             </label>
           )}
+          <label className="er-field">
+            <span>Date range</span>
+            <select value={datePreset} onChange={(event) => changeDatePreset(event.target.value as ReportDatePreset)}>
+              <option value="today">Today</option>
+              <option value="yesterday">Yesterday</option>
+              <option value="last_7">Last 7 days</option>
+              <option value="last_15">Last 15 days</option>
+              <option value="custom">Custom range</option>
+              <option value="all">All time</option>
+            </select>
+          </label>
+          {datePreset === 'custom' && (
+            <>
+              <label className="er-field">
+                <span>From</span>
+                <DateInputDDMMYYYY value={fromDate} onChange={setFromDate} />
+              </label>
+              <label className="er-field">
+                <span>To</span>
+                <DateInputDDMMYYYY value={toDate} onChange={setToDate} />
+              </label>
+              <button type="button" className="er-btn er-btn-primary er-apply" onClick={applyFilters} disabled={!filtersDirty || loading}
+                title="Show the report for these dates">
+                <Icon name="filter" /> Apply dates
+              </button>
+            </>
+          )}
+          <label className="er-field er-field-narrow">
+            <span>Shift</span>
+            <select value={shift} onChange={(event) => handleShiftChange(event.target.value as ReportShift)}>
+              <option value="all">All shifts</option>
+              <option value="A">Shift A (06–14)</option>
+              <option value="B">Shift B (14–22)</option>
+              <option value="C">Shift C (22–06)</option>
+            </select>
+          </label>
+          {section === 'stoppages' && (
+            <label className="er-field er-field-cat">
+              <span>Category</span>
+              <select value={category} onChange={(event) => handleCategoryChange(event.target.value)}>
+                <option value="all">All stoppages</option>
+                <option value="minor_stoppage">Minor stoppage (&lt; {stoppageThresholdLabel(settings.max_record_seconds)})</option>
+                <option value="breakdown">Breakdown (&gt; {stoppageThresholdLabel(settings.max_record_seconds)})</option>
+              </select>
+            </label>
+          )}
           <div className="er-filter-actions">
             <button
               type="button"
               className="er-btn er-btn-secondary"
+              title="Back to today, all shifts, the plant chosen in Live View"
               onClick={() => {
                 setDatePreset('today');
                 setFromDate(todayInputValue());
@@ -2732,10 +2852,7 @@ function SavedPage({
                 load(true);
               }}
             >
-              Reset
-            </button>
-            <button type="button" className="er-btn er-btn-primary" onClick={applyFilters} disabled={!filtersDirty || loading}>
-              <Icon name="filter" /> Apply filters
+              <Icon name="reload" /> Reset
             </button>
           </div>
         </div>
@@ -4239,6 +4356,7 @@ export function App() {
   const [settingsMessageTone, setSettingsMessageTone] = useState<'good' | 'bad' | 'neutral'>('neutral');
   const [refreshToken, setRefreshToken] = useState(0);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('cameras');
   const [clock, setClock] = useState(() => new Date());
   const [reasonOptions, setReasonOptions] = useState<ReasonOptions>({ minor_stoppage: [], breakdown: [] });
   const [editingCamera, setEditingCamera] = useState<FlatCamera | null>(null);
@@ -4615,6 +4733,8 @@ export function App() {
         collapsed={sidebarCollapsed}
         onToggleSidebar={() => setSidebarCollapsed((value) => !value)}
         activeMachineName={currentActiveCam?.machine_name}
+        settingsTab={settingsTab}
+        onOpenSettingsTab={(tab) => { setSettingsTab(tab); setPage('hierarchy'); }}
       />
       <main className="content">
         <TopBar
@@ -4651,6 +4771,8 @@ export function App() {
             settingsMessage={settingsMessage}
             settingsMessageTone={settingsMessageTone}
             onBack={() => setPage('live')}
+            tab={settingsTab}
+            onTabChange={setSettingsTab}
           />
         ) : page === 'live' ? (
           <LivePage

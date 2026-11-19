@@ -6008,3 +6008,119 @@ nav button.active .nav-count {
 .er-section.is-active .icon, .er-section.is-active strong { color: #1d4ed8; }
 .er-section:active { transform: none; }
 @media (max-width: 560px) { .er-section small { display: none; } .er-section { padding: 10px 12px; } }
+
+/* ==========================================================================
+   Event Report filters: scope (plant, camera) -> time -> shift/category
+   ========================================================================== */
+.er-field-wide { min-width: 190px; }
+.er-field-narrow { min-width: 130px; }
+.er-field-cat { width: 190px; min-width: 0; }
+.er-field-cat select { width: 100%; }
+.er-filters { column-gap: 12px; }
+.er-filters .er-apply { height: 38px; }
+.er-filter-actions .er-btn .icon { width: 14px; height: 14px; }
+
+/* ==========================================================================
+   Sidebar status panel: current shift + cameras (fills the empty bottom)
+   ========================================================================== */
+.sb-status { margin-top: auto; display: flex; flex-direction: column; gap: 10px; padding-top: 16px; }
+.sb-shift, .sb-cams {
+  background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 10px; padding: 12px 14px; color: #e2e8f0; text-align: left;
+}
+.sb-label { display: block; font-size: 0.68rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: #94a3b8; }
+.sb-shift-head { display: flex; align-items: center; justify-content: space-between; }
+.sb-clock { font-size: 0.82rem; font-weight: 700; color: #cbd5e1; font-variant-numeric: tabular-nums; }
+.sb-shift-name { margin-top: 6px; font-size: 1.25rem; font-weight: 800; color: #ffffff; display: flex; align-items: baseline; gap: 8px; }
+.sb-shift-name small { font-size: 0.78rem; font-weight: 600; color: #94a3b8; }
+.sb-progress { margin: 10px 0 8px; height: 6px; border-radius: 999px; background: rgba(255, 255, 255, 0.1); overflow: hidden; }
+.sb-progress i { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, #3b82f6, #60a5fa); }
+.sb-sub { display: block; font-size: 0.74rem; color: #94a3b8; line-height: 1.4; }
+.sidebar .sb-cams {
+  display: flex !important; flex-direction: column; gap: 8px; width: 100%; cursor: pointer;
+  font: inherit; min-height: 0 !important; box-shadow: none !important;
+  align-items: stretch !important; justify-content: flex-start !important; text-align: left !important;
+}
+.sidebar .sb-cams:hover { background: rgba(255, 255, 255, 0.09) !important; border-color: rgba(96, 165, 250, 0.4); }
+.sb-cam-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.sb-cam-grid > span { display: flex; flex-direction: column; font-size: 0.68rem; color: #94a3b8; font-weight: 600; }
+.sb-cam-grid b { font-size: 1.15rem; color: #ffffff; font-weight: 800; line-height: 1.2; }
+.sb-cam-grid b.is-green { color: #4ade80; }
+.sb-cam-grid b.is-red { color: #f87171; }
+.sb-warn { font-size: 0.72rem; font-weight: 700; color: #fbbf24; }
+.sb-status.is-mini { align-items: center; gap: 6px; position: relative; }
+.sb-mini-shift {
+  width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center;
+  background: rgba(59, 130, 246, 0.22); border: 1px solid rgba(96, 165, 250, 0.45); color: #fff; font-weight: 800;
+}
+.sb-mini-rec { width: 9px; height: 9px; border-radius: 50%; background: #ef4444; box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.25); }
+@media (max-height: 640px) { .sb-shift .sb-progress, .sb-shift .sb-sub { display: none; } }
+
+/* filter fields: drop the global label margin so selects line up with the Reset button */
+.er-filters > .er-field { margin-bottom: 0; }
+
+/* ==========================================================================
+   Sidebar groups + Settings sub-sections
+   ========================================================================== */
+.sidebar .nav-label.sb-group {
+  display: block; margin: 18px 0 6px 14px !important; font-size: 0.66rem !important;
+  letter-spacing: 0.14em !important; color: #64748b !important; text-transform: uppercase;
+}
+.sidebar .nav-label.sb-group:first-child { margin-top: 20px !important; }
+.sidebar nav .nav-icon { width: 22px; margin-right: 12px; color: #93c5fd; }
+.sidebar nav button.active .nav-icon { color: #ffffff; }
+.sidebar nav .nav-icon .icon { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.sb-subnav {
+  display: flex; flex-direction: column; gap: 2px;
+  margin: 2px 0 4px 25px; padding-left: 12px; border-left: 1px solid rgba(148, 163, 184, 0.22);
+}
+.sidebar nav button.sb-subitem {
+  display: flex !important; align-items: center; gap: 10px; width: 100%;
+  min-height: 0 !important; padding: 8px 12px !important; margin: 0 !important;
+  border: 1px solid transparent !important; border-radius: 7px !important;
+  background: transparent !important; box-shadow: none !important;
+  color: #94a3b8 !important; font-size: 0.84rem !important; font-weight: 600 !important; text-align: left;
+  position: relative;
+}
+.sidebar nav button.sb-subitem .icon { width: 16px; height: 16px; flex: 0 0 16px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.sidebar nav button.sb-subitem:hover { background: rgba(255, 255, 255, 0.06) !important; color: #e2e8f0 !important; }
+.sidebar nav button.sb-subitem.is-on { background: rgba(59, 130, 246, 0.14) !important; color: #ffffff !important; }
+.sidebar nav button.sb-subitem.is-on::before {
+  content: ''; position: absolute; left: -13px; top: 8px; bottom: 8px; width: 2px; border-radius: 2px; background: #60a5fa;
+}
+.sidebar.collapsed .sb-subnav, .sidebar.collapsed .nav-label.sb-group { display: none !important; }
+@media (max-height: 720px) { .sidebar .nav-label.sb-group { margin-top: 10px !important; } .sidebar nav button.sb-subitem { padding: 6px 12px !important; } }
+
+/* Sidebar: tighter spacing so menu + status panel fit on laptop screens */
+.sidebar nav { margin-top: 6px !important; gap: 2px !important; }
+.sidebar .nav-label.sb-group { padding: 0 !important; margin: 16px 0 6px 14px !important; }
+.sidebar .nav-label.sb-group:first-child { margin-top: 14px !important; }
+.sidebar nav > button { min-height: 44px !important; margin-bottom: 2px !important; }
+.sidebar nav > button .nav-text { font-size: 0.95rem; }
+.sb-status { padding-top: 12px; }
+@media (max-height: 800px) {
+  .sidebar .sidebar-brand { padding-bottom: 16px !important; }
+  .sidebar nav > button { min-height: 40px !important; padding: 8px 14px !important; }
+  .sidebar .nav-label.sb-group { margin: 10px 0 4px 14px !important; }
+  .sidebar nav button.sb-subitem { padding: 6px 12px !important; }
+  .sb-shift .sb-progress, .sb-shift .sb-sub { display: none; }
+  .sb-shift, .sb-cams { padding: 10px 12px; }
+  .sb-shift-name { margin-top: 2px; font-size: 1.1rem; }
+  .sb-status { gap: 8px; }
+}
+@media (max-height: 680px) {
+  .rico-wordmark { font-size: 2rem !important; }
+  .sidebar .sidebar-brand { padding-bottom: 12px !important; }
+  .sidebar nav > button { min-height: 36px !important; padding: 6px 14px !important; }
+  .sidebar nav button.sb-subitem { padding: 5px 12px !important; }
+  .sb-cam-grid b { font-size: 1rem; }
+}
+
+/* Report filters: one row on laptop widths; fields share the space, Reset stays on the same row */
+.er-filters > .er-field { flex: 1 1 0; min-width: 118px; }
+.er-filters > .er-field.er-field-wide { flex-grow: 1.5; min-width: 160px; }
+.er-filters > .er-field.er-field-cat { width: auto; min-width: 140px; }
+.er-filters > .er-field select { width: 100%; }
+.er-filters > .er-field:has(.date-input-ddmmyyyy) { flex: 0 0 auto; min-width: 0; }
+.er-filters > .er-field .date-input-ddmmyyyy input { width: 132px; }
+.er-filter-actions { flex: 0 0 auto; }
